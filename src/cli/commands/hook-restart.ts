@@ -10,6 +10,7 @@ import { parkRulesOf } from '../../register/park.ts';
 import { startableTasks } from '../../wake/day-start.ts';
 import { identityOf, transcriptsIfKept } from '../host.ts';
 import { teamZone } from '../kit.ts';
+import { isHandedOffJob, isLiveRunOwn, liveRunOf } from '../live-run.ts';
 import type { CliRuntime } from '../runtime.ts';
 import { hostSessionAbove } from '../session-process.ts';
 import { teamRegister } from '../team-register.ts';
@@ -43,6 +44,26 @@ export interface RestartScope {
   readonly target: RestartTarget;
   /** The session's host process the hook runs under (`hostSessionAbove`); undefined when it was not found. */
   readonly claude: number | undefined;
+}
+
+/**
+ * Whether the Claude Code `claude` the hook runs under is a fork of session `id`'s conversation outside its tab's
+ * process tree (of a team whose sessions are `ids`): Claude Code runs a /clear in such a forked worker
+ * (`--fork-session --resume <the tab's session>`). A restart armed there would carry the worker's session and
+ * transcript, so the runner would judge quiet on the worker's transcript and post its /clear ask under a session the
+ * tab's mod never answers; signalling the worker's pid would end the worker and leave the tab. Nothing is armed or
+ * noticed there: the tab's own Stop hook gives the notice and arms its own restart. False for the background job the tab
+ * handed its conversation to (`isHandedOffJob`): the job runs the session itself.
+ */
+export async function forkedOutsideTab(runtime: CliRuntime, paths: Pick<TeamPaths, 'sessions'>, ids: readonly string[], id: string, claude: number | undefined): Promise<boolean> {
+  if (claude === undefined) {
+    return false;
+  }
+  const live = await liveRunOf(runtime, paths, ids, id, claude);
+  if (live === undefined || live.tree.has(claude) || (await isHandedOffJob(runtime, live, claude))) {
+    return false;
+  }
+  return isLiveRunOwn(runtime, live, claude);
 }
 
 /** Starts `restart` hidden for the request recorded at `at`, to wait until the session is idle; whether it started. */
@@ -149,6 +170,9 @@ export interface RearmScope {
   readonly refresh: { readonly enabled: boolean; readonly autoRestart: boolean };
   /** The tab's working folder, as Claude Code gave it; undefined when it gave none. */
   readonly cwd: string | undefined;
+  /** Where the team's session records are, and its sessions, to tell a forked worker outside the tab (`forkedOutsideTab`). */
+  readonly paths: Pick<TeamPaths, 'sessions'>;
+  readonly ids: readonly string[];
 }
 
 /**
@@ -158,7 +182,8 @@ export interface RearmScope {
 async function armFromTab(runtime: CliRuntime, store: RefreshStore, scope: RearmScope, tab: RestartTab): Promise<boolean> {
   const { team, id, cwd } = scope;
   // Looked up on this rare path only: each look at a process starts a PowerShell on Windows.
-  const claude = await hostSessionAbove(runtime);
+  const found = await hostSessionAbove(runtime);
+  const claude = (await forkedOutsideTab(runtime, scope.paths, scope.ids, id, found)) ? undefined : found;
   const project = identityOf(runtime).projectDir ?? tab.cwd ?? cwd;
   if (claude !== undefined && project !== undefined) {
     const at = new Date(runtime.clock.now()).toISOString();
