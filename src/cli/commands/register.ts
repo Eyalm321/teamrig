@@ -1183,13 +1183,6 @@ async function leadDecisionsOf(runtime: CliRuntime, own: RolledTeam, loaded: Kit
   return { lead: own.config.roles.lead, batch, zone };
 }
 
-/** `check [--tree] [--all]`: the report in the short form (src/cli/reports.ts), or with `--all` every flag in full. */
-export async function check(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
-  noPositionals(args);
-  checkLines(await checkReport(args, runtime), args.switches.has('all')).forEach((line) => runtime.out.stdout(line));
-  return EXIT.ok;
-}
-
 /**
  * `plan [--tree]`: with `--tree`, one section per team, the lead's team first, for the lead's week. The week's fit
  * to the weekly limit sits under the first section's counts, for the week in force only (the limit read is this
