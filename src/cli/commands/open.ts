@@ -488,6 +488,12 @@ export function claudeExit(runtime: CliRuntime, command: string, result: RunOutc
  * open on the error offers to run this line again, starting a stale launch beside the session's next one. A start or
  * restart while the session runs in another Claude Code is refused.
  */
+/** `--plugin-dir <dir>` when `$TEAMRIG_PLUGIN_DIR` names a plugin folder to load; nothing for an installed plugin. */
+export function pluginDirArgs(env: Env): string[] {
+  const dir = env[ENV.pluginDir]?.trim();
+  return dir === undefined || dir === '' ? [] : ['--plugin-dir', dir];
+}
+
 export async function launch(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const id = idFlag('session', onePositional(args, 'id'));
   const team = idFlag('--team', requiredFlag(args.flags, 'team'));
@@ -520,7 +526,7 @@ export async function launch(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
   for (;;) {
     await refuseLiveRun(runtime, kit, roster, id, name);
     const resumeArgs = resuming === undefined ? [] : ['--resume', resuming];
-    const args = [...prefix, ...launchFlags(settings), ...listing.args, ...resumeArgs, '--name', name, ...(first === undefined ? [] : [first])];
+    const args = [...prefix, ...pluginDirArgs(runtime.env), ...launchFlags(settings), ...listing.args, ...resumeArgs, '--name', name, ...(first === undefined ? [] : [first])];
     const startedAt = runtime.clock.now();
     const result = await runtime.processes.run({ command, args, cwd: project, env: claudeEnv });
     if (!(await restartTaken(store, id))) {

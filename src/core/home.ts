@@ -15,6 +15,12 @@ export const ENV = {
   /** The calling session's name when `--session` is not given. */
   session: 'TEAMRIG_SESSION',
   /**
+   * A plugin folder `teamrig launch` loads into Claude Code with `--plugin-dir`: set where teamrig runs from a copy
+   * that is not an installed plugin (bundled with another app, or a checkout), so each session it starts gets the
+   * hooks, skills and `teamrig` on PATH.
+   */
+  pluginDir: 'TEAMRIG_PLUGIN_DIR',
+  /**
    * The Claude Code session running a command: the inbox reminder hook follows its reads by it, and `teamrig queue`
    * takes the session this tab is bound to from it when no session is named.
    */

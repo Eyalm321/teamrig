@@ -497,6 +497,15 @@ describe('teamrig launch', () => {
     assert.deepEqual(processes.ran.map((run) => run.env), [{ ...SESSION_ENV, ANTHROPIC_API_KEY: value, GH_TOKEN: value }]);
   });
 
+  it('loads the plugin folder $TEAMRIG_PLUGIN_DIR names with --plugin-dir, and none when it is unset or blank', async () => {
+    const named = new FakeProcesses();
+    await launch(named, [], { env: { PATH: '/usr/local/bin', TEAMRIG_PLUGIN_DIR: '/opt/app/teamrig' } });
+    assert.deepEqual(named.ran[0]?.args.slice(0, 2), ['--plugin-dir', '/opt/app/teamrig']);
+    const blank = new FakeProcesses();
+    await launch(blank, [], { env: { PATH: '/usr/local/bin', TEAMRIG_PLUGIN_DIR: ' ' } });
+    assert.equal(blank.ran[0]?.args.includes('--plugin-dir'), false);
+  });
+
   it("starts Claude Code without the opener's plugin bin folders on PATH, so the session's own teamrig answers its Bash calls", async () => {
     const processes = new FakeProcesses();
     await launch(processes, [], { env: { PATH: '/home/me/.claude/plugins/cache/teamrig/teamrig/0.75.0/bin:/usr/local/bin' } });
