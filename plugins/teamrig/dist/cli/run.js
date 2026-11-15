@@ -9,6 +9,7 @@ import { parseArgs, UsageError } from "./args.js";
 import { RENAMED } from "./renamed.js";
 import { EXIT, RefusedError } from "./runtime.js";
 const registerCommands = () => import("./commands/register.js");
+const tabSessionCommands = () => import("./commands/tab-session.js");
 const statsCommands = () => import("./commands/stats.js");
 const reportCommands = () => import("./commands/report.js");
 const goalCommands = () => import("./commands/goal.js");
@@ -1041,6 +1042,10 @@ export async function runCli(given, runtime) {
             throw new UsageError(`unknown command "${args.command}"`);
         }
         refuseSettingsWrite(args.command, args.switches, runtime);
+        if (spec.effect === 'write') {
+            // A write runs only as the tab's own session, whatever --session says (T3082).
+            await (await tabSessionCommands()).refuseAnotherTabSession(args, runtime);
+        }
         const command = await spec.load();
         return await command(args, runtime);
     }
