@@ -480,6 +480,7 @@ function parseGithub(read, raw, sessions) {
         statusPush: read.boolean(raw, 'statusPush', 'github', DEFAULT_GITHUB.statusPush),
         acceptLabel: read.string(raw, 'acceptLabel', 'github', DEFAULT_GITHUB.acceptLabel, shortLine(GITHUB_LABEL_MAX_LENGTH)),
         similarThreshold: read.number(raw, 'similarThreshold', 'github', DEFAULT_GITHUB.similarThreshold, CONFIG_LIMITS.similarThreshold),
+        stamp: read.boolean(raw, 'stamp', 'github', DEFAULT_GITHUB.stamp),
     };
 }
 /** Below this, a probe every few seconds would spend gh starts for nothing GitHub shows that fast. */
