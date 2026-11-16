@@ -36,8 +36,8 @@ export interface UnownedWarning {
   /** Its flag line, as `check --all` prints it. */
   readonly text: string;
   /**
-   * What an open task may name the warning by: the files it warns about and the config key of its check. A task that
-   * names one already covers it, so it is not told as unowned again (#814).
+   * What an open task may name the warning by: the config key of its check, and the file it warns about when it is
+   * about one file. A task that names one already covers it, so it is not told as unowned again (#814).
    */
   readonly names?: readonly string[];
 }
@@ -57,6 +57,12 @@ export interface SplitWarnings {
 /** A doctor finding no session owns: the context findings, one per budget, the wide allow rules and the missing secret deny lines. */
 export type UnownedFinding = ContextFinding | AllowFinding | DenyFinding;
 
+/**
+ * The budgets that total many files: every CLAUDE.md, every skill folder. A task names one of those files for its own
+ * reasons ("add a rule to CLAUDE.md", any task about one skill), so only the config key covers such a warning (#814).
+ */
+const TOTAL_BUDGETS: ReadonlySet<string> = new Set(['maxClaudeMdChars', 'maxSkillListingChars']);
+
 function findingWarning(finding: UnownedFinding): UnownedWarning {
   const text = formatFinding(finding);
   switch (finding.kind) {
@@ -69,7 +75,7 @@ function findingWarning(finding: UnownedFinding): UnownedWarning {
         key: `context ${finding.budget}`,
         source: `the context check [contextFiles.${finding.budget}]`,
         text,
-        names: [`contextFiles.${finding.budget}`, ...(finding.paths ?? [])],
+        names: [`contextFiles.${finding.budget}`, ...(TOTAL_BUDGETS.has(finding.budget) ? [] : (finding.paths ?? []))],
       };
   }
 }
