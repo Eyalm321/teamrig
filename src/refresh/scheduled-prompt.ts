@@ -1,6 +1,7 @@
 import type { Files } from '../core/files.ts';
 import { stringField } from '../core/guards.ts';
 import { parseObject } from '../core/jsonl.ts';
+import { CARRY_TAIL_BYTES, carryOf, type CarriedCron } from './carry.ts';
 
 /** Enough of the transcript to hold its last entry: the fire's entry carries the job's prompt. */
 export const SCHEDULED_TAIL_BYTES = 64 * 1024;
@@ -17,11 +18,30 @@ export function endsWithScheduledFire(tail: string): boolean {
   return last !== undefined && stringField(last, 'type') === 'system' && stringField(last, 'subtype') === 'scheduled_task_fire';
 }
 
-/** `endsWithScheduledFire` of the transcript at `transcript`; false when it is unknown or unreadable. */
-export async function firedBySchedule(files: Files, transcript: string | undefined): Promise<boolean> {
-  if (transcript === undefined) {
+/** What a UserPromptSubmit hook knows of a prompt: the session's transcript and the prompt's text. */
+export interface PromptSeen {
+  readonly transcript: string | undefined;
+  readonly prompt: string | undefined;
+}
+
+/**
+ * Whether the prompt was fired by a scheduled job: its transcript ends with a fire (`endsWithScheduledFire`) and the
+ * prompt is a live job's (`carryOf` at `now`, counting the jobs a /clear left in the process: `inherited`). Claude
+ * Code also writes a fire entry when it folds fires that ran nothing, so a transcript can end with one while a person
+ * types; their prompt matches no live job and stays typed. False when the transcript is unknown or missing; a read that
+ * fails throws, and the hook takes the prompt as typed.
+ */
+export async function firedBySchedule(files: Files, seen: PromptSeen, inherited: readonly CarriedCron[], now: number): Promise<boolean> {
+  const { transcript, prompt } = seen;
+  if (transcript === undefined || prompt === undefined) {
     return false;
   }
-  const tail = await files.readTail(transcript, SCHEDULED_TAIL_BYTES).catch(() => undefined);
-  return tail !== undefined && endsWithScheduledFire(tail);
+  // The short tail answers most prompts; the whole carry window is read only after a fire.
+  const tail = await files.readTail(transcript, SCHEDULED_TAIL_BYTES);
+  if (tail === undefined || !endsWithScheduledFire(tail)) {
+    return false;
+  }
+  const text = await files.readTail(transcript, CARRY_TAIL_BYTES);
+  const typed = prompt.trim();
+  return text !== undefined && carryOf(text, now, inherited).crons.some((cron) => cron.prompt.trim() === typed);
 }

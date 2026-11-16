@@ -427,23 +427,58 @@ describe('runCli: context refresh', () => {
     assert.equal(await wentOn.store.parked('alpha'), undefined);
   });
 
-  it('keeps the armed restart through a scheduled job\'s prompt, which no one typed', async () => {
-    const kit = new CliHarness(AUTO_RESTART_TEAM);
-    const store = await handoverWritten(kit, 'lead');
+  it('keeps the armed restart through a live scheduled job\'s prompt, which no one typed', async () => {
     const env = { TEAMRIG_SESSION: 'lead', CLAUDE_PROJECT_DIR: APP };
-    stopJson(await kit.run(['hook', 'stop'], { env, stdin: stopPayload(true), sessionProcesses: UNDER_CLAUDE(), processes: new FakeProcesses() }));
-    assert.equal((await store.restart('lead'))?.phase, 'pending');
     const fire = { type: 'system', subtype: 'scheduled_task_fire', content: 'Running scheduled task', taskId: 'job1', prompt: 'check the inbox' };
-    await kit.files.write(TRANSCRIPT, `${(await kit.files.read(TRANSCRIPT)) ?? ''}${JSON.stringify(fire)}\n`);
-    const prompt = JSON.stringify({ session_id: CLAUDE_SESSION, cwd: APP, transcript_path: TRANSCRIPT, prompt: 'check the inbox', session_title: 'app-lead' });
-    const fired = await kit.run(['hook', 'inbox-reminder'], { env, stdin: prompt });
-    assert.ok(!fired.stdout.some((line) => line.includes('automatic restart is cancelled')), fired.stdout.join('\n'));
-    assert.equal((await store.restart('lead'))?.phase, 'pending', 'still armed');
+    const promptOf = (text: string): string => JSON.stringify({ session_id: CLAUDE_SESSION, cwd: APP, transcript_path: TRANSCRIPT, prompt: text, session_title: 'app-lead' });
+    const cancels = (run: { readonly stdout: readonly string[] }): boolean => run.stdout.some((line) => line.includes('automatic restart is cancelled'));
+    const armedLead = async (): Promise<{ readonly kit: CliHarness; readonly store: RefreshStore }> => {
+      const kit = new CliHarness(AUTO_RESTART_TEAM);
+      const store = await handoverWritten(kit, 'lead');
+      stopJson(await kit.run(['hook', 'stop'], { env, stdin: stopPayload(true), sessionProcesses: UNDER_CLAUDE(), processes: new FakeProcesses() }));
+      assert.equal((await store.restart('lead'))?.phase, 'pending');
+      return { kit, store };
+    };
+    const append = async (kit: CliHarness, text: string): Promise<void> => kit.files.write(TRANSCRIPT, `${(await kit.files.read(TRANSCRIPT)) ?? ''}${text}`);
+
+    // A job the transcript made (CronCreate) fires its prompt.
+    const made = await armedLead();
+    const now = made.kit.clock.now();
+    const cronCall = { type: 'assistant', isSidechain: false, timestamp: new Date(now).toISOString(), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_cron', name: 'CronCreate', input: { cron: '*/10 * * * *', prompt: 'check the inbox', recurring: true } }] } };
+    const cronResult = { type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_cron', content: 'ok' }] }, toolUseResult: { id: 'job1', humanSchedule: '*/10 * * * *', recurring: true, durable: false } };
+    await made.kit.files.write(TRANSCRIPT, `${JSON.stringify(cronCall)}\n${JSON.stringify(cronResult)}\n${(await made.kit.files.read(TRANSCRIPT)) ?? ''}`);
+    await append(made.kit, `${JSON.stringify(fire)}\n`);
+    const fired = await made.kit.run(['hook', 'inbox-reminder'], { env, stdin: promptOf('check the inbox') });
+    assert.ok(!cancels(fired), fired.stdout.join('\n'));
+    assert.equal((await made.store.restart('lead'))?.phase, 'pending', 'still armed');
     // The same prompt typed by the person, once the turn ended, cancels it.
-    await kit.files.write(TRANSCRIPT, `${(await kit.files.read(TRANSCRIPT)) ?? ''}${transcript(300_000)}`);
-    const typed = await kit.run(['hook', 'inbox-reminder'], { env, stdin: prompt });
-    assert.ok(typed.stdout.some((line) => line.includes('automatic restart is cancelled')), typed.stdout.join('\n'));
-    assert.equal(await store.restart('lead'), undefined);
+    await append(made.kit, transcript(300_000));
+    const typed = await made.kit.run(['hook', 'inbox-reminder'], { env, stdin: promptOf('check the inbox') });
+    assert.ok(cancels(typed), typed.stdout.join('\n'));
+    assert.equal(await made.store.restart('lead'), undefined);
+
+    // A job a /clear left live in the process: the carried record of this transcript names it, the transcript does not.
+    const inherited = await armedLead();
+    const job = { id: 'job1', cron: '*/10 * * * *', prompt: 'check the inbox', recurring: true, createdAt: inherited.kit.clock.now() - 60_000 };
+    await inherited.store.setCarried('lead', { transcript: TRANSCRIPT, crons: [job] });
+    await append(inherited.kit, `${JSON.stringify(fire)}\n`);
+    const kept = await inherited.kit.run(['hook', 'inbox-reminder'], { env, stdin: promptOf('check the inbox') });
+    assert.ok(!cancels(kept), kept.stdout.join('\n'));
+    assert.equal((await inherited.store.restart('lead'))?.phase, 'pending', 'an inherited job\'s prompt keeps it armed');
+
+    // A fire Claude Code folded (it ran nothing) ends the transcript while the person types: their prompt is no job's.
+    const folded = await armedLead();
+    await folded.store.setCarried('lead', { transcript: TRANSCRIPT, crons: [job] });
+    await append(folded.kit, `${JSON.stringify(fire)}\n`);
+    const person = await folded.kit.run(['hook', 'inbox-reminder'], { env, stdin: promptOf('one more thing') });
+    assert.ok(cancels(person), person.stdout.join('\n'));
+    assert.equal(await folded.store.restart('lead'), undefined);
+
+    // A carried record of another transcript (a new process lost its jobs) names no live job.
+    const stale = await armedLead();
+    await stale.store.setCarried('lead', { transcript: '/elsewhere.jsonl', crons: [job] });
+    await append(stale.kit, `${JSON.stringify(fire)}\n`);
+    assert.ok(cancels(await stale.kit.run(['hook', 'inbox-reminder'], { env, stdin: promptOf('check the inbox') })));
   });
 
   it('cancels the armed restart when the user types, keeping the context until a later task end or more growth', async () => {
