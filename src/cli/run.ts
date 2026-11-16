@@ -5,7 +5,7 @@ import { KIT_VERSION } from '../core/version.ts';
 import { isSettingsWriter, settingsWriteRefusal, WRITE_SWITCH } from '../core/settings-writers.ts';
 import { cutLineMessage, shimArgs } from './cmd-shim.ts';
 import { CommandHelp } from './help.ts';
-import { parseArgs, UsageError, type CommandEffect, type CommandEffects, type CommandFlags, type CommandRest, type CommandSwitches, type ParsedArgs } from './args.ts';
+import { COMMON_FLAGS, parseArgs, UsageError, type CommandEffect, type CommandEffects, type CommandFlags, type CommandRest, type CommandSwitches, type ParsedArgs } from './args.ts';
 import { RENAMED } from './renamed.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from './runtime.ts';
 import type { CommandTable } from '../slash/plan.ts';
@@ -357,7 +357,7 @@ export const COMMAND_REST: CommandRest = new Set(Object.entries(COMMANDS).flatMa
 /** The table a line is read with, and each command's effect: what `/teamrig` plans a line from (src/slash/plan.ts). */
 export const COMMAND_TABLE: CommandTable = { flags: COMMAND_FLAGS, switches: COMMAND_SWITCHES, renamed: RENAMED, rest: COMMAND_REST, effects: COMMAND_EFFECTS };
 
-export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session})
+export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session}; every command takes --session <id|name> and --team <team>)
   team create <team> --sessions <id,id> [--lead <id>] [--project <dir>] [--parent <team>] [--dry-run]
       writes the team config, ties the project folder to the team (the lead defaults to lead) and
       starts a root team's lead on its first task, setting the team up; --parent hangs it under
@@ -1094,6 +1094,10 @@ export async function runCli(given: readonly string[], runtime: CliRuntime): Pro
       throw new UsageError(`unknown command "${args.command}"`);
     }
     refuseSettingsWrite(args.command, args.switches, runtime);
+    if (COMMON_FLAGS.some((name) => args.flags.has(name) && !spec.flags.includes(name))) {
+      // Loaded only then, as it reads the team's config: a hook passes neither flag and loads only its own code.
+      await (await import('./common-flags.ts')).checkCommonFlags(args.command, spec.flags, args, runtime);
+    }
     const command = await spec.load();
     return await command(args, runtime);
   } catch (error) {
