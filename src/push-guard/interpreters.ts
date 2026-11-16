@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { closeSync, constants, fstatSync, openSync, readSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, isAbsolute, join, posix, relative } from 'node:path';
 import { reviewPathMatcher } from './review-paths.ts';
 import { programName, type ProgramLaunch } from './launchers.ts';
 import type { ShellWord } from './tokenizer.ts';
@@ -169,7 +169,8 @@ export interface ScriptBudget {
  * The text an interpreter run takes as its program: every argument (inline `-c`/`-e`/`--eval` code, and the rest,
  * which only makes the rule stricter), the stdin a heredoc or here-string gives it, and any argument that names a
  * readable file in `dir`, together no more than `budget` bytes for the line. An argument only known when it runs is read
- * as written.
+ * as written. A test run ({@link isTestRun}) reads no file it names as a test ({@link isTestPath}): a test runs git in
+ * the repositories it makes, and that is no push of the caller's.
  */
 export function interpreterText(
   launched: ProgramLaunch,
@@ -182,8 +183,12 @@ export function interpreterText(
   if (stdin !== undefined) {
     parts.push(stdin.text);
   }
+  const testRun = isTestRun(launched);
   for (const arg of launched.args) {
     if (arg.dynamic || arg.text === '' || arg.text.startsWith('-') || arg.text.includes('\n')) {
+      continue;
+    }
+    if (testRun && isTestPath(arg.text)) {
       continue;
     }
     const path = isAbsolute(arg.text) ? arg.text : dir === undefined ? undefined : join(dir, arg.text);
@@ -194,6 +199,38 @@ export function interpreterText(
     }
   }
   return parts.join('\n');
+}
+
+/**
+ * True when an interpreter run is a test run, which runs each file it names as a test: node with `--test`, or deno or
+ * bun whose first argument that is no option is `test`. A preload (`--import x.js`) and any file not named as a test
+ * are still read.
+ */
+export function isTestRun(launched: ProgramLaunch): boolean {
+  if (launched.program.dynamic) {
+    return false;
+  }
+  const name = programName(launched.program.text);
+  if (/^(?:node|nodejs)$/.test(name)) {
+    return launched.args.some((arg) => !arg.dynamic && arg.text === '--test');
+  }
+  const first = launched.args.find((arg) => arg.dynamic || !arg.text.startsWith('-'));
+  return /^(?:deno|bun)$/.test(name) && first !== undefined && !first.dynamic && first.text === 'test';
+}
+
+/**
+ * A path (or a glob) a test runner reads as a test file, by node's own default patterns (`*.test.js`, `*-test.js`,
+ * `*_test.js`, `test-*.js`, `test.js`, and any file in a `test` folder), with `.spec` and a `tests` or `__tests__`
+ * folder too, in any JavaScript or TypeScript extension. The path is read with its `.` and `..` segments resolved.
+ */
+export function isTestPath(path: string): boolean {
+  if (!/\.[cm]?[jt]sx?$/.test(path)) {
+    return false;
+  }
+  // `test/../push.js` is push.js: judge the path its `.` and `..` segments lead to, never the words as written.
+  const parts = posix.normalize(path.replaceAll('\\', '/')).split('/');
+  const name = parts.at(-1) ?? '';
+  return /^(?:.+[.\-_](?:test|spec)|test-.+|test|spec)\.[cm]?[jt]sx?$/.test(name) || parts.slice(0, -1).some((part) => /^(?:test|tests|__tests__)$/.test(part));
 }
 
 /** The doubt a script that may push raises. */

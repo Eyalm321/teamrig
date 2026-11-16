@@ -352,7 +352,10 @@ the guard cannot read (`--script-shell=node`, or a variable) is refused as a dou
   reading stdin, `eval` or `-c` of a command line only known when it runs, or a program, git command or `env -S`
   line only known when it runs), which its output may have written. Only a
   regular file is read, never a FIFO, device or UNC path, and a line's files together at most 1 MiB. A script file
-  `pushGuard.trustedScripts` names (a team's own tool, its tests) is not read, so running it asks nothing. This is a
+  `pushGuard.trustedScripts` names (a team's own tool, its tests) is not read, so running it asks nothing. A test run
+  (`node --test`, `deno test`, `bun test`) reads no file it names as a test (`*.test.ts`, `*.spec.js`, node's own
+  test-file names, a `test` folder): a test's git runs in the repositories it makes. Its preloads and any other file
+  it runs are still read. This is a
   text rule against an accidental push, not a sandbox: a script that builds `'gi' + 't'` or decodes its command passes.
 
 What to do: push your own branch and merge through a pull request, or write the push out plainly so the guard
