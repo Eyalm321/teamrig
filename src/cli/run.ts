@@ -396,7 +396,9 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
   team tree                    the tree of teams this team is in, with each team's lead and sessions
   open <id|name|team/id> [--prompt "<first prompt>"] [--terminal <name>] [--project <dir>] [--resume]
       a new terminal tab running Claude Code as that session (team/id: another team of the tree);
-      with no terminal it prints the command; a rehired session reads the handover it left first, or,
+      it takes no --session, as the session it opens is its argument; --terminal print opens no tab
+      and prints the command to run, as open does when no terminal it tries opens (exit 3);
+      a rehired session reads the handover it left first, or,
       with --resume, goes on in its last Claude Code session when that is small and recent enough,
       as does one whose tab ended outside teamrig (a crash or reboot), on a prompt to re-read its list;
       a session teamrig close ended goes on in its last one by those limits, else opens fresh (on its
