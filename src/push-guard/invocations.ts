@@ -1,5 +1,5 @@
 import { packagedStartOf, type PackagedStart } from '../package-guard/packaged.ts';
-import { interpreterDoubt, interpreterOf, interpreterText, readScriptFile, scriptMayPush } from './interpreters.ts';
+import { interpreterDoubt, interpreterOf, interpreterText, MAX_LINE_SCRIPT_BYTES, readScriptFile, scriptMayPush, type ScriptBudget } from './interpreters.ts';
 import { isAssignment, launch, programName, staticWord, type Assignment, type Launch, type ProgramLaunch } from './launchers.ts';
 import { bashNativeWord, Location, resolveDir } from './location.ts';
 import { splitGitAlias } from './program-split.ts';
@@ -83,7 +83,7 @@ export interface FinderContext {
   readonly dialect: ShellDialect;
   readonly git: GitConfigReader;
   /** Reads a script file an interpreter runs (see interpreters.ts); undefined when unreadable. Defaults to the file system. */
-  readonly readScript?: (path: string) => string | undefined;
+  readonly readScript?: (path: string, maxBytes: number) => string | undefined;
 }
 
 /** Git's own commands; an alias never overrides one. */
@@ -328,9 +328,12 @@ class GitInvocationFinder {
    */
   private shellHooksOverride: string | undefined;
   private readonly context: FinderContext;
+  /** The script file bytes the line's interpreters may still read, shared with the finders of its held text. */
+  private readonly scriptBudget: ScriptBudget;
 
-  constructor(context: FinderContext) {
+  constructor(context: FinderContext, scriptBudget: ScriptBudget = { left: MAX_LINE_SCRIPT_BYTES }) {
     this.context = context;
+    this.scriptBudget = scriptBudget;
   }
 
   find(command: string): GitInvocations {
@@ -425,7 +428,7 @@ class GitInvocationFinder {
       }
       const parsed = parseHeldText(word.held);
       const unread = parsed.skipped ? 'it holds quoted text the guard cannot read for the commands bash runs if an expansion reads it again' : undefined;
-      const held = new GitInvocationFinder(this.context);
+      const held = new GitInvocationFinder(this.context, this.scriptBudget);
       held.visitParsed(parsed, word.held, unread, 'bash', location.child(), depth + 1);
       this.doubts.push(...held.doubts.map((doubt) => (this.dynamicScripts > 0 && doubt.shellCode !== true ? { ...doubt, shellCode: true as const } : doubt)));
       if (held.invocations.some((invocation) => invocation.subcommand === 'push')) {
@@ -480,7 +483,7 @@ class GitInvocationFinder {
         if (language !== undefined) {
           const inner = location.child();
           launched.chdirs.forEach((chdir) => inner.moveTo(chdir, dialect));
-          const text = interpreterText(launched, stdin, inner.dir, this.context.readScript ?? readScriptFile);
+          const text = interpreterText(launched, stdin, inner.dir, this.context.readScript ?? readScriptFile, this.scriptBudget);
           if (scriptMayPush(text, language)) {
             this.doubt(interpreterDoubt(language), false);
           }
