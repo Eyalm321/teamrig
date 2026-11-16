@@ -15,8 +15,8 @@ import type { ShellWord } from './tokenizer.ts';
  * library), so a script that only talks about pushes (even `git push` in a message), or only runs `git status`, passes.
  */
 
-/** The interpreters whose scripts are judged: python, node and the JS runtimes, perl, ruby, php. */
-const INTERPRETER = /^(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|perl[\d.]*|ruby[\d.]*|php[\d.]*)$/;
+/** The interpreters whose scripts are judged: python (and Windows' py launcher), node and the JS runtimes, perl, ruby, php. */
+const INTERPRETER = /^(?:python[\d.]*|pypy[\d.]*|py|node|nodejs|deno|bun|perl[\d.]*|ruby[\d.]*|php[\d.]*)$/;
 
 /** The language an interpreter's program name runs, or undefined when it is not one of {@link INTERPRETER}. */
 export function interpreterOf(launched: ProgramLaunch): string | undefined {
@@ -27,7 +27,7 @@ export function interpreterOf(launched: ProgramLaunch): string | undefined {
   if (!INTERPRETER.test(name)) {
     return undefined;
   }
-  return /^(?:python|pypy)/.test(name)
+  return /^(?:python|pypy|py$)/.test(name)
     ? 'python'
     : /^(?:node|deno|bun)/.test(name)
       ? 'JavaScript'
@@ -45,6 +45,7 @@ const PROCESS_PRIMITIVE = new RegExp(
   [
     // python
     String.raw`\bsubprocess\b`,
+    String.raw`\bcreate_subprocess_(?:shell|exec)\b`,
     String.raw`\bPopen\b`,
     String.raw`\bos\s*\.\s*(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*)\b`,
     String.raw`\bpty\s*\.\s*spawn\b`,
@@ -61,6 +62,11 @@ const PROCESS_PRIMITIVE = new RegExp(
     String.raw`\bqx\s*\W`,
     String.raw`%x\s*\W`,
     String.raw`\bIPC::(?:Open[23]|Run)\b`,
+    // perl's piped open: a mode of -| or |- (open($fh, '-|', 'git', 'push')), or a command line that ends or starts
+    // with a pipe (open(FH, "git push origin main |")); ruby's open("|git push")
+    String.raw`\bopen\s*\(?\s*[^,;()]+,\s*['"](?:-\||\|-)['"]`,
+    String.raw`\bopen\s*\(?\s*[^,;()]+,\s*['"](?:\s*\|[^'"]*|[^'"]*\|\s*)['"]`,
+    String.raw`\bopen\s*\(?\s*['"]\s*\|`,
     String.raw`\b(?:Open3|IO\s*\.\s*popen|Kernel\s*\.\s*(?:system|exec|spawn))\b`,
   ].join('|'),
 );
