@@ -70,9 +70,8 @@ describe('the warnings no session owns go to the lead (T951)', () => {
   it('names the open task that already covers a warning in place of listing it as unowned, and tells the lead nothing (#814)', async () => {
     const kit = new CliHarness({ ...TEAM, contextFiles: { maxClaudeMdChars: BUDGET } });
     await kit.holdSecretDeny();
-    const claudeMd = join(APP, 'CLAUDE.md');
-    await kit.files.write(claudeMd, 'x'.repeat(BUDGET + 1));
-    const added = await kit.run(['add', '--owner', 'alpha', '--title', `Trim ${claudeMd} under its budget`, '--description', 'over its context budget', '--priority', 'p2'], AS_LEAD);
+    await kit.files.write(join(APP, 'CLAUDE.md'), 'x'.repeat(BUDGET + 1));
+    const added = await kit.run(['add', '--owner', 'alpha', '--title', 'Trim the CLAUDE.md files under contextFiles.maxClaudeMdChars', '--description', 'over its context budget', '--priority', 'p2'], AS_LEAD);
     assert.equal(added.code, EXIT.ok, added.stderr.join('\n'));
     const id = /\bT\d+\b/.exec(added.stdout.join('\n'))?.[0] ?? '';
     assert.notEqual(id, '', added.stdout.join('\n'));
@@ -92,6 +91,18 @@ describe('the warnings no session owns go to the lead (T951)', () => {
     const after = await kit.run(['check'], AS_LEAD);
     assert.equal(after.stdout.some((line) => HEADING.test(line)), true, `a dropped task covers nothing:\n${after.stdout.join('\n')}`);
     assert.equal(after.stdout.some((line) => line.startsWith('COVERED')), false, after.stdout.join('\n'));
+  });
+
+  it('leaves the CLAUDE.md total unowned when a task names one CLAUDE.md for its own reasons (#814)', async () => {
+    const kit = new CliHarness({ ...TEAM, contextFiles: { maxClaudeMdChars: BUDGET } });
+    await kit.holdSecretDeny();
+    const claudeMd = join(APP, 'CLAUDE.md');
+    await kit.files.write(claudeMd, 'x'.repeat(BUDGET + 1));
+    const added = await kit.run(['add', '--owner', 'alpha', '--title', `Add a rule to ${claudeMd}`, '--description', 'a new team rule', '--priority', 'p2'], AS_LEAD);
+    assert.equal(added.code, EXIT.ok, added.stderr.join('\n'));
+    const result = await kit.run(['check'], AS_LEAD);
+    assert.equal(result.stdout.some((line) => HEADING.test(line)), true, result.stdout.join('\n'));
+    assert.equal(result.stdout.some((line) => line.startsWith('COVERED')), false, result.stdout.join('\n'));
   });
 
   it('counts a task that names the check\'s config key as covering its warning (#814)', async () => {

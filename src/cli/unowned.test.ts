@@ -101,6 +101,22 @@ describe('coverUnowned (#814)', () => {
     assert.deepEqual(coverUnowned([memory], tasks, '/h/u'), { unowned: [memory], covered: [] });
   });
 
+  it('covers a warning on a total across files only by its config key, never by a task naming one of the files', () => {
+    const total = (budget: 'maxClaudeMdChars' | 'maxSkillListingChars', paths: string[]): UnownedWarning =>
+      splitUnowned([{ kind: 'context-size', detail: 'over', budget, paths }], [], SESSIONS, 'skills-dir').unowned[0]!;
+    const claudeMd = total('maxClaudeMdChars', ['/p/CLAUDE.md', '/h/u/.claude/CLAUDE.md']);
+    const listing = total('maxSkillListingChars', ['/s/alpha-deploy', '/s/bravo-sync']);
+    const byFile = [testTask({ id: 'T6', status: 'open', title: 'Add a rule to /p/CLAUDE.md' }), testTask({ id: 'T7', status: 'open', title: 'Fix /s/alpha-deploy' })];
+    assert.deepEqual(coverUnowned([claudeMd, listing], byFile, '/h/u'), { unowned: [claudeMd, listing], covered: [] });
+    const byKey = [testTask({ id: 'T8', status: 'open', title: 'Trim skills', description: 'under contextFiles.maxSkillListingChars' })];
+    assert.deepEqual(
+      coverUnowned([claudeMd, listing], byKey, '/h/u').covered.map(({ warning, task }) => [warning.key, task.id]),
+      [['context maxSkillListingChars', 'T8']],
+    );
+    const memory = splitUnowned([{ kind: 'context-size', detail: 'over', budget: 'maxMemoryIndexChars', paths: ['/m/MEMORY.md'] }], [], SESSIONS, 'skills-dir').unowned[0]!;
+    assert.deepEqual(memory.names, ['contextFiles.maxMemoryIndexChars', '/m/MEMORY.md']);
+  });
+
   it('covers a warning on a file under the home folder by a task naming it as ~/...', () => {
     const home: UnownedWarning = { ...memory, names: ['/h/u/.claude/MEMORY.md'] };
     const { covered } = coverUnowned([home], [testTask({ id: 'T5', status: 'open', title: 'Trim ~/.claude/MEMORY.md' })], '/h/u');
