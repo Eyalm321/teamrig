@@ -448,6 +448,30 @@ describe('parseConfig', () => {
     assert.match(dropped.issues[0]?.message ?? '', /^is no longer read: issue watch syncs when GitHub changed/);
   });
 
+  it('reads github issueAtAdd as one of the repos in lowercase, and reports any other repository as unset', () => {
+    const repos = ['acme/web', 'acme/docs'];
+    const { config, issues } = parseConfig({ ...ROSTER, github: { repos, issueAtAdd: 'Acme/Web' } });
+    assert.deepEqual(issues, []);
+    assert.equal(config.github.issueAtAdd, 'acme/web');
+    const outside = parseConfig({ ...ROSTER, github: { repos, issueAtAdd: 'acme/other' } });
+    assert.deepEqual(paths(outside.issues), ['github.issueAtAdd']);
+    assert.match(outside.issues[0]?.message ?? '', /is not one of github\.repos/);
+    assert.equal(outside.config.github.issueAtAdd, undefined);
+    for (const wrong of [7, '', ' ']) {
+      const parsed = parseConfig({ ...ROSTER, github: { repos, issueAtAdd: wrong } });
+      assert.deepEqual(paths(parsed.issues), ['github.issueAtAdd']);
+      assert.equal(parsed.config.github.issueAtAdd, undefined);
+    }
+  });
+
+  it('reads a github block written back whole as it was, with issueAtAdd left out while unset', () => {
+    const first = parseConfig({ ...ROSTER, github: { repos: ['acme/web'] } });
+    assert.equal('issueAtAdd' in first.config.github, false);
+    const again = parseConfig({ ...ROSTER, github: JSON.parse(JSON.stringify(first.config.github)) });
+    assert.deepEqual(again.issues, []);
+    assert.deepEqual(again.config.github, first.config.github);
+  });
+
   it('reads the github similar threshold within 0 to 1, else keeps 0.35', () => {
     for (const good of [0, 0.5, 1]) {
       const { config, issues } = parseConfig({ ...ROSTER, github: { similarThreshold: good } });

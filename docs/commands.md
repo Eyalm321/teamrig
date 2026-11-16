@@ -145,6 +145,14 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       to mark it, here and when it starts
       --class: the work class, one of focus.classes in any case, stored as configured (Roadmap, Maintenance,
       Improvements by default); a task without one counts as focus.defaultClass
+      [--issue "<public title>" --issue-body "<public text>" [--issue-repo <owner/repo>] | --local "<why>"]
+      --issue: opens the task's GitHub issue with this public wording, labelled by --type and --priority, in
+      --issue-repo, else github.issueAtAdd, else the one repo of github.repos, and points the task's ref at it
+      (no task id, secret, private data or second line in the title); a failure keeps the task, without its
+      issue
+      --local: why the task gets no issue, written as its ref "local: <why>"; a security hole is always added
+      with --local; while github.issueAtAdd is set, an add gives --issue or --local (or a --ref to an issue),
+      else it is refused
   add --team <team> [--owner <s>] [--source owner] --title .. --description .. --priority p<n> [...]   asks a team of your tree for work
       --source owner: the lead of a team above <team> relays the owner's order, sourced owner there
   set <id> --status open|in-progress|verifying|waiting|done|dropped [--note "<what/why>"] [--evidence <proof>]
@@ -308,8 +316,8 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       to free the host, logged, so teamrig open resumes it; it refuses the lead, the delivery owner,
       a session with work it can start or a time wait ending within 30 min, quiet under
       open.headroom.closeIdleMinutes, in a turn, at a tool call or waiting on a decision it put to the
-      person, running background work or shells, or too big or old to resume; without --yes it shows
-      the close and ends nothing
+      person, running background work or shells, or too big or old to resume with no refresh ready;
+      without --yes it shows the close and ends nothing
   rename <id|name> <new-name>  records a session's new name; its old names keep finding it
       (the session itself or the lead)
   hire <id> --scope "<its job>" --reason "<why>" [--name <name>] [--model <model>] [--effort <level>]
@@ -389,9 +397,8 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       rerun skips each task already holding its issue
   issue comment <owner/name#n> --body <text>   posts one comment on an issue or pull request of the
       team's repositories (github.repos; GitHub is the only host so far), with the token saved for the
-      owner, else the gh login; refuses an empty body, a secret shape, private data (a home folder
-      path, an e-mail address) or a task id in it; a saved token that cannot be read stops it, never the
-      gh login in its place
+      owner, never the gh login; refuses an empty body, a secret shape, private data (a home folder
+      path, an e-mail address) or a task id in it; no saved token, or one that cannot be read, stops it
   issue edit <owner/name#n> --body-file <path>   replaces the body (the description) of one issue or
       pull request of the team's repositories with the file's text, with the same access and checks as
       issue comment; the title, state, labels and assignees stay; the host keeps the old body in its

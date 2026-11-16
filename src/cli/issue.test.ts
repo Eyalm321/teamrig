@@ -10,7 +10,7 @@ import { EXIT } from './runtime.ts';
 
 const GITHUB_TEAM: JsonRecord = { ...TEAM, github: { repos: ['acme/web'] } };
 const AS_LEAD = { env: { TEAMRIG_SESSION: 'lead' } };
-const LOGIN = 'ACCESS acme: writes with the gh login; no token saved as teamrig-gh-acme';
+const LOGIN = 'ACCESS acme: writes with the token saved as teamrig-gh-acme';
 
 describe('teamrig issue comment', () => {
   it('posts one comment through the allowlisted call and writes nothing to the task list', async () => {
@@ -147,7 +147,7 @@ describe('teamrig issue close', () => {
     const result = await new CliHarness(GITHUB_TEAM).run(['issue', 'close', 'acme/web#7', '--comment', 'Thanks'], { ...AS_LEAD, gh });
     assert.equal(result.code, EXIT.failed);
     assert.deepEqual(result.stdout.slice(1), [
-      'FAILED acme/web#7: the gh login may not comment on acme/web#7: save a token for acme with Issues and Pull requests read and write, with: save teamrig-gh-acme; it was not closed',
+      'FAILED acme/web#7: the token saved as teamrig-gh-acme may not comment on acme/web#7: on GitHub, edit that token and set Issues and Pull requests to Read and write; its text stays the same, so nothing needs saving again; it was not closed',
     ]);
     assert.equal(gh.ran.length, 1);
   });
@@ -273,7 +273,7 @@ describe('teamrig issue edit', () => {
     const denied = new FakeGh().failsWrite({ end: { kind: 'exited', code: 1 }, stdout: '', stderr: 'gh: Resource not accessible by integration (HTTP 403)\n' });
     const failed = await kit.run(['issue', 'edit', 'acme/web#7', '--body-file', SPEC], { ...AS_LEAD, gh: denied });
     assert.equal(failed.code, EXIT.failed);
-    assert.match(failed.stdout.join('\n'), /^FAILED acme\/web#7: the gh login may not edit the body of acme\/web#7: .*; the body is as it was$/mu);
+    assert.match(failed.stdout.join('\n'), /^FAILED acme\/web#7: the token saved as teamrig-gh-acme may not edit the body of acme\/web#7: .*; the body is as it was$/mu);
     const gh = new FakeGh();
     const off = await kit.run(['issue', 'edit', 'acme/web#7', '--body-file', SPEC], { gh, env: { TEAMRIG_SESSION: 'lead', TEAMRIG_GITHUB: 'off' } });
     assert.equal(off.code, EXIT.ok);

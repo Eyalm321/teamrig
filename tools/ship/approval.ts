@@ -20,9 +20,8 @@ const SHA = /^[0-9a-f]{7,40}$/;
 const SHA_RUN = /\b[0-9a-f]{7,40}\b/g;
 
 /**
- * The task a branch is cut for (`t2788-ship-approval` and `fix/t2788-ship-approval` → `T2788`); null for a name with no
- * task id. Read as the worktree owner check reads it (`branchTaskOf`), so a branch `teamrig worktree add --task` names
- * by `delivery.branches.pattern` merges, and the two readers cannot drift apart.
+ * The task a branch is cut for, read as the plugin reads it (`branchTaskOf`), so a branch `teamrig worktree add --task`
+ * names by delivery.branches (`fix/t3164-rate-fit`) merges too (T3193); null for a branch named for no task.
  */
 export function taskOfBranch(branch: string): string | null {
   return branchTaskOf(branch) ?? null;
@@ -94,7 +93,7 @@ export interface MergeReads {
 export async function clearMerge(caller: MergeCaller, reads: MergeReads, branch: string, head: string, approved: string | null): Promise<MergeClearance> {
   const taskId = taskOfBranch(branch);
   if (taskId === null) {
-    return refused(`branch ${branch} names no task: a merged branch is t<id>-<name>, after any type folder (fix/t<id>-<name>)`);
+    return refused(`branch ${branch} names no task: a merged branch is t<id>-<name>`);
   }
   if (caller.session === undefined || caller.session === '' || caller.team === undefined || caller.team === '') {
     return refused('TEAMRIG_SESSION and TEAMRIG_TEAM must name the merging session and its team');
