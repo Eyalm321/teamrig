@@ -213,13 +213,21 @@ export interface TitleEntry extends EntryBase {
   readonly text: string;
 }
 
+/**
+ * A scheduled job's fire: the host writes it as the job's prompt starts a turn, before that prompt's own entry, so a
+ * transcript that ends with one is read while the fired prompt is under way.
+ */
+export interface ScheduledFireEntry extends EntryBase {
+  readonly kind: 'scheduled-fire';
+}
+
 /** A line of a type no reader uses yet; `type` is the host's name for it, so a check can count unknown ones. */
 export interface OtherEntry extends EntryBase {
   readonly kind: 'other';
   readonly type: string | undefined;
 }
 
-export type TranscriptEntry = InputEntry | ReplyEntry | CompactEntry | TurnEndEntry | ContinuedEntry | HookNoteEntry | ScheduledCarryEntry | EnvironmentEntry | QueuedPromptEntry | ModelSwitchEntry | TitleEntry | OtherEntry;
+export type TranscriptEntry = InputEntry | ReplyEntry | CompactEntry | TurnEndEntry | ContinuedEntry | HookNoteEntry | ScheduledCarryEntry | ScheduledFireEntry | EnvironmentEntry | QueuedPromptEntry | ModelSwitchEntry | TitleEntry | OtherEntry;
 export type EntryKind = TranscriptEntry['kind'];
 
 /** A line that is no entry: damaged or torn text, or JSON that is not an object. It is said, never skipped. */
