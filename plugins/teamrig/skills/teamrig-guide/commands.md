@@ -5513,7 +5513,9 @@ wait (`queuedAt`), the host's free memory then (`queueFreeMb`), the ms its wait 
 `line`, `draining`, `memory`, `commit`, `freeze`, `check`, `session`, `heavyCap`, `cpu`, `shipSlot`, each one that took time) and, sampled every
 `delivery.queue.memorySampleSeconds` (15; 0 samples nothing), the host's free memory as it started (`startFreeMb`),
 the most memory its process tree held at once (`peakTreeMb`) and the least free memory the host had (`lowFreeMb`),
-and `shared: true` for a small step. A step killed at its limit or as its shell ended also records the host's free
+`shared: true` for a small step, and the tree it ran on, read as it started: its folder (`cwd`) and, in a git
+repository, the top level (`gitTop`), HEAD's commit (`head`, left out before the first commit) and whether anything
+was uncommitted or untracked (`dirty`). A step killed at its limit or as its shell ended also records the host's free
 memory (`endFreeMb`) and commit charge (`commitMb` of `commitLimitMb`) at the kill. A step that waited and did not
 run leaves a `refusal` record instead: when it began to wait and ended, how (`outcome`: `timedOut`, `withdrawn`,
 `stopped` or `refused`), the line it printed (`reason`, which after a wait on host memory names the top three
@@ -5601,7 +5603,9 @@ own lines go to `<delivery dir>/detached/dispatcher.log`. Steps left parked with
 reboot, get a new one from the next `teamrig start` of any session of the team or the next idle pass. The hidden run
 outlives the shell, so it watches no shell; it waits for memory and the lock like any step, and its output and the
 queue's own lines go to
-`<delivery dir>/detached/<id>.log`. Its session's inbox gets `queue <id> started: <what>; log <path>` when it takes its
+`<delivery dir>/detached/<id>.log`. That log starts with the tree the run was started on, in the two lines a
+`teamrig test` log starts with (`# folder:`, `# git:`); a tree that changed by the time its step starts gets a line,
+`the tree changed while it waited; it runs on <top level> at <commit>, clean|with uncommitted changes`. Its session's inbox gets `queue <id> started: <what>; log <path>` when it takes its
 turn, and a line that wakes the session, `queue <id> ended: <what>: <last line>; log <path>`, when it ends (`DONE exit
 0`, `FAILED exit <n>`, `TIMED OUT ...`) or is refused (`REFUSED ...`). The run keeps a record,
 `<delivery dir>/detached/<id>.run.json`, until its end line; a run whose process ended with no end of its own (killed
@@ -6438,7 +6442,10 @@ app: 2 commits pushed, not deployed (c1a2b3c4..d5e6f7a8)
 
 Runs a test command in the shell and prints a few lines instead of all it printed, so a long test run costs the
 model little. The whole output goes to a numbered log, `test-<session>-<n>.log` in the team's `state/logs` folder
-(the kit home's `logs` folder outside a team); each session keeps its newest 20. Then one `PASS` or `FAIL` line with
+(the kit home's `logs` folder outside a team); each session keeps its newest 20. The log starts with the tree the
+command ran on, so a log cited as proof names the head it ran on: `# folder: <folder>`, then `# git: <top level> at
+<commit>, clean` (or `with uncommitted changes`, counting untracked files; `no commit yet` before the first commit),
+or `# git: none, it ran outside a git repository`, where the command still runs; then `$ <command>`. Then one `PASS` or `FAIL` line with
 the counts, the time and the log's path, and for a failed run each failing test in full within
 `tests.maxFailureChars` (4,000 characters by default), or the output's last 40 lines when no test runner is
 recognised. It reads the Node.js test runner (spec and TAP), Jest and Vitest. Exit 0 when the command passed,
