@@ -46,7 +46,7 @@ import {
 } from '../../refresh/decide.ts';
 import { ownerTurnsLine, ownerTurnsText, type OwnerTurn } from '../../refresh/owner-turns.ts';
 import { carryLines, carryStartOf, readCarry, type CarriedCron, type Carry, type CarryPlaces, type CarryStart } from '../../refresh/carry.ts';
-import { claudeProcessOf } from '../../refresh/restart.ts';
+import { lookUpClaude } from '../../refresh/restart.ts';
 import { RefreshStore } from '../../refresh/store.ts';
 import { readContextTokens } from '../../refresh/usage.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
@@ -761,10 +761,11 @@ async function refreshDecisionOf(runtime: CliRuntime, scope: SessionScope, paylo
     facts !== undefined && measured.kind === 'measure' ? decideStop(state, context, { ...facts, due: await dueFactsOf(runtime, store, id, payload) }) : measured;
   // Looked up once for the restart and the state: each look at a process starts a PowerShell on Windows, and a Stop
   // hook past Claude Code's timeout is killed with every process it started.
-  const claude = decided.kind === 'notice' ? await claudeProcessOf(runtime.sessionProcesses, runtime.sessionProcesses.parentPid) : undefined;
+  const looked = decided.kind === 'notice' ? await lookUpClaude(runtime.sessionProcesses, runtime.sessionProcesses.parentPid) : undefined;
+  const claude = looked?.kind === 'found' ? looked.pid : undefined;
   const decision =
-    decided.kind === 'notice' && decided.restart && target !== undefined
-      ? await restartOrPark(runtime, store, { team: kit.paths.team, id, context, target, claude }, decided, { paths: kit.paths, config })
+    looked !== undefined && decided.kind === 'notice' && decided.restart && target !== undefined
+      ? await restartOrPark(runtime, store, { team: kit.paths.team, id, context, target, claude: looked }, decided, { paths: kit.paths, config })
       : decided;
   switch (decision.kind) {
     case 'write':

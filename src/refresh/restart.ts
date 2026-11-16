@@ -94,7 +94,21 @@ const CLAUDE_HOPS = 3;
  * look starts a PowerShell on Windows, and a slow hook is killed at Claude Code's timeout); undefined when none is.
  */
 export async function claudeProcessOf(processes: SessionProcesses, pid: number): Promise<number | undefined> {
-  return (await processes.lineage(pid))?.slice(0, CLAUDE_HOPS).find(isClaudeProcess)?.pid;
+  const looked = await lookUpClaude(processes, pid);
+  return looked.kind === 'found' ? looked.pid : undefined;
+}
+
+/** The Claude Code above a hook, none when the listing holds none, or why the listing failed (#706). */
+export type ClaudeLookup = { readonly kind: 'found'; readonly pid: number } | { readonly kind: 'none' } | { readonly kind: 'failed'; readonly why: string };
+
+/** `claudeProcessOf`, with why the lookup failed when it did, for the restart log. */
+export async function lookUpClaude(processes: Pick<SessionProcesses, 'lineageLookup'>, pid: number): Promise<ClaudeLookup> {
+  const looked = await processes.lineageLookup(pid);
+  if (looked.kind === 'failed') {
+    return looked;
+  }
+  const claude = looked.lineage.slice(0, CLAUDE_HOPS).find(isClaudeProcess);
+  return claude === undefined ? { kind: 'none' } : { kind: 'found', pid: claude.pid };
 }
 
 /** The pending request this restart was started for; undefined once it was cancelled, taken or replaced. */
