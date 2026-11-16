@@ -153,6 +153,30 @@ describe('hook restore-track', () => {
     assert.deepEqual([entry?.state, entry?.team, entry?.session], ['working', undefined, undefined]);
   });
 
+  it("looks for a hand-opened tab's team only when its entry is written with none, never at a tool end that writes nothing (#820)", async () => {
+    const kit = new CliHarness();
+    const byHand: Env = { CLAUDE_PROJECT_DIR: APP, CLAUDE_CODE_ENTRYPOINT: 'cli' };
+    const marks = join(TEAM_HOME, 'state', 'inbox-marks.jsonl');
+    /** Whether a hook event read the inbox marks the lookup reads: a stalled read never lets the call end. */
+    const looks = async (stdin: string): Promise<boolean> => {
+      const files = new FaultyFiles(kit.files);
+      const looked = files.stall('read', marks).then(() => true);
+      const ended = kit.run(['hook', 'restore-track'], { stdin, env: byHand, files, sessionProcesses: new FakeSessionProcesses(7000) }).then(() => false);
+      return Promise.race([looked, ended]);
+    };
+    const toolEnd = payload('PostToolUse', { tool_name: 'Bash' });
+    assert.equal(await looks(payload('UserPromptSubmit')), true, 'a first entry of no team looks');
+    await track(kit, payload('UserPromptSubmit'), byHand);
+    assert.equal(await looks(toolEnd), false, 'a tool end inside TOOL_END_WRITE_MS writes nothing, and looks for nothing');
+    const read = await kit.run(['inbox', 'read', '--session', 'lead'], { env: { CLAUDE_CODE_SESSION_ID: CLAUDE_SESSION } });
+    assert.equal(read.code, EXIT.ok, read.stderr.join('\n'));
+    await track(kit, payload('Stop', { stop_hook_active: false }), byHand);
+    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'lead']);
+    kit.clock.advance(MS_PER_HOUR);
+    assert.equal(await looks(toolEnd), false, 'an entry that names its team keeps it, and looks for nothing');
+    assert.deepEqual([(await entryOf(kit))?.updatedAt, (await entryOf(kit))?.team], [kit.clock.now(), 'app']);
+  });
+
   it("leaves a session in a turn as it was at a compaction's start, which comes mid-turn", async () => {
     const kit = new CliHarness();
     await track(kit, payload('UserPromptSubmit'));
