@@ -348,8 +348,11 @@ the guard cannot read (`--script-shell=node`, or a variable) is refused as a dou
   push the guard cannot read; run the push as a plain git command on the line instead". A script that only talks about
   a push, or only runs `git status`, passes. Where its output goes on to another command
   (`python3 -c 'print("git push ...")' | sh`, or a `$( )`), its text still names a push for that command, so a shell
-  fed a printed push asks. This is a text rule against an accidental push, not a sandbox: a script
-  that builds `'gi' + 't'` or decodes its command passes.
+  fed a printed push asks, and so does a doubt about shell code the guard cannot read (a shell reading stdin, `eval`
+  or `-c` of a command line only known when it runs), which its output may have written. Only a regular file is read,
+  never a FIFO, device or UNC path, and a line's files together at most 1 MiB. A script file
+  `pushGuard.trustedScripts` names (a team's own tool, its tests) is not read, so running it asks nothing. This is a
+  text rule against an accidental push, not a sandbox: a script that builds `'gi' + 't'` or decodes its command passes.
 
 What to do: push your own branch and merge through a pull request, or write the push out plainly so the guard
 can read it. Never route around a refusal; report it to the lead. On Windows a Git Bash drive folder (`cd /c/work`,
