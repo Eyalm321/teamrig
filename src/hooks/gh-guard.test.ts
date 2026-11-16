@@ -207,6 +207,13 @@ describe('ghGuardOutput: each repository form gh takes', () => {
     assert.equal(reason('gh issue close 3 -R ghe.example.com/acme/web'), undefined, 'another host is another repository');
   });
 
+  it('reads the last of a repeated option, as gh does', () => {
+    assert.ok(reason('gh issue close 3 -R acme/other -R acme/web', ENV, '/elsewhere') !== undefined);
+    assert.equal(reason('gh issue close 3 -R acme/web -R acme/other', ENV, '/elsewhere'), undefined);
+    assert.ok(reason('gh api repos/acme/web/pulls/1 -X GET -X DELETE', ENV, '/elsewhere') !== undefined);
+    assert.equal(reason('gh api repos/acme/web/pulls/1 -X DELETE -X GET', ENV, '/elsewhere'), undefined);
+  });
+
   it("reads the group's -R before its command", () => {
     assert.match(reason('gh issue -R acme/web close 12', ENV, '/elsewhere') ?? '', /teamrig issue close acme\/web#12/);
     assert.ok(reason('gh pr --repo acme/web merge 7', ENV, '/elsewhere') !== undefined);
