@@ -1094,12 +1094,15 @@ export async function runCli(given: readonly string[], runtime: CliRuntime): Pro
       throw new UsageError(`unknown command "${args.command}"`);
     }
     refuseSettingsWrite(args.command, args.switches, runtime);
+    let given = args;
     if (COMMON_FLAGS.some((name) => args.flags.has(name) && !spec.flags.includes(name))) {
       // Loaded only then, as it reads the team's config: a hook passes neither flag and loads only its own code.
-      await (await import('./common-flags.ts')).checkCommonFlags(args.command, spec.flags, args, runtime);
+      const common = await import('./common-flags.ts');
+      await common.checkCommonFlags(args.command, spec.flags, args, runtime);
+      given = common.withoutUndeclared(args, spec.flags);
     }
     const command = await spec.load();
-    return await command(args, runtime);
+    return await command(given, runtime);
   } catch (error) {
     if (error instanceof UsageError) {
       runtime.out.stderr(COMMAND_HELP.usageError(error.message, error.command ?? named));
