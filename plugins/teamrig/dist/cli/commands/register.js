@@ -39,7 +39,7 @@ import { skillsToLint } from "../../skills/run-scripts.js";
 import { SKILL_FILE } from "../../skills/store.js";
 import { weekUseOnAccount } from "../account-teams.js";
 import { readWideAllow, teamSettingsScope } from "../allow-scope.js";
-import { noPositionals, onePositional, requiredFlag, UsageError } from "../args.js";
+import { noPositionals, onePositional, requiredFlag, somePositionals, UsageError } from "../args.js";
 import { handStepPin, readRunFiles } from "../hand-step-file.js";
 import { KitTreeGoals } from "../tree-goals.js";
 import { addInputOf, callerOf, changesOf, criticalOf, deadlineOf, listFilterOf, NONE, oneCommitOf, pinOf, setInputOf, taskIdOf, taskRefOf, weekOf, withSecurityCard } from "../inputs.js";
@@ -810,41 +810,52 @@ export async function list(args, runtime) {
     return EXIT.ok;
 }
 /**
- * `show <id> [--tree] [--history]`: every field of the task, its last 3 history events (all with `--history`, T2535),
- * its files ({@link taskFilesLine}, T1457) and the team's inbox lines that name it (T1196); with `--tree`, its line, then what it needs and what needs it, each node with its
- * owner, status and due, then who moves next (views.ts formatTaskTree). A task another register of the team tree
- * holds shows read-only ({@link elsewhereLines}), with its files in that team.
+ * `show <id> [<id> ...] [--tree] [--history]`: for each task in the order given, every field, its last 3 history
+ * events (all with `--history`, T2535), its files ({@link taskFilesLine}, T1457) and the team's inbox lines that name it
+ * (T1196); with `--tree`, its line, then what it needs and what needs it, each node with its owner, status and due, then
+ * who moves next (views.ts formatTaskTree). A task another register of the team tree holds shows read-only
+ * ({@link elsewhereLines}), with its files in that team. Several ids in one call spare a status read each (T2536); an id
+ * named twice shows once, and an unknown one refuses the call before anything prints, so a partial view is never read
+ * as the whole.
  */
 export async function show(args, runtime) {
-    const id = taskIdOf(onePositional(args, 'id'));
-    const { own } = await settle(runtime, await ownRegister(runtime), (_retired, working) => !working.state.tasks.has(id));
-    const { snapshot } = own;
-    const task = snapshot.state.tasks.get(id);
-    if (task === undefined) {
-        const away = own.elsewhere.get(id);
-        if (away === undefined) {
-            throw new RefusedError(`no task ${id}`);
-        }
-        elsewhereLines(away, own, args.switches.has('tree'), runtime).forEach((line) => runtime.out.stdout(line));
-        if (!args.switches.has('tree')) {
-            runtime.out.stdout(await taskFilesLine(runtime, own.paths.kitHome, away.team, id));
-        }
-        return EXIT.ok;
+    const ids = [...new Set(somePositionals(args, 'id').map(taskIdOf))];
+    const { own } = await settle(runtime, await ownRegister(runtime), (_retired, working) => ids.some((id) => !working.state.tasks.has(id)));
+    const shown = ids.map((id) => ({ id, task: own.snapshot.state.tasks.get(id), away: own.elsewhere.get(id) }));
+    const unknown = shown.filter(({ task, away }) => task === undefined && away === undefined).map(({ id }) => id);
+    if (unknown.length > 0) {
+        throw new RefusedError(`no task ${unknown.join(', ')}`);
     }
+    for (const { id, task, away } of shown) {
+        if (task !== undefined) {
+            await showOwn(task, own, { withTree: args.switches.has('tree'), allHistory: args.switches.has('history') }, runtime);
+        }
+        else if (away !== undefined) {
+            elsewhereLines(away, own, args.switches.has('tree'), runtime).forEach((line) => runtime.out.stdout(line));
+            if (!args.switches.has('tree')) {
+                runtime.out.stdout(await taskFilesLine(runtime, own.paths.kitHome, away.team, id));
+            }
+        }
+    }
+    return EXIT.ok;
+}
+/** One task of {@link show} that its own register holds. */
+async function showOwn(task, own, view, runtime) {
+    const { withTree, allHistory } = view;
+    const { snapshot } = own;
+    const { id } = task;
     const tree = taskTreeOf(own, runtime);
-    if (args.switches.has('tree')) {
+    if (withTree) {
         [formatTask(task, undefined, tree), ...formatTaskTree(task, tree, SHORT_TITLE_CHARS)].forEach((line) => runtime.out.stdout(line));
-        return EXIT.ok;
+        return;
     }
     const events = snapshot.read.events.filter((event) => event.id === id);
     const wPerPct = task.size === null ? undefined : await readWPerPct(runtime, own.paths, own.config, runtime.clock.now());
     const sizeCost = (pct) => (wPerPct === undefined ? undefined : `about ${formatW(pct * wPerPct)} W`);
     const files = await taskFilesLine(runtime, own.paths.kitHome, own.team, id);
-    const allHistory = args.switches.has('history');
     runtime.out.stdout(formatTaskDetail(task, events, tree, { sizeCost, files, runFiles: await readRunFiles(runtime, [task]), allHistory }));
     const named = await taskLinesOf(inboxDepsOf(runtime, own.paths).inboxes, id);
     formatTaskLines(id, named, tree.zone).forEach((line) => runtime.out.stdout(line));
-    return EXIT.ok;
 }
 /**
  * `show` of a task another register of the team tree holds (T1139): its row, named by its team and judged as that
@@ -1032,12 +1043,6 @@ async function leadDecisionsOf(runtime, own, loaded, now, zone) {
     }
     const { batch } = await ownerBatchOf(runtime, { team: own.team, config: own.config, paths: own.paths, tasks: own.snapshot.state.tasks, elsewhere: own.elsewhere, ranking: own.ranking }, loaded, now);
     return { lead: own.config.roles.lead, batch, zone };
-}
-/** `check [--tree] [--all]`: the report in the short form (src/cli/reports.ts), or with `--all` every flag in full. */
-export async function check(args, runtime) {
-    noPositionals(args);
-    checkLines(await checkReport(args, runtime), args.switches.has('all')).forEach((line) => runtime.out.stdout(line));
-    return EXIT.ok;
 }
 /**
  * `plan [--tree]`: with `--tree`, one section per team, the lead's team first, for the lead's week. The week's fit

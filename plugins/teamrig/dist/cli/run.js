@@ -9,6 +9,7 @@ import { parseArgs, UsageError } from "./args.js";
 import { RENAMED } from "./renamed.js";
 import { EXIT, RefusedError } from "./runtime.js";
 const registerCommands = () => import("./commands/register.js");
+const checkCommands = () => import("./commands/check.js");
 const statsCommands = () => import("./commands/stats.js");
 const reportCommands = () => import("./commands/report.js");
 const goalCommands = () => import("./commands/goal.js");
@@ -122,7 +123,7 @@ const COMMANDS = {
     },
     // --session names the caller on every task and inbox command, so a session can always pass it.
     show: { effect: 'read', flags: ['session'], switches: ['tree', 'history'], load: async () => (await registerCommands()).show },
-    check: { effect: 'read', flags: ['session', 'week'], switches: ['tree', 'all'], load: async () => (await registerCommands()).check },
+    check: { effect: 'read', flags: ['session', 'week'], switches: ['tree', 'all', 'new'], load: async () => (await checkCommands()).check },
     plan: { effect: 'read', flags: ['session', 'week'], switches: ['tree'], load: async () => (await registerCommands()).plan },
     verify: { effect: 'read', flags: ['session'], load: async () => (await registerCommands()).verify },
     stats: { effect: 'read', flags: ['session', 'range'], switches: ['tree'], load: async () => (await statsCommands()).stats },
@@ -571,11 +572,12 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       of a task that needs it ("due 01-12 (from T9)"), and a row names another session's task needing it.
       --parked: only the quiet tasks the park rule leaves out of a list; --untriaged: only the tasks that
       wait for a leader to class them
-  show <id> [--tree] [--history]   every field, the last 3 history events and the inbox lines naming it;
-      --history: every event; --tree: what it needs and what needs it, each with owner, status and due, then
-      the next move (who acts first, on which task)
-  check [--week <date>] [--tree] [--all]   tasks and skills that break a team rule and context
-      text over budget, in a short form within 3,000 characters; --all: every flag in full
+  show <id> [<id> ...] [--tree] [--history]   every field, the last 3 history events and the inbox lines naming
+      it, for each id in order (an unknown one refuses the call); --history: every event; --tree: what it needs
+      and what needs it, each with owner, status and due, then the next move (who acts first, on which task)
+  check [--week <date>] [--tree] [--all] [--new]   tasks and skills that break a team rule and context
+      text over budget, in a short form within 3,000 characters; --all: every flag in full; --new:
+      only the flags the session acts on (as start shows them) new since its last start or check --new
   plan [--week <date>] [--tree]    the week plan (default: the newest week that has started)
       --tree (the lead only): also every team under it, read-only, ids as <team>/T<n>
   verify [--session <id|name>]   the session's verifying tasks, oldest first, each with its proof and
