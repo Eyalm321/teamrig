@@ -31,6 +31,7 @@ import { InlineMutex } from '../testing/inline-mutex.ts';
 import { kitReleaseMain, writeKitRelease } from '../testing/kit-release.ts';
 import { MemoryKitTree } from '../testing/memory-kit-tree.ts';
 import { treeHarness } from '../testing/team-tree.ts';
+import { EXIT } from './runtime.ts';
 import { apiErrorLine, promptLine, transcript } from '../testing/transcript-lines.ts';
 
 const TRANSCRIPT = join(USER_HOME, '.claude', 'projects', 'work-app', `${CLAUDE_SESSION}.jsonl`);
@@ -128,6 +129,19 @@ describe('hook restore-track', () => {
     const entry = await entryOf(plain);
     assert.equal(entry?.state, 'working');
     assert.equal('host' in entry, false);
+  });
+
+  it('records the team and session of a tab opened by hand, as the tab title finds them, and none for a tab no session read its inbox from (#820)', async () => {
+    const kit = new CliHarness();
+    const byHand: Env = { CLAUDE_PROJECT_DIR: APP, CLAUDE_CODE_ENTRYPOINT: 'cli' };
+    await track(kit, payload('UserPromptSubmit'), byHand);
+    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], [undefined, undefined], 'no session read its inbox from this tab yet');
+    const read = await kit.run(['inbox', 'read', '--session', 'lead'], { env: { CLAUDE_CODE_SESSION_ID: CLAUDE_SESSION } });
+    assert.equal(read.code, EXIT.ok, read.stderr.join('\n'));
+    await track(kit, payload('Stop', { stop_hook_active: false }), byHand);
+    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'lead']);
+    await track(kit, payload('Stop', { stop_hook_active: false }));
+    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'alpha'], "a launched tab's environment wins");
   });
 
   it("leaves a session in a turn as it was at a compaction's start, which comes mid-turn", async () => {
@@ -475,6 +489,15 @@ describe("hook restore-track: the owner's page", () => {
     await failTurn(kit, webhook, { env: { CLAUDE_PROJECT_DIR: APP, TEAMRIG_TEAM: 'ui', TEAMRIG_SESSION: 'pixel' }, timeZone: 'Asia/Jerusalem' });
     assert.deepEqual(webhook.posts.map((post) => post.content), ['Claude login expired: ui/pixel ended its turn on Login expired at 12:00 IST. Run /login in any tab; teamrig holds the day-start wakes and retries the stuck tabs once the login works.']);
     assert.equal((await loginLines(kit)).at(-1), PAGED_BY_FILE);
+  });
+
+  it('pages for a tab opened by hand, naming it by the session that read its inbox there (#820)', async () => {
+    const kit = await pagedHarness();
+    const read = await kit.run(['inbox', 'read', '--session', 'lead'], { env: { CLAUDE_CODE_SESSION_ID: CLAUDE_SESSION } });
+    assert.equal(read.code, EXIT.ok, read.stderr.join('\n'));
+    const webhook = new FakeWebhook();
+    await failTurn(kit, webhook, { env: { CLAUDE_PROJECT_DIR: APP } });
+    assert.match(webhook.posts[0]?.content ?? '', /^Claude login expired: app\/lead ended its turn on Login expired/);
   });
 
   it('names a tab its launch gave no session as a tab of its team', async () => {

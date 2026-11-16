@@ -26,7 +26,7 @@ import { DEFAULT_HOST } from '../../composition/adapters.ts';
 import { hostIdOf, identityOf, transcriptsIfKept } from '../host.ts';
 import { loginPageLogLine, loginPageOf, sendLoginPage, type LoginPage } from '../login-page.ts';
 import { EXIT, type CliRuntime, type ExitCode } from '../runtime.ts';
-import { readHookInput, writeReply } from './hook-input.ts';
+import { hookScopeOf, readHookInput, writeReply, type HookOrigin } from './hook-input.ts';
 
 /**
  * What a hook event reports to the tracker; undefined for one the tracker skips. A session start that follows a
@@ -65,6 +65,22 @@ function present(value: string | undefined): string | undefined {
 function envId(runtime: CliRuntime, name: string): string | undefined {
   const value = present(runtime.env[name]);
   return value !== undefined && ID_PATTERN.test(value) ? value : undefined;
+}
+
+/**
+ * The tab's team and session: `$TEAMRIG_TEAM` and `$TEAMRIG_SESSION`, which `teamrig launch` sets; else, for a tab a
+ * person opened by hand, the team and session the tab title hook finds for it (its project's team, and the session
+ * that read its inbox from this tab), so its entry names it and its login failure tells its team (#820). Neither is
+ * set unless both are found.
+ */
+async function teamSessionOf(runtime: CliRuntime, origin: HookOrigin): Promise<Pick<TrackFacts, 'team' | 'session'>> {
+  const team = envId(runtime, ENV.team);
+  const session = envId(runtime, ENV.session);
+  if (team !== undefined) {
+    return { team, session };
+  }
+  const scope = await hookScopeOf(runtime, origin).catch(() => undefined);
+  return scope === undefined ? { team: undefined, session: undefined } : { team: scope.kit.paths.team, session: scope.id };
 }
 
 /**
@@ -300,8 +316,7 @@ export async function trackRestore(hook: HookEvent, runtime: CliRuntime): Promis
     sessionKind: told.sessionKind,
     // Claude Code starts its hooks itself (exec form, no shell), so the hook's parent is the session's Claude Code.
     pid: runtime.sessionProcesses.parentPid,
-    team: envId(runtime, ENV.team),
-    session: envId(runtime, ENV.session),
+    ...(await teamSessionOf(runtime, hook)),
     // So a restore reopens it in the host it ran in; the default host is left out, as in the session's record.
     ...(host === DEFAULT_HOST ? {} : { host }),
   };
