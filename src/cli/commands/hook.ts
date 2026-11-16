@@ -67,7 +67,7 @@ import { droppedEditReasonOf } from './hook-dropped-edit.ts';
 import { handStepReasonOf } from './hook-hand-step.ts';
 import { effortWritebackOf, type EffortWritebackOutcome } from './hook-effort-writeback.ts';
 import { meetingHold } from './hook-meeting.ts';
-import { inheritedCrons, restartOrPark, restartPidOf, restartTargetOf } from './hook-restart.ts';
+import { forkedOutsideTab, inheritedCrons, restartOrPark, restartTargetOf } from './hook-restart.ts';
 import { helperContextOf } from './hook-helper-start.ts';
 import { promptSecretBlock } from './hook-prompt-secret.ts';
 import { guardLoadOf, hookTeam } from './hook-guard-load.ts';
@@ -773,9 +773,14 @@ async function refreshDecisionOf(runtime: CliRuntime, scope: SessionScope, paylo
   // Looked up once for the restart and the state: each look at a process starts a PowerShell on Windows, and a Stop
   // hook past Claude Code's timeout is killed with every process it started.
   const claude = decided.kind === 'notice' ? await claudeProcessOf(runtime.sessionProcesses, runtime.sessionProcesses.parentPid) : undefined;
+  // A forked worker outside the tab (`forkedOutsideTab`) arms nothing and records no notice: the tab's own Stop hook
+  // gives the notice and arms the restart with the tab's process, session and transcript.
+  if (decided.kind === 'notice' && decided.restart && (await forkedOutsideTab(runtime, kit.paths, roster.ids, id, claude))) {
+    return { kind: 'none' };
+  }
   const decision =
     decided.kind === 'notice' && decided.restart && target !== undefined
-      ? await restartOrPark(runtime, store, { team: kit.paths.team, id, context, target, claude: await restartPidOf(runtime, kit.paths, roster.ids, id, claude) }, decided, { paths: kit.paths, config })
+      ? await restartOrPark(runtime, store, { team: kit.paths.team, id, context, target, claude }, decided, { paths: kit.paths, config })
       : decided;
   switch (decision.kind) {
     case 'write':
