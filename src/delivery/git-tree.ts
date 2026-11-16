@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import type { CheckedTree, TreeState } from './push-pass.ts';
+import type { RunTree } from './run-tree.ts';
 
 /** One git run's stdout; any failure (no repository, no commit, no git on PATH) reads as undefined. */
 function runGit(dir: string, args: readonly string[]): string | undefined {
@@ -21,5 +22,15 @@ export const GIT_TREES: TreeState = {
       return { kind: 'none' };
     }
     return status === '' ? { kind: 'clean', tree, commit, gitDir } : { kind: 'changed' };
+  },
+  ranIn: (dir): RunTree => {
+    const top = runGit(dir, ['rev-parse', '--show-toplevel'])?.trim();
+    if (top === undefined || top === '') {
+      return { kind: 'outside' };
+    }
+    const head = runGit(dir, ['rev-parse', '--verify', '--quiet', 'HEAD'])?.trim();
+    const status = runGit(dir, ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal']);
+    // A status git cannot give reads as dirty: a log never calls a tree clean that nobody saw.
+    return { kind: 'git', top, head: head === undefined || head === '' ? null : head, dirty: status !== '' };
   },
 };
