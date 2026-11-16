@@ -60,6 +60,8 @@ export interface Job {
   runAttempt: number;
   /** Whether any step of the job began: a job GitHub cancelled while it waited for a runner has none. */
   started: boolean;
+  /** The attempt GitHub names on the job itself; absent when it names none. A re-run's jobs name the new attempt. */
+  jobAttempt?: number;
   /** When the job was queued, began and completed, as GitHub gives them (ISO 8601); absent when it gives none. */
   createdAt?: string;
   startedAt?: string;
@@ -122,7 +124,7 @@ export function parseJobs(json: string, run: Pick<Run, 'id' | 'runAttempt'>): Jo
 }
 
 /** A job's queue, start and completion times, each only when GitHub gives one as text. */
-function timesOf(job: Record<string, unknown>): Pick<Job, 'createdAt' | 'startedAt' | 'completedAt'> {
+function timesOf(job: Record<string, unknown>): Pick<Job, 'jobAttempt' | 'createdAt' | 'startedAt' | 'completedAt'> {
   const text = (key: string): string | undefined => {
     const value = job[key];
     return typeof value === 'string' ? value : undefined;
@@ -130,7 +132,8 @@ function timesOf(job: Record<string, unknown>): Pick<Job, 'createdAt' | 'started
   const created = text('created_at');
   const started = text('started_at');
   const completed = text('completed_at');
-  return { ...(created === undefined ? {} : { createdAt: created }), ...(started === undefined ? {} : { startedAt: started }), ...(completed === undefined ? {} : { completedAt: completed }) };
+  const attempt = job['run_attempt'];
+  return { ...(typeof attempt === 'number' ? { jobAttempt: attempt } : {}), ...(created === undefined ? {} : { createdAt: created }), ...(started === undefined ? {} : { startedAt: started }), ...(completed === undefined ? {} : { completedAt: completed }) };
 }
 
 /** The minutes a check may stay queued or running when repos.json gives no `checkMinutes` (#1341). */
@@ -151,11 +154,14 @@ function msOf(text: string | undefined): number | undefined {
  * proves it. With no `now`, or no time to count from, the job stays as listed.
  */
 export function settleJobs(jobs: readonly Job[], runs: readonly Run[], now: number | undefined, checkMinutes: number): Job[] {
-  const doneRuns = new Set(runs.filter(run => run.status === 'completed').map(run => run.id));
+  const doneRuns = new Map(runs.filter(run => run.status === 'completed').map(run => [run.id, run.runAttempt]));
+  // A run read as completed speaks only for its jobs of that attempt: a re-run's jobs, read after a stale run status,
+  // name a newer attempt and still wait.
+  const runDone = (job: Job): boolean => doneRuns.has(job.runId) && (job.jobAttempt === undefined || job.jobAttempt === doneRuns.get(job.runId));
   return jobs.map((job): Job => {
     if (job.status === 'completed') return job;
-    if (doneRuns.has(job.runId) || job.completedAt !== undefined) {
-      const why = doneRuns.has(job.runId) ? 'its run completed' : 'its completion time was set';
+    if (runDone(job) || job.completedAt !== undefined) {
+      const why = runDone(job) ? 'its run completed' : 'its completion time was set';
       return { ...job, status: 'completed', conclusion: job.conclusion ?? 'failure', note: `listed ${job.status} after ${why}${job.conclusion === null ? ', with no conclusion' : ''}` };
     }
     const since = msOf(job.status === 'queued' ? job.createdAt : (job.startedAt ?? job.createdAt));
