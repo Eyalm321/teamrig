@@ -1,7 +1,7 @@
 import { isEffortLevel, type EffortLevel, type KitConfig } from '../../config/types.ts';
 import { ENV, type TeamPaths } from '../../core/home.ts';
 import type { HookEvent } from '../../ports/host/index.ts';
-import { CARRY_TAIL_BYTES, carryOf } from '../../refresh/carry.ts';
+import { CARRY_TAIL_BYTES, carryOf, type CarriedCron } from '../../refresh/carry.ts';
 import { noticeOf, type NoticeDecision, type StopContext } from '../../refresh/decide.ts';
 import { restartMayAct } from '../../refresh/restart.ts';
 import type { ParkedRestart, RestartRequest, RestartTab } from '../../refresh/state.ts';
@@ -114,9 +114,13 @@ export async function wokenAnyway(runtime: CliRuntime, store: RefreshStore, conf
   if (reader === undefined || text === undefined) {
     return false;
   }
+  return carryOf(reader, text, runtime.clock.now(), await inheritedCrons(store, id, transcript)).crons.some((cron) => cron.recurring);
+}
+
+/** The jobs a /clear left live in the process of the session whose transcript is `transcript` (`CarriedJobs`). */
+export async function inheritedCrons(store: RefreshStore, id: string, transcript: string | undefined): Promise<readonly CarriedCron[]> {
   const record = await store.carried(id);
-  const inherited = record !== undefined && record.transcript === transcript ? record.crons : [];
-  return carryOf(reader, text, runtime.clock.now(), inherited).crons.some((cron) => cron.recurring);
+  return record !== undefined && transcript !== undefined && record.transcript === transcript ? record.crons : [];
 }
 
 /**
