@@ -57,6 +57,7 @@ import { checkLines, listLines, SHORT_TITLE_CHARS, waitingOnLines, type CheckRep
 import { fiveHourWarnings } from '../five-hour-check.ts';
 import { githubLateWarnings } from '../github-late-check.ts';
 import { promptHoldWarnings } from '../prompt-hold-page.ts';
+import { restartStalledWarnings } from '../restart-stalled-check.ts';
 import { resetExpiryWarnings } from '../reset-expiry-check.ts';
 import { idlePassWarnings } from '../idle-pass-check.ts';
 import { restoreLauncherWarnings } from '../launcher-record-check.ts';
@@ -1079,8 +1080,9 @@ function withOverLimit(sections: readonly CheckSection[], fit: WeekFit): CheckSe
  * src/cli/five-hour-check.ts), a reset grant about to expire unused (RESET-EXPIRING, src/cli/reset-expiry-check.ts),
  * each GitHub thread past its answer target (GH-LATE, src/cli/github-late-check.ts), each part of this machine that
  * starts the restore and starts a file gone or something install did not set up (RESTORE-DEAD, RESTORE-STRAY,
- * src/cli/launcher-record-check.ts) and each of its tabs held on a permission prompt (PROMPT-HELD,
- * src/cli/prompt-hold-page.ts) are the unowned
+ * src/cli/launcher-record-check.ts), each of its tabs held on a permission prompt (PROMPT-HELD,
+ * src/cli/prompt-hold-page.ts) and each session left ready with no restart coming (RESTART-STALLED,
+ * src/cli/restart-stalled-check.ts) are the unowned
  * warnings, which go to the lead (src/cli/unowned.ts, T951).
  */
 export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promise<CheckReport> {
@@ -1143,8 +1145,9 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
   const late = await githubLateWarnings(runtime.files, own.paths.githubClocks, zone, now.getTime());
   const restore = await restoreLauncherWarnings(runtime.files, resolveKitHome(runtime.env, runtime.userHome));
   const holds = await promptHoldWarnings(runtime, own.paths, zone, new SecretScanner(own.config.register.secretPatterns), now.getTime());
+  const stalled = await restartStalledWarnings(runtime.files, own.paths, own.config, zone, now.getTime());
   const lead = own.config.roles.lead;
-  return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: [...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds], lead, decisions };
+  return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: [...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...stalled], lead, decisions };
 }
 
 /**
