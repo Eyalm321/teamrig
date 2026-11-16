@@ -17,7 +17,7 @@ import { RESTORE_CHECK_LAUNCHER_SCRIPT } from '../restore/launcher.ts';
 import { LAUNCHER_RECORD_FORMAT, launcherRecordPath } from '../restore/launcher-refresh.ts';
 import { AUTH_FAILED, loginMarkerPath, parseLoginMarker, type LoginMarker } from '../restore/login.ts';
 import { RestoreRegistry, restoreLogPath, restoreSessionsDir } from '../restore/registry.ts';
-import { APP, CLAUDE_SESSION, CLI_PID, CliHarness, KIT, TEAM, USER_HOME, type CliResult } from '../testing/cli-harness.ts';
+import { APP, CLAUDE_SESSION, CLI_PID, CliHarness, KIT, TEAM, TEAM_HOME, USER_HOME, type CliResult } from '../testing/cli-harness.ts';
 import { FakeUserPath, quietRestore } from '../testing/fake-restore.ts';
 import { FakeSessionProcesses } from '../testing/fake-session-processes.ts';
 import { FakeWebhook } from '../testing/fake-webhook.ts';
@@ -142,6 +142,15 @@ describe('hook restore-track', () => {
     assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'lead']);
     await track(kit, payload('Stop', { stop_hook_active: false }));
     assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'alpha'], "a launched tab's environment wins");
+  });
+
+  it('still records a tab opened by hand, with no team or session, when finding them fails (#820)', async () => {
+    const kit = new CliHarness();
+    const files = new FaultyFiles(kit.files).fail('read', join(TEAM_HOME, 'state', 'inbox-marks.jsonl'), systemError('EACCES'));
+    const result = await kit.run(['hook', 'restore-track'], { stdin: payload('UserPromptSubmit'), env: { CLAUDE_PROJECT_DIR: APP, CLAUDE_CODE_ENTRYPOINT: 'cli' }, files });
+    assert.deepEqual([result.code, result.stdout, result.stderr], [0, [], []], 'a tracker never fails a turn');
+    const entry = await entryOf(kit);
+    assert.deepEqual([entry?.state, entry?.team, entry?.session], ['working', undefined, undefined]);
   });
 
   it("leaves a session in a turn as it was at a compaction's start, which comes mid-turn", async () => {
