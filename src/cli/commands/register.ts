@@ -1247,7 +1247,7 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
   const sessionRuns = (pid: number): Promise<boolean> => runsHostSession(runtime, pid);
   const stalled = await restartStalledWarnings(transcriptsIfKept(runtime), runtime.files, sessionRuns, own.paths, own.config, zone, now.getTime());
   const lead = own.config.roles.lead;
-  const cover = coverUnowned([...unowned, ...idle, ...hooks, ...stamps, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs, ...stalled], own.snapshot.state.tasks.values());
+  const cover = coverUnowned([...unowned, ...idle, ...hooks, ...stamps, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs, ...stalled], own.snapshot.state.tasks.values(), runtime.userHome);
   return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: cover.unowned, covered: cover.covered, lead, decisions };
 }
 
