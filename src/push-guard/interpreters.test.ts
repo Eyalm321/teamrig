@@ -179,3 +179,28 @@ describe('pushGuard.trustedScripts', () => {
     assert.equal(asks(['tools/other/*.ts']), true);
   });
 });
+
+describe('scriptMayPush: the process forms a review listed', () => {
+  it("flags python's asyncio subprocesses, perl's piped open and ruby's open of a pipe", () => {
+    for (const [text, language] of [
+      ["import asyncio\nasyncio.run(asyncio.create_subprocess_exec('git', 'push', 'origin', 'main'))", 'python'],
+      ["import asyncio\nawait asyncio.create_subprocess_shell('git push origin main')", 'python'],
+      ['open(FH, "git push origin main |") or die;', 'perl'],
+      ["open(my $fh, '-|', 'git', 'push', 'origin', 'main');", 'perl'],
+      ["open my $fh, '|-', 'git push origin main';", 'perl'],
+      ['open("|git push origin main")', 'ruby'],
+    ] as const) {
+      assert.equal(scriptMayPush(text, language), true, text);
+    }
+  });
+
+  it('leaves a plain file open alone', () => {
+    assert.equal(scriptMayPush("open(my $fh, '<', 'notes.txt'); print 'git push origin main';", 'perl'), false);
+    assert.equal(scriptMayPush("open('notes.txt', 'w').write('git push origin main')", 'python'), false);
+  });
+
+  it("reads Windows' py launcher as python", () => {
+    const found = findGitInvocations('py -3 -c \'import os; os.system("git push origin main")\'', context());
+    assert.ok(found.doubts.some((doubt) => /python script that may run git push/.test(doubt.reason)), JSON.stringify(found.doubts));
+  });
+});
