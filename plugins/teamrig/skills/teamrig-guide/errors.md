@@ -291,6 +291,7 @@ A guard hook that cannot answer blocks the call instead of letting it through
 | --- | --- |
 | teamrig `blocked this call: its <hook> guard could not load (...)`, `crashed (...)`, `ended with exit <n>` or `printed something other than its JSON answer (...)` | The install is broken: run `claude plugin update teamrig@teamrig` and restart the session; if that does not clear it, tell your lead. |
 | teamrig `blocked this call: its <hook> guard gave no answer within 12 s` | Retry the call; if every call times out, the host is overloaded or the guard hangs: tell your lead. |
+| The gh guard's refusal: `<owner/name> is under github.repos, so GitHub steps there go through teamrig's commands ...` | Run the teamrig command the reason names ([the gh guard](hooks.md#before-a-shell-command-the-gh-guard)). For `no teamrig command takes this step yet`, tell your leader the gap; never run the step another way. |
 
 ## Failures (exit 1)
 

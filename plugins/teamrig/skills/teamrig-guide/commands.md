@@ -7097,6 +7097,23 @@ Output: nothing for a call that neither changes a role nor reaches the team conf
 input that is not a hook payload; otherwise a JSON permission decision, `ask` for a grant or revoke (`deny` with asks
 off) and `deny` for a write of `serviceRoles`, with the reason.
 
+### teamrig hook gh-guard
+
+Before a Bash or PowerShell call, refuses a line that runs raw `gh` on a repository under `github.repos`, naming the
+teamrig command that takes the same step, or saying none does yet. See
+[Hooks and permissions](hooks.md#before-a-shell-command-the-gh-guard).
+
+Flags: none.
+
+Example:
+
+```sh
+teamrig hook gh-guard < pre-tool-use.json
+```
+
+Output: nothing for a line that runs no `gh` on a listed repository, outside a team's projects, or for input that is
+not a hook payload; otherwise a JSON permission decision `deny` with the reason.
+
 ### teamrig hook readonly-allow
 
 Before a Bash or PowerShell command, with `readonlyShell.enabled` in the team config, lets a line whose every

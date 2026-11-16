@@ -70,7 +70,7 @@ import { restartOrPark, restartTargetOf } from './hook-restart.ts';
 import { helperContextOf } from './hook-helper-start.ts';
 import { promptSecretBlock } from './hook-prompt-secret.ts';
 import { guardLoadOf, hookTeam } from './hook-guard-load.ts';
-import { dbWriteGuardOutputOf, execGuardOutputOf, packageGuardOutputOf, pushGuardOutputOf, secretGuardOutputOf, serviceRoleGuardOutputOf } from './hook-guard-outputs.ts';
+import { dbWriteGuardOutputOf, execGuardOutputOf, ghGuardOutputOf, packageGuardOutputOf, pushGuardOutputOf, secretGuardOutputOf, serviceRoleGuardOutputOf } from './hook-guard-outputs.ts';
 import { checkHooklessTabs } from './hook-hookless.ts';
 import { dueFactsAt, inMeetingNow } from './hook-refresh-mod.ts';
 import { recordSessionStart } from './hook-session-record.ts';
@@ -153,6 +153,24 @@ export async function secretGuard(args: ParsedArgs, runtime: CliRuntime): Promis
     return EXIT.ok;
   }
   const output = secretGuardOutputOf(runtime, guard, payload);
+  if (output !== '') {
+    runtime.out.stdout(output);
+  }
+  return EXIT.ok;
+}
+
+/**
+ * PreToolUse on Bash and PowerShell: refuses a raw `gh` call on a repository under `github.repos`, naming the teamrig
+ * command that takes the step, or saying none does yet (#1356).
+ */
+export async function ghGuard(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
+  noPositionals(args);
+  const payload = parseJson(await runtime.readStdin());
+  const guard = await guardLoadOf(payload, runtime);
+  if (guard === undefined) {
+    return EXIT.ok;
+  }
+  const output = ghGuardOutputOf(runtime, guard, payload);
   if (output !== '') {
     runtime.out.stdout(output);
   }

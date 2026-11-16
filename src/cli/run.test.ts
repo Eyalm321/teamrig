@@ -933,6 +933,42 @@ describe('runCli: hook service-role-guard', () => {
   });
 });
 
+describe('runCli: hook gh-guard', () => {
+  const GH_TEAM: JsonRecord = { ...TEAM, github: { repos: ['acme/web'] } };
+  /** A folder whose origin is `url`. */
+  const origin = (url: string) => ({
+    branch: () => 'main',
+    head: () => undefined,
+    pushTarget: () => undefined,
+    config: (_dir: string, key: string) => (key === 'remote.origin.url' ? { kind: 'set' as const, value: url } : { kind: 'unset' as const }),
+  });
+
+  it('refuses raw gh on a listed repository, naming the teamrig command, and lets other repositories run', async () => {
+    const kit = new CliHarness(GH_TEAM);
+    const label = await kit.run(['hook', 'gh-guard'], { stdin: bash('gh issue edit 12 -R acme/web --add-label p1') });
+    assert.equal(decisionOf(label), 'deny');
+    assert.match(reasonOf(label) ?? '', /`teamrig issue label acme\/web#12 --add p1`/);
+    const parent = await kit.run(['hook', 'gh-guard'], { stdin: bash('gh api repos/acme/web/issues/12/sub_issues -X POST -F sub_issue_id=5') });
+    assert.match(reasonOf(parent) ?? '', /`teamrig issue links --repo acme\/web`/);
+    assert.deepEqual((await kit.run(['hook', 'gh-guard'], { stdin: bash('gh issue edit 12 -R acme/other --add-label p1') })).stdout, []);
+  });
+
+  it("reads the folder's origin when the call names no repository", async () => {
+    const kit = new CliHarness(GH_TEAM);
+    const close = bash('gh issue close 3');
+    assert.equal(decisionOf(await kit.run(['hook', 'gh-guard'], { stdin: close, git: origin('git@github.com:Acme/web.git') })), 'deny');
+    assert.deepEqual((await kit.run(['hook', 'gh-guard'], { stdin: close, git: origin('https://github.com/acme/other') })).stdout, []);
+  });
+
+  it('prints nothing with no repositories listed, a broken config, outside a team, or for input that is not a hook payload', async () => {
+    const close = bash('gh issue close 3 -R acme/web');
+    for (const kit of [new CliHarness(), new CliHarness('{ not json'), new CliHarness(null, null)]) {
+      assert.deepEqual((await kit.run(['hook', 'gh-guard'], { stdin: close })).stdout, []);
+    }
+    assert.deepEqual(await new CliHarness(GH_TEAM).run(['hook', 'gh-guard'], { stdin: 'not json' }), { code: EXIT.ok, stdout: [], stderr: [] });
+  });
+});
+
 describe('runCli: hook db-write-guard', () => {
   const remove = bash('psql -c "DELETE FROM orders"');
 

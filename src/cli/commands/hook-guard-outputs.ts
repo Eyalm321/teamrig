@@ -1,16 +1,19 @@
 import { LeadTree } from '../../config/lead-tree.ts';
 import type { KitConfig } from '../../config/types.ts';
 import { formatAddress } from '../../core/address.ts';
+import { KIT_NAME } from '../../core/home.ts';
 import { errorMessage } from '../../core/guards.ts';
 import { checkClient, clientRootOf } from '../../exec/client-integrity.ts';
 import { ClientInstalls, ShellPathSearch } from '../../exec/client-launch.ts';
 import { dbWriteGuardOf, dbWriteGuardOutput } from '../../hooks/db-write-guard.ts';
 import { execGuardOutput, type TabIdentity } from '../../hooks/exec-guard.ts';
+import { ghGuardOutput } from '../../hooks/gh-guard.ts';
 import { packageGuardOf, packageGuardOutput } from '../../hooks/package-guard.ts';
 import { commitsOf, protectedBranchesOf, pushGuardOutput, pushToProtectedOf, skipHooksOf, type PushClearance } from '../../hooks/push-guard.ts';
 import { secretGuardOf, secretGuardOutput, secretPatternsOf } from '../../hooks/secret-guard.ts';
 import { serviceRoleGuardOutput } from '../../hooks/service-role-guard.ts';
 import { sessionIdOf } from '../../inbox/inbox.ts';
+import { githubRepoOf } from '../../github/pull-conflicts.ts';
 import { approvedTaskOf } from '../../register/approval.ts';
 import { JsonlEventLog } from '../../register/store.ts';
 import { secretRulesOf } from '../../secret-guard/rules.ts';
@@ -198,5 +201,24 @@ export function serviceRoleGuardOutputOf(runtime: CliRuntime, guard: GuardLoad, 
     configPath: guard.kit?.load.path,
     readConfig: (path) => runtime.files.read(path),
     canonical: (path) => runtime.worktrees.files.canonical(path),
+  });
+}
+
+/**
+ * The gh guard's answer (#1356): it refuses a raw `gh` call on a repository under `github.repos`, naming the teamrig
+ * command for the step. A config that did not load lists no repositories, so the guard lets the call go.
+ */
+export function ghGuardOutputOf(runtime: CliRuntime, guard: GuardLoad, payload: unknown): string {
+  const { load } = guard;
+  return ghGuardOutput(payload, {
+    cwd: runtime.cwd,
+    home: runtime.userHome,
+    repos: load?.status === 'loaded' ? load.config.github.repos : [],
+    originOf: (dir) => {
+      const url = runtime.git.config(dir, 'remote.origin.url');
+      return url.kind === 'set' ? githubRepoOf(url.value) : undefined;
+    },
+    platform: runtime.platform,
+    command: KIT_NAME,
   });
 }
