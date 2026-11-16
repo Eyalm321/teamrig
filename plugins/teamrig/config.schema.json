@@ -1936,6 +1936,13 @@
               "default": false
             }
           }
+        },
+        "pluginDirs": {
+          "description": "Plugin folders each session's Claude Code loads with --plugin-dir: a teamrig, or a plugin beside it, that runs from a copy Claude Code has not installed, such as one bundled with another app or a checkout. Each is an absolute folder holding .claude-plugin/plugin.json; teamrig launch refuses to start while one does not. Set only here, never from the environment, so nothing a session's caller sets chooses the hooks every session runs. Empty: the installed plugins only.",
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "string" },
+          "default": []
         }
       }
     },

@@ -1732,6 +1732,7 @@ function parseOpen(read: ConfigReader, raw: JsonRecord, sessions: readonly strin
     teamWindow: read.boolean(raw, 'teamWindow', 'open', DEFAULT_OPEN.teamWindow),
     headroom: parseHeadroom(read, read.section(raw, 'headroom', 'open')),
     idle: parseIdle(read, read.section(raw, 'idle', 'open'), sessions),
+    pluginDirs: read.stringList(raw, 'pluginDirs', 'open', DEFAULT_OPEN.pluginDirs, isAbsoluteFolder, CONFIG_LIMITS.openPluginDirs.maxItems),
   };
 }
 

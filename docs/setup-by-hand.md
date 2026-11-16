@@ -29,7 +29,6 @@ its type, default and meaning.
 | Kit home (teams and their state) | `$TEAMRIG_HOME` | `~/.teamrig` |
 | The team | `$TEAMRIG_TEAM`, else the nearest `.teamrig.json` above the current folder, else above `$CLAUDE_PROJECT_DIR` | none |
 | The session | `--session <id or name>` on a command, else `$TEAMRIG_SESSION` | none |
-| A plugin folder `teamrig launch` loads with `--plugin-dir` (a copy that is not an installed plugin) | `$TEAMRIG_PLUGIN_DIR` | none |
 | Team members and roles | `<kit home>/teams/<team>/config.json` | none |
 | Sub-leads | `leads` in the team config (since 0.132.0), written by `teamrig promote` and `demote`: each sub-lead's members, by id; the lead leads every session no list names, and a sub-lead may list sub-leads. A member's decision and approval waits may name its sub-lead | none: the lead leads everyone |
 | Automatic archiving of the task list | `register.autoArchive` in the team config: `false` stops writes from archiving it; `teamrig compact` still does by hand | on: a write past 512 KiB of log archives it, the first time too, and says so in a NOTE line |

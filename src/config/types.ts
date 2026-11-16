@@ -1569,6 +1569,13 @@ export interface OpenConfig {
   readonly teamWindow: boolean;
   readonly headroom: HeadroomConfig;
   readonly idle: IdleConfig;
+  /**
+   * Plugin folders each session's Claude Code loads (`claude --plugin-dir`), absolute paths: a teamrig, or a plugin beside
+   * it, that runs from a copy Claude Code has not installed, such as one bundled with another app or a checkout. Read
+   * from the team's config, never the environment, so nothing a session's caller sets chooses the hooks every session
+   * runs. Empty, the installed plugins only.
+   */
+  readonly pluginDirs: readonly string[];
 }
 
 /** What `teamrig statusline` shows beside the model and the plan's use of the week. */

@@ -370,7 +370,7 @@ export const DEFAULT_HEADROOM: HeadroomConfig = { sessionMb: 1200, commitMaxPct:
  */
 export const DEFAULT_IDLE: IdleConfig = { mode: 'on', keepOpen: [], leaders: 'root', reopenUnreadLines: 10, reopenForDueToday: false };
 
-export const DEFAULT_OPEN: OpenConfig = { terminal: 'auto', teamWindow: false, headroom: DEFAULT_HEADROOM, idle: DEFAULT_IDLE };
+export const DEFAULT_OPEN: OpenConfig = { terminal: 'auto', teamWindow: false, headroom: DEFAULT_HEADROOM, idle: DEFAULT_IDLE, pluginDirs: [] };
 
 /** The status line shows the session's folder, its branch and the team's pace line, unless the team turns them off. */
 export const DEFAULT_STATUS_LINE: StatusLineConfig = { folder: true, branch: true, pace: true };

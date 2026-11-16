@@ -497,13 +497,27 @@ describe('teamrig launch', () => {
     assert.deepEqual(processes.ran.map((run) => run.env), [{ ...SESSION_ENV, ANTHROPIC_API_KEY: value, GH_TOKEN: value }]);
   });
 
-  it('loads the plugin folder $TEAMRIG_PLUGIN_DIR names with --plugin-dir, and none when it is unset or blank', async () => {
-    const named = new FakeProcesses();
-    await launch(named, [], { env: { PATH: '/usr/local/bin', TEAMRIG_PLUGIN_DIR: '/opt/app/teamrig' } });
-    assert.deepEqual(named.ran[0]?.args.slice(0, 2), ['--plugin-dir', '/opt/app/teamrig']);
-    const blank = new FakeProcesses();
-    await launch(blank, [], { env: { PATH: '/usr/local/bin', TEAMRIG_PLUGIN_DIR: ' ' } });
-    assert.equal(blank.ran[0]?.args.includes('--plugin-dir'), false);
+  it('loads each plugin folder open.pluginDirs names with --plugin-dir, and refuses to start while one holds no plugin', async () => {
+    const dirs = ['/opt/app/teamrig', '/opt/app/pane'];
+    const team = { ...TEAM, open: { pluginDirs: dirs } };
+    const probe = new FakePathProbe({ folders: [APP, ...dirs], files: [CLAUDE, ...dirs.map((dir) => `${dir}/.claude-plugin/plugin.json`)] });
+    const loaded = new FakeProcesses();
+    const result = await new CliHarness(team).run(LAUNCH, { probe, processes: loaded, env: { PATH: '/usr/local/bin' } });
+    assert.equal(result.code, EXIT.ok, result.stderr.join('\n'));
+    assert.deepEqual(loaded.ran[0]?.args.slice(0, 4), ['--plugin-dir', '/opt/app/teamrig', '--plugin-dir', '/opt/app/pane']);
+    const unset = new FakeProcesses();
+    await launch(unset);
+    assert.equal(unset.ran[0]?.args.includes('--plugin-dir'), false, 'none set, none loaded');
+    const empty = new FakeProcesses();
+    const refused = await new CliHarness(team).run(LAUNCH, { probe: new FakePathProbe({ folders: [APP, ...dirs], files: [CLAUDE, `${dirs[0]}/.claude-plugin/plugin.json`] }), processes: empty, env: { PATH: '/usr/local/bin' } });
+    assert.deepEqual(refused.stdout, ['REFUSED open.pluginDirs names /opt/app/pane, which holds no .claude-plugin/plugin.json']);
+    assert.deepEqual(empty.ran, [], 'Claude Code never starts without a named plugin');
+  });
+
+  it('reads no plugin folder from the environment: a variable a caller sets never chooses the hooks a session runs', async () => {
+    const processes = new FakeProcesses();
+    await launch(processes, [], { env: { PATH: '/usr/local/bin', TEAMRIG_PLUGIN_DIR: '/opt/app/teamrig' } });
+    assert.equal(processes.ran[0]?.args.includes('--plugin-dir'), false);
   });
 
   it("starts Claude Code without the opener's plugin bin folders on PATH, so the session's own teamrig answers its Bash calls", async () => {
