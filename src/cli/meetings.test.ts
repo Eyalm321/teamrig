@@ -76,11 +76,20 @@ describe('runCli: meeting schedule', () => {
     assert.equal((await stored(kit, 'M1'))?.session, 'alpha', 'its own team by name books as a bare id does');
     await kit.files.write(teamConfigOf('shop'), formatConfig({ configVersion: 1, team: { id: 'shop' }, sessions: ['lead', 'till'], roles: { lead: 'lead' } }));
     const refused: readonly (readonly [readonly string[], RegExp])[] = [
-      [['--meets', 'shop/till', '--session', 'lead'], /team shop is not in the tree of team app/],
-      [['--meets', 'nowhere/till', '--session', 'lead'], /team nowhere is not in the tree of team app/],
+      [['--meets', 'shop/till', '--session', 'lead'], /team shop is not below team app/],
+      [['--meets', 'nowhere/till', '--session', 'lead'], /team nowhere is not below team app/],
       [['--meets', 'web/front', '--session', 'alpha'], /only the lead \(app-lead\) books a meeting for a session of team web/],
       [['--meets', 'web/nobody', '--session', 'lead'], /nobody/],
+      [['--meets', 'web/front', '--tasks', 'T1', '--session', 'lead'], /--tasks links tasks of your own team; a meeting booked in team web's schedule takes none/],
     ];
+    // A sub-team's lead books below only: not up into the root's schedule, nor across into a sibling's.
+    const asWeb = { env: { TEAMRIG_TEAM: 'web', TEAMRIG_SESSION: 'lead' } };
+    for (const [meets, reason] of [['app/alpha', /team app is not below team web/], ['ops/run', /team ops is not below team web/]] as const) {
+      const run = await kit.run(['meeting', 'schedule', '--meets', meets, '--at', '2030-01-08 16:00', '--about', 'refused'], asWeb);
+      assert.equal(run.code, EXIT.refused, said(run));
+      assert.match(said(run), reason);
+    }
+    assert.equal(kit.files.get(join(teamHomeOf('ops'), 'state', 'meetings.jsonl')), undefined, "nothing lands in the sibling's schedule");
     for (const [flags, reason] of refused) {
       const run = await kit.run(['meeting', 'schedule', ...flags, '--at', '2030-01-08 16:00', '--about', 'refused']);
       assert.equal(run.code, EXIT.refused, said(run));
