@@ -188,7 +188,7 @@ async function restCappedDecision(runtime: CliRuntime, scope: Extract<WakeScope,
   }
   const facts = await budgetFactsOf(runtime, { kit: scope.kit, config, roster: scope.roster, id: scope.id }, undefined);
   const lastTurnAt = await lastWriteOf(runtime.transcripts, transcriptsFolderIfKnown(runtime), [scope.tab]);
-  const rest = wakeRestOf(facts, config.budget.quietHours, input.now, wakeWOf(config, lastTurnAt, input.now));
+  const rest = wakeRestOf(facts, config.budget, input.now, wakeWOf(config, lastTurnAt, input.now));
   const maxPriority = effectivePriority(input.maxPriority, rest, config.budget.quietHours);
   const exemption = restExemptionOf(rest, input.maxPriority, input.tasks, input.elsewhere);
   const cut = new Set(dueTasks.filter((task) => task.priority > maxPriority && !isExemptFromRest(task, exemption)).map((task) => task.id));
@@ -374,7 +374,7 @@ async function momentsOf(
     due: dueMoments(now, dayStart.at, facts === undefined ? inBurst : facts.burst, state.settled),
     startable,
     lastTurnAt,
-    rest: wakeRestOf(facts, config.budget.quietHours, now, wakeWOf(config, lastTurnAt, now)),
+    rest: wakeRestOf(facts, config.budget, now, wakeWOf(config, lastTurnAt, now)),
     now,
     lastWakeAt: state.lastWakeAt,
     minGapMs: config.wake.minGapMinutes * MINUTE_MS,
