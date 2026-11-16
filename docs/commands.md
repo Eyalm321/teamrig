@@ -824,11 +824,12 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       reset blackout, the deploy freezes and jobs still open, and what each repository with a deploy block
       has pushed but not deployed (it fetches each main checkout)
   test [--session <id|name>] -- <command ...>   runs a test command in the shell, writes all it printed
-      to a log (each session keeps its newest 20) and prints one PASS or FAIL line, then each failing
-      test within tests.maxFailureChars; in a team through teamrig queue --kind test, one node spec
-      file as --small, anything more as a heavy step; exit 0 when the command passed, 1 otherwise. One
-      quoted word runs as a shell line ("npm run build && npm test"); several run as one command, each
-      word passed as is, so a word that is only &&, || or ; is REFUSED before anything runs
+      to a log as it arrives (each session keeps its newest 20) and prints one PASS or FAIL line, then each
+      failing test within tests.maxFailureChars; a process the command left holding its output is let go
+      2 s after the command ends, and the log says so; in a team through teamrig queue --kind test, one
+      node spec file as --small, anything more as a heavy step; exit 0 when the command passed, 1
+      otherwise. One quoted word runs as a shell line ("npm run build && npm test"); several run as one
+      command, each word passed as is, so a word that is only &&, || or ; is REFUSED before anything runs
   gh -- <gh args ...>          runs one gh call with the key saved for the owner of the repository it
       reaches (-R, a gh api repos/, orgs/ or users/ path, a gh repo command's repository, else GH_REPO,
       else the folder's git remotes), never the machine's gh login; REFUSED when it reaches more than
