@@ -1,6 +1,8 @@
 import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { PushToProtected } from '../config/types.ts';
 import { DASH_QUOTES, NOTHING_QUOTES } from '../testing/ansi-c-quotes.ts';
 import type { ConfigValue } from './invocations.ts';
@@ -1093,5 +1095,25 @@ describe('evaluatePushes: an interpreter whose text may write shell code the gua
       ['python3 -c \'print("push your branch")\'; $T status', 'allow'],
       ['eval "$SETUP"', 'allow'],
     ]);
+  });
+});
+
+describe('evaluatePushes: pushGuard.trustedScripts', () => {
+  it("asks about a team's own tool that names a push until it is trusted, and keeps every other ask", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'teamrig-trusted-'));
+    try {
+      mkdirSync(join(dir, 'tools', 'ship'), { recursive: true });
+      writeFileSync(join(dir, 'tools', 'ship', 'ship.ts'), 'import { execFileSync } from "node:child_process";\nexecFileSync("git", ["push", "origin", "HEAD"]);\n');
+      writeFileSync(join(dir, 'main.test.ts'), 'import { spawnSync } from "node:child_process";\nspawnSync("git", ["push", "fixture", "main"]);\n');
+      const verdict = (command: string, trustedScripts?: readonly string[]) =>
+        evaluatePushes(command, { cwd: dir, home: HOME, dialect: 'bash', protectedBranches: ['main'], pushToProtected: 'ask', repo: fakeRepo(), ...(trustedScripts === undefined ? {} : { trustedScripts }) }).decision;
+      assert.equal(verdict('node tools/ship/ship.ts'), 'ask');
+      assert.equal(verdict('node tools/ship/ship.ts', ['tools/ship/*.ts']), 'allow');
+      assert.equal(verdict('node --test main.test.ts'), 'ask');
+      assert.equal(verdict('node --test main.test.ts', ['*.test.ts']), 'allow');
+      assert.equal(verdict('node tools/ship/ship.ts; git push origin main', ['tools/ship/*.ts']), 'ask', 'a push on the line still asks');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

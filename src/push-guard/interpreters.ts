@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { closeSync, constants, fstatSync, openSync, readSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
+import { reviewPathMatcher } from './review-paths.ts';
 import { programName, type ProgramLaunch } from './launchers.ts';
 import type { ShellWord } from './tokenizer.ts';
 
@@ -134,6 +135,23 @@ export function readScriptFile(path: string, maxBytes: number = MAX_SCRIPT_BYTES
       closeSync(fd);
     }
   }
+}
+
+/**
+ * Whether a script file path is one of the team's trusted scripts (`pushGuard.trustedScripts`): a glob with no slash
+ * names a file at any depth, one with a slash is read from `cwd` (the session's folder), and an absolute one from the
+ * root; case is ignored, as in the review gate's globs (`reviewPathMatcher`). A path outside `cwd` matches only a glob
+ * with no slash or an absolute one.
+ */
+export function trustedScriptMatcher(globs: readonly string[], cwd: string): (path: string) => boolean {
+  const slashed = (path: string): string => path.replace(/\\/g, '/');
+  const matchers = globs.map((glob) => ({ kind: isAbsolute(glob) || /^[A-Za-z]:[\\/]/.test(glob) ? 'absolute' : glob.includes('/') ? 'rooted' : 'name', matches: reviewPathMatcher(slashed(glob)) }));
+  return (path) => {
+    const whole = slashed(path).replace(/^\/+/, '');
+    const fromCwd = slashed(relative(cwd, path));
+    const inside = fromCwd !== '' && fromCwd !== '..' && !fromCwd.startsWith('../') && !isAbsolute(fromCwd) && !/^[A-Za-z]:/.test(fromCwd);
+    return matchers.some(({ kind, matches }) => (kind === 'rooted' ? inside && matches(fromCwd) : matches(whole)));
+  };
 }
 
 /** What is left of a command line's {@link MAX_LINE_SCRIPT_BYTES}, shared by every interpreter on it. */

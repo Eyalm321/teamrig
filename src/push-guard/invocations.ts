@@ -85,6 +85,8 @@ export interface FinderContext {
   readonly git: GitConfigReader;
   /** Reads a script file an interpreter runs (see interpreters.ts); undefined when unreadable. Defaults to the file system. */
   readonly readScript?: (path: string, maxBytes: number) => string | undefined;
+  /** Whether a script file an interpreter runs is trusted (`pushGuard.trustedScripts`): its text is then not read. */
+  readonly trustedScript?: (path: string) => boolean;
 }
 
 /** Git's own commands; an alias never overrides one. */
@@ -358,6 +360,10 @@ class GitInvocationFinder {
     this.mentionsPush ||= saysPush(text);
   }
 
+  /** Reads a script file an interpreter runs, unless the team trusts it (`FinderContext.trustedScript`). */
+  private readonly readScript = (path: string, maxBytes: number): string | undefined =>
+    this.context.trustedScript?.(path) === true ? undefined : (this.context.readScript ?? readScriptFile)(path, maxBytes);
+
   private scriptMention(text: string): void {
     this.scriptMentionsPush ||= saysPush(text);
   }
@@ -514,7 +520,7 @@ class GitInvocationFinder {
         if (language !== undefined) {
           const inner = location.child();
           launched.chdirs.forEach((chdir) => inner.moveTo(chdir, dialect));
-          const text = interpreterText(launched, stdin, inner.dir, this.context.readScript ?? readScriptFile, this.scriptBudget);
+          const text = interpreterText(launched, stdin, inner.dir, this.readScript, this.scriptBudget);
           if (scriptMayPush(text, language)) {
             this.doubt(interpreterDoubt(language), false);
           }

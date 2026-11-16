@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { interpreterText, isDevicePath, MAX_LINE_SCRIPT_BYTES, readScriptFile, scriptMayPush } from './interpreters.ts';
+import { interpreterText, isDevicePath, MAX_LINE_SCRIPT_BYTES, readScriptFile, scriptMayPush, trustedScriptMatcher } from './interpreters.ts';
 import type { ProgramLaunch } from './launchers.ts';
 import { findGitInvocations, type FinderContext } from './invocations.ts';
 
@@ -154,5 +154,28 @@ describe('interpreterText: the read budget of a line', () => {
     interpreterText(launched('/w/c.py'), undefined, '/w', readScript, budget);
     assert.equal(budget.left, 0);
     assert.deepEqual(read.length, 2, 'the third file is past the budget');
+  });
+});
+
+describe('pushGuard.trustedScripts', () => {
+  it('matches a name at any depth, a slashed glob from the session folder, and an absolute glob from the root', () => {
+    const trusted = trustedScriptMatcher(['*.test.ts', 'tools/ship/*.ts', '/opt/tools/**'], '/work/app');
+    assert.equal(trusted('/work/app/src/cli/main.test.ts'), true);
+    assert.equal(trusted('/elsewhere/a.test.ts'), true, 'a name matches anywhere');
+    assert.equal(trusted('/work/app/tools/ship/ship.ts'), true);
+    assert.equal(trusted('/work/app/TOOLS/ship/Ship.ts'), true, 'case is ignored');
+    assert.equal(trusted('/other/tools/ship/ship.ts'), false, 'a slashed glob reads only the session folder');
+    assert.equal(trusted('/work/app/src/tools/ship/ship.ts'), false, 'and from its top');
+    assert.equal(trusted('/opt/tools/bin/x.py'), true);
+    assert.equal(trusted('/work/app/src/cli/main.ts'), false);
+  });
+
+  it('reads no push in a trusted script, and still reads an untrusted one', () => {
+    const files = { '/work/app/tools/ship/ship.ts': 'import { execFileSync } from "node:child_process";\nexecFileSync("git", ["push", "origin", "HEAD"]);\n' };
+    const asks = (trustedScripts: readonly string[]): boolean =>
+      findGitInvocations('node tools/ship/ship.ts', { ...context(files), trustedScript: trustedScriptMatcher(trustedScripts, '/work/app') }).doubts.some((doubt) => /script that may run git push/.test(doubt.reason));
+    assert.equal(asks([]), true);
+    assert.equal(asks(['tools/ship/*.ts']), false);
+    assert.equal(asks(['tools/other/*.ts']), true);
   });
 });
