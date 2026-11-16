@@ -83,7 +83,7 @@ const RERUN_PATH = `repos/${REPO}/actions/runs/1/rerun-failed-jobs`;
  * makes its next attempt, or throws `rerun` when given. Each merge call answers the next of `merges` (the last
  * repeats) when given, else `merge`.
  */
-function fakeGitHub(options: { rounds: readonly (readonly JobState[])[]; openPullSha?: string | null; openedSha?: string; merge?: string | Error; merges?: readonly (string | Error)[]; rerun?: Error; branch?: string; heads?: readonly PushedHead[]; repoLabels?: readonly string[] }): FakeGitHub {
+function fakeGitHub(options: { rounds: readonly (readonly JobState[])[]; startedAt?: string; openPullSha?: string | null; openedSha?: string; merge?: string | Error; merges?: readonly (string | Error)[]; rerun?: Error; branch?: string; heads?: readonly PushedHead[]; repoLabels?: readonly string[] }): FakeGitHub {
   const writes: string[][] = [];
   let round = 0;
   let attempt = 1;
@@ -114,7 +114,7 @@ function fakeGitHub(options: { rounds: readonly (readonly JobState[])[]; openPul
     if (path.includes('/actions/runs/1/jobs')) {
       const jobs = options.rounds[Math.min(round, options.rounds.length - 1)] ?? [];
       round += 1;
-      return JSON.stringify({ jobs: jobs.map(([name, status, conclusion, unstarted]) => ({ name, status, conclusion, steps: unstarted === undefined ? [{ name: 'Set up job' }] : [] })) });
+      return JSON.stringify({ jobs: jobs.map(([name, status, conclusion, unstarted]) => ({ name, status, conclusion, steps: unstarted === undefined ? [{ name: 'Set up job' }] : [], ...(options.startedAt === undefined ? {} : { started_at: options.startedAt }) })) });
     }
     if (path.endsWith('/status')) return '{"statuses":[]}';
     if (path === ISSUE_PATH) return JSON.stringify({ title: 'Ship titles', labels: [{ name: 'area:cli' }, { name: 'p3' }] });
@@ -173,6 +173,17 @@ test('a check still missing at the deadline times out, and the last sleep stops 
   assert.equal(result.verdict, 'timeout');
   assert.deepEqual(waiter.slept, [MINUTE, MINUTE, 30_000]);
   assert.deepEqual(result.outcomes.map(({ state }) => state), ['passed', 'missing']);
+});
+
+test('a check running past its time limit fails the wait, so a stuck job frees the ship slot (#1341)', async () => {
+  const stuck: readonly JobState[] = [['gates', 'completed', 'success'], ['test', 'in_progress', null]];
+  const limited = await waitForChecks(fakeGitHub({ rounds: [stuck], startedAt: new Date(0).toISOString() }).gh, REPO, SHA, HEAD, { ...CHECKS, checkMinutes: 2 }, fakeWaiter(), POLLING);
+  assert.equal(limited.verdict, 'failed');
+  assert.match(limited.outcomes[1]?.detail ?? '', /in_progress 2 min, past the 2 min limit/);
+  const waiter = fakeWaiter();
+  const longAgo = await waitForChecks(fakeGitHub({ rounds: [stuck], startedAt: new Date(-60 * MINUTE).toISOString() }).gh, REPO, SHA, HEAD, CHECKS, waiter, POLLING);
+  assert.equal(longAgo.verdict, 'failed', 'past the default 30 minutes at the first read');
+  assert.deepEqual(waiter.slept, []);
 });
 
 test('opens the pull request, waits for green and rebase-merges the checked sha', async () => {
