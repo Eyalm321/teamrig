@@ -704,6 +704,11 @@ export interface GithubConfig {
    * their TF-IDF word vectors (src/issues/similar.ts). Higher lists fewer, closer candidates.
    */
   readonly similarThreshold: number;
+  /**
+   * Whether each text teamrig posts (a comment, an issue, a replaced body) ends with the made-with-teamrig footer
+   * (core/stamp.ts, #1102). On by default; false posts the text as given.
+   */
+  readonly stamp: boolean;
 }
 
 /**

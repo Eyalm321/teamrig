@@ -27,7 +27,7 @@ describe('parseConfig', () => {
     assert.deepEqual(config.needsYou, { enabled: true, kinds: ['permission', 'question', 'elicitation', 'decision'], osToast: false });
     assert.deepEqual(config.meetingNotices, { enabled: true, beforeMinutes: 10, atStart: true, missedAfterMinutes: 5, osToast: true, tabToast: true, leadInbox: true });
     assert.deepEqual(config.tests, { maxFailureChars: 4000 });
-    assert.deepEqual(config.github, { repos: [], owners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35 });
+    assert.deepEqual(config.github, { repos: [], owners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35, stamp: true });
     assert.deepEqual(config.register, DEFAULT_REGISTER);
     assert.deepEqual(config.budget, DEFAULT_BUDGET);
     assert.deepEqual(config.delivery, {
@@ -420,8 +420,15 @@ describe('parseConfig', () => {
       statusPush: false,
       acceptLabel: 'teamrig',
       similarThreshold: 0.35,
+      stamp: true,
     });
     assert.equal(parseConfig({ ...ROSTER, github: { statusPush: true } }).config.github.statusPush, true);
+    assert.equal(parseConfig({ ...ROSTER, github: { stamp: false } }).config.github.stamp, false);
+    for (const wrong of ['no', 0]) {
+      const parsed = parseConfig({ ...ROSTER, github: { stamp: wrong } });
+      assert.deepEqual(paths(parsed.issues), ['github.stamp']);
+      assert.equal(parsed.config.github.stamp, true);
+    }
     for (const wrong of ['yes', 1]) {
       const parsed = parseConfig({ ...ROSTER, github: { statusPush: wrong } });
       assert.deepEqual(paths(parsed.issues), ['github.statusPush']);
