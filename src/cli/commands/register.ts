@@ -68,7 +68,7 @@ import { secretGuardOffWarnings } from '../secret-guard-off-check.ts';
 import { secretHookWarnings } from '../secret-hook-check.ts';
 import { ownerBatchOf, type BatchedTeam } from '../owner-batch.ts';
 import { rollUp, type RolledTeam, type RollUp } from '../roll-up.ts';
-import { splitUnowned } from '../unowned.ts';
+import { coverUnowned, splitUnowned } from '../unowned.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { addIssuePlan } from '../../github/issue-at-add.ts';
 import { ADD_ISSUE_FLAGS, addIssueAskOf, addIssueHost, addWithIssue } from './add-issue.ts';
@@ -1181,7 +1181,8 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
   const logs = await logSizeWarnings(runtime.files, own.paths);
   const stalled = await restartStalledWarnings(runtime.files, runtime.sessionProcesses, own.paths, own.config, zone, now.getTime());
   const lead = own.config.roles.lead;
-  return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: [...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs, ...stalled], lead, decisions };
+  const cover = coverUnowned([...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs, ...stalled], own.snapshot.state.tasks.values());
+  return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: cover.unowned, covered: cover.covered, lead, decisions };
 }
 
 /**
