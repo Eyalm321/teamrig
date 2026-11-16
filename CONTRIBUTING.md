@@ -396,7 +396,8 @@ as how teamrig works today.
   ruleset's bypass list: the review and every required check still hold, and a push after the approval dismisses it.
 - **A stuck check**: an awaited check queued or running for `checkMinutes` (in `tools/ship/repos.json`, 30 when not
   listed) counts failed, its detail naming the minutes, and is never re-run as flaky; a job GitHub still lists running
-  after its run completed counts done with its conclusion, else failed. So a stuck check frees the ship slot.
+  after its run completed counts done with its conclusion, else failed. So a stuck check frees the ship slot; a long
+  runner queue counts too, so raise `checkMinutes` for a repository whose runners often queue that long.
 - **Review**: a code owner (`.github/CODEOWNERS`: the maintainer) reviews the code and approves the last push, and a
   new push dismisses an approval given before it. The reviewer holds it to
   [What a change is held to](#what-a-change-is-held-to) and declines a wrong direction. On a threshold, limit or trigger the reviewer asks "can this
