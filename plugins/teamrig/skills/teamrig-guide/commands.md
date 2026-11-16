@@ -1329,6 +1329,11 @@ the `gh` login in its place.
   Its description is the issue's body: control characters become spaces, blank lines close up, and past 2,000
   characters it is cut, ending with `…`. An empty body gives none; a body that looks like it holds a secret
   gives a line saying it was left out, to be read on GitHub.
+- A change opened for review since the last automatic read that goes to the watcher (a fork's, an outsider's, or one
+  on a branch naming no task with an owner) becomes a task of the watcher (unset: the first holder of a service role
+  holding `issue comment`, else the lead) with its ref, due 24 hours after it opened. Its title carries the change's
+  own title for an inside author, else only its number and author; its description names it, its author and the
+  answer time. The dry run prints it under `PULL TASKS <repo>`, and a ref a task holds gets no second one.
 - Only the issues of the repository's people, or ones they accepted, become tasks. An author
   GitHub ties to the repository as its owner, an organization member or a collaborator counts at once. Any other
   author's issue (one with a merged pull request too) waits until someone other than the author adds the
