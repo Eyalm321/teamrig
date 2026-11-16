@@ -7099,8 +7099,9 @@ off) and `deny` for a write of `serviceRoles`, with the reason.
 
 ### teamrig hook gh-guard
 
-Before a Bash or PowerShell call, refuses a line that runs raw `gh` on a repository under `github.repos`, naming the
-teamrig command that takes the same step, or saying none does yet. See
+Before a Bash or PowerShell call, refuses a line that runs raw `gh` to write, or to read an issue, on a repository under
+`github.repos`, naming the teamrig command that takes the same step, or saying none does yet; other reads and `gh pr
+create` pass. See
 [Hooks and permissions](hooks.md#before-a-shell-command-the-gh-guard).
 
 Flags: none.

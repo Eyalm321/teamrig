@@ -62,11 +62,15 @@ describe('ghGuardOutput: the table from each gh shape to its teamrig command', (
   }
 
   it('refuses a step no teamrig command takes yet, saying so', () => {
-    for (const line of ['gh pr merge 7 -R acme/web', 'gh issue edit 12 -R acme/web --add-assignee me', 'gh run view 5 -R acme/web', 'gh api -X DELETE repos/acme/web/git/refs/heads/x']) {
+    for (const line of ['gh pr merge 7 -R acme/web', 'gh issue edit 12 -R acme/web --add-assignee me', 'gh run rerun 5 -R acme/web', 'gh api -X DELETE repos/acme/web/git/refs/heads/x']) {
       const text = reason(line);
       assert.ok(text !== undefined, line);
       assert.match(text, /no teamrig command takes this step yet; report the gap to your leader/, line);
     }
+  });
+
+  it('sends an issue read on to the task the sync makes', () => {
+    assert.match(reason('gh issue view 12 -R acme/web') ?? '', /issue sync --repo acme\/web` instead, then read the issue in the task it holds\./);
   });
 
   it('names the step as the line writes it', () => {
@@ -78,7 +82,7 @@ describe('ghGuardOutput: the table from each gh shape to its teamrig command', (
 describe('ghGuardOutput: which repository a call acts on', () => {
   it('takes the folder origin when the call names none', () => {
     assert.match(reason('gh issue comment 12 --body hi') ?? '', /teamrig issue comment acme\/web#12/);
-    assert.match(reason('gh pr view 3') ?? '', /gh pr view: no teamrig command/);
+    assert.match(reason('gh pr merge 3') ?? '', /gh pr merge: no teamrig command/);
     assert.equal(reason('gh issue comment 12 --body hi', ENV, '/work/other'), undefined);
   });
 
@@ -98,7 +102,7 @@ describe('ghGuardOutput: which repository a call acts on', () => {
   });
 
   it('reads gh repo <sub> <owner/name>, but not a repository it creates or an owner it lists', () => {
-    assert.ok(reason('gh repo view acme/web', ENV, '/work/other') !== undefined);
+    assert.ok(reason('gh repo edit acme/web --description x', ENV, '/work/other') !== undefined);
     assert.equal(reason('gh repo create acme/web --private'), undefined);
     assert.equal(reason('gh repo list acme'), undefined);
   });
@@ -124,6 +128,96 @@ describe('ghGuardOutput: option spellings', () => {
     for (const line of ['gh issue', 'gh run list -R "$R"', 'gh api "$P"', 'gh api repos/{owner}/{repo}/issues -X GET']) {
       assert.equal(reason(line, ENV, '/elsewhere'), undefined, line);
     }
+  });
+});
+
+describe('ghGuardOutput: reads no teamrig command takes, and opening a pull request', () => {
+  it('passes each read of a pull request, a run, a release and the repository', () => {
+    const lines = [
+      'gh pr view 12 --json state',
+      'gh pr checks 12',
+      'gh pr diff 12',
+      'gh pr list',
+      'gh pr status',
+      'gh pr checkout 12',
+      'gh run view 123 --log-failed',
+      'gh run list --branch main',
+      'gh run watch 123',
+      'gh workflow list',
+      'gh release view v1 -R acme/web',
+      'gh label list',
+      'gh repo view acme/web',
+      'gh repo clone acme/web',
+      'gh browse',
+      'gh api repos/acme/web/pulls/12',
+      'gh api repos/acme/web/commits/abc',
+      'gh api repos/acme/web/pulls/12/files --paginate',
+      'gh api -X GET repos/acme/web/actions/runs',
+      'gh api repositories/123/pulls',
+    ];
+    for (const line of lines) {
+      assert.equal(reason(line), undefined, line);
+    }
+  });
+
+  it('passes gh pr create, the way a session opens a pull request', () => {
+    assert.equal(reason('gh pr create -R acme/web --head t1-fix --title x --body y'), undefined);
+  });
+
+  it('still refuses both writes of #1356', () => {
+    assert.match(reason('gh issue edit 12 -R acme/web --add-label p1') ?? '', /teamrig issue label acme\/web#12 --add p1/);
+    assert.match(reason('gh api repos/acme/web/issues/12/sub_issues -X POST -F sub_issue_id=5') ?? '', /teamrig issue links --repo acme\/web/);
+  });
+
+  it('refuses the writes of each group', () => {
+    const lines = [
+      'gh pr review 12 --approve',
+      'gh pr ready 12',
+      'gh run cancel 5',
+      'gh workflow run ci.yml',
+      'gh release create v2',
+      'gh label create p0',
+      'gh secret set TOKEN',
+      'gh variable delete X',
+      'gh repo edit --visibility public',
+      'gh repo archive acme/web',
+      'gh api repos/acme/web/pulls/12/reviews -f event=APPROVE',
+    ];
+    for (const line of lines) {
+      assert.ok(reason(line) !== undefined, line);
+    }
+  });
+});
+
+describe('ghGuardOutput: each repository form gh takes', () => {
+  it('reads a repository written as host/owner/name or a URL, with .git or a slash', () => {
+    const forms = ['github.com/acme/web', 'https://github.com/acme/web', 'https://github.com/acme/web.git', 'acme/web/', 'git@github.com:acme/web.git'];
+    for (const form of forms) {
+      assert.ok(reason(`gh issue close 3 -R ${form}`, ENV, '/elsewhere') !== undefined, `-R ${form}`);
+      assert.ok(reason(`gh issue close 3 --repo=${form}`, ENV, '/elsewhere') !== undefined, `--repo=${form}`);
+      assert.ok(reason(`gh repo delete ${form} --yes`, ENV, '/elsewhere') !== undefined, `repo delete ${form}`);
+    }
+    assert.ok(reason('gh pr comment github.com/acme/web/pull/9 -b x', ENV, '/elsewhere') !== undefined);
+    assert.equal(reason('gh issue close 3 -R ghe.example.com/acme/web'), undefined, 'another host is another repository');
+  });
+
+  it("reads the group's -R before its command", () => {
+    assert.match(reason('gh issue -R acme/web close 12', ENV, '/elsewhere') ?? '', /teamrig issue close acme\/web#12/);
+    assert.ok(reason('gh pr --repo acme/web merge 7', ENV, '/elsewhere') !== undefined);
+    assert.equal(reason('gh pr -R acme/web view 7', ENV, '/elsewhere'), undefined);
+  });
+
+  it('reads a gh api endpoint given as a full URL, and doubts a write to a repository named by id', () => {
+    assert.match(reason('gh api https://api.github.com/repos/acme/web/issues/12/comments -f body=x', ENV, '/elsewhere') ?? '', /issue comment acme\/web#12/);
+    const byId = reason('gh api -X PATCH repositories/123/issues/4 -f state=closed', ENV, '/elsewhere') ?? '';
+    assert.match(byId, /gh api PATCH repositories\/123\/issues\/4: names its repository by id/);
+    assert.match(byId, /name it as repos\/<owner>\/<name> instead/);
+    assert.equal(reason('gh api -X PATCH repositories/123/issues/4 -f state=closed', { ...ENV, repos: [] }), undefined);
+  });
+
+  it('finds gh however the line quotes its name', () => {
+    assert.ok(reason('g""h issue close 3 -R acme/web') !== undefined);
+    assert.ok(reason("'gh' issue close 3 -R acme/web") !== undefined);
   });
 });
 

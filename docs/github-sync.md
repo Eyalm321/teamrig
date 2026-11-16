@@ -390,11 +390,12 @@ CLOSED acme/web#12
 - **No new labels.** Each label to add must already be one of the repository's: teamrig reads it first and changes
   nothing when one is missing, as GitHub would make a new label from a typo. Make it on GitHub first. Labels to add
   go in one call, then each to take off in turn; the first failure stops it and says what it already changed.
-- **Raw `gh` refused in sessions.** On a repository under `github.repos`, a session's raw `gh` call (`gh issue edit
+- **Raw `gh` writes refused in sessions.** On a repository under `github.repos`, a session's raw `gh` write (`gh issue edit
   -R acme/web --add-label p1`, `gh api repos/acme/web/issues/12/sub_issues -X POST`) is refused before it runs, its
   reason naming the teamrig command for the step (`teamrig issue label acme/web#12 --add p1`, `teamrig issue links`):
   raw `gh` runs on the person's own login, which may not reach the repository, and skips the checks above. A step no
-  teamrig command takes yet is refused saying so, to be reported, not run another way
+  teamrig command takes yet is refused saying so, to be reported, not run another way. An issue read is refused naming
+  `teamrig issue sync`; other reads (a pull request's view, diff or checks, a run's log) and `gh pr create` run as before
   ([the gh guard](../plugins/teamrig/skills/teamrig-guide/hooks.md#before-a-shell-command-the-gh-guard)).
 - **Access.** The same token or `gh` login as the sync, which needs the [write permissions](#what-each-command-needs);
   a `FAILED` line names the permission a token lacks. `TEAMRIG_GITHUB=off` writes nothing.
