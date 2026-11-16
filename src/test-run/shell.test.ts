@@ -119,11 +119,12 @@ describe('nodeShellRunner', () => {
   });
 
   it('ends a grace after the command exits while a process it started holds the output, with the command end (#719)', async () => {
-    // The command prints, starts a child that keeps stdout and stderr open for 5 s, and exits 3 at once.
+    // The command prints, starts a child that keeps stdout and stderr open for 5 s, and exits 3 at once. The child is
+    // detached: on Windows a child that is not dies with its parent's job object, and never holds the pipe.
     const command = script(
       'orphan.mjs',
       "import { spawn } from 'node:child_process';\nconsole.log('before');\n" +
-        "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: ['ignore', 'inherit', 'inherit'] }).unref();\nprocess.exitCode = 3;\n",
+        "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }).unref();\nprocess.exitCode = 3;\n",
     );
     const started = Date.now();
     const result = await nodeShellRunner(200).run({ command, cwd: DIR, env: ENV });
