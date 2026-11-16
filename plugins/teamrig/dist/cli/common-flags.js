@@ -1,5 +1,6 @@
 import { KIT_NAME } from "../core/home.js";
 import { resolveTeam } from "../core/team.js";
+import { COMMON_FLAGS } from "./args.js";
 import { openKit, rosterOf, teamFolders } from "./kit.js";
 import { RefusedError } from "./runtime.js";
 /**
@@ -30,4 +31,13 @@ export async function checkCommonFlags(command, declared, args, runtime) {
     if (!(await rosterOf(runtime, kit, kit.load.config)).lookup(session).ok) {
         throw new RefusedError(`--session ${session} names no session of team ${own}: ${KIT_NAME} who lists them`);
     }
+}
+/**
+ * The command's arguments with the common flags it does not declare taken out, once checked: the command runs as it
+ * would without them, so no code it reaches, such as a caller lookup that reads `--session` before
+ * `$TEAMRIG_SESSION`, can be steered by a flag the command never took.
+ */
+export function withoutUndeclared(args, declared) {
+    const flags = new Map([...args.flags].filter(([name]) => declared.includes(name) || !COMMON_FLAGS.includes(name)));
+    return { ...args, flags };
 }
