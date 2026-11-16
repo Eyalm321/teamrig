@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { interpreterText, isDevicePath, MAX_LINE_SCRIPT_BYTES, readScriptFile, scriptMayPush, trustedScriptMatcher } from './interpreters.ts';
+import { interpreterText, isDevicePath, isTestPath, MAX_LINE_SCRIPT_BYTES, readScriptFile, scriptMayPush, trustedScriptMatcher } from './interpreters.ts';
 import type { ProgramLaunch } from './launchers.ts';
 import { findGitInvocations, type FinderContext } from './invocations.ts';
 
@@ -202,5 +202,74 @@ describe('scriptMayPush: the process forms a review listed', () => {
   it("reads Windows' py launcher as python", () => {
     const found = findGitInvocations('py -3 -c \'import os; os.system("git push origin main")\'', context());
     assert.ok(found.doubts.some((doubt) => /python script that may run git push/.test(doubt.reason)), JSON.stringify(found.doubts));
+  });
+});
+
+describe('test runs', () => {
+  // A test file runs git in the repositories it makes: its text names a push and a process primitive.
+  const TEST_JS = 'const { execFileSync } = require("node:child_process");\nexecFileSync("git", ["push", "origin", "main"], { cwd: tmp });\n';
+  const PUSH_JS = 'require("child_process").execSync("git push origin main")\n';
+  const files = {
+    '/w/tools/ship/ship-commits.test.ts': TEST_JS,
+    '/w/tools/ci/local-checks.test.ts': TEST_JS,
+    '/w/src/a.spec.mjs': TEST_JS,
+    '/w/test/helpers.js': TEST_JS,
+    '/w/push.js': PUSH_JS,
+    '/w/push.mjs': PUSH_JS,
+  };
+  const ctx = (): FinderContext => ({ ...context(files), cwd: '/w' });
+  const doubted = (command: string): boolean => findGitInvocations(command, ctx()).doubts.some((doubt) => /script that may run git push/.test(doubt.reason));
+
+  it('reads no test file a test run names, however the line reaches it', () => {
+    for (const command of [
+      'node --test tools/ship/ship-commits.test.ts tools/ci/local-checks.test.ts',
+      'cd /w && node --test tools/ship/ship-commits.test.ts tools/ci/local-checks.test.ts | tail',
+      'env -C /w node --test tools/ship/ship-commits.test.ts tools/ci/local-checks.test.ts',
+      'cd tools && node --test ship/ship-commits.test.ts',
+      'node --test --test-name-pattern ship tools/ship/ship-commits.test.ts',
+      'node --experimental-strip-types --test --test-only tools/ship/ship-commits.test.ts 2>&1 | tail -20',
+      'node --test src/a.spec.mjs test/helpers.js',
+      'node --test "tools/**/*.test.ts"',
+      'deno test tools/ship/ship-commits.test.ts',
+      'bun test tools/ship/ship-commits.test.ts',
+      'node --test',
+    ]) {
+      assert.equal(doubted(command), false, command);
+    }
+  });
+
+  it('still reads a script that pushes: run plainly, as a preload, or named as no test under --test', () => {
+    for (const command of [
+      'node push.js',
+      'node tools/ship/ship-commits.test.ts',
+      'node --test push.js',
+      'node --test tools/ship/ship-commits.test.ts push.js',
+      'node --test --import ./push.mjs tools/ship/ship-commits.test.ts',
+      'node --import ./push.mjs --test tools/ship/ship-commits.test.ts',
+      'node --test-only push.js',
+      'node --test test/../push.js',
+      'node --test tests/../push.js',
+      'node --test __tests__/../push.js',
+      'node --test ./test/../push.js tools/ship/ship-commits.test.ts',
+      'deno run push.js',
+      'bun test push.js',
+      '"$NODE" --test tools/ship/ship-commits.test.ts',
+    ]) {
+      assert.ok(findGitInvocations(command, ctx()).doubts.length > 0, command);
+    }
+  });
+
+  it('still judges a push the line itself runs after a test run', () => {
+    const found = findGitInvocations('node --test tools/ship/ship-commits.test.ts && git push origin main', ctx());
+    assert.ok(found.invocations.some((invocation) => invocation.subcommand === 'push'));
+  });
+
+  it("names test files by node's default patterns, .spec and a tests folder, in JavaScript or TypeScript", () => {
+    for (const path of ['a.test.ts', 'a-test.js', 'a_test.mjs', 'test-a.cjs', 'test.js', 'x/a.spec.tsx', 'test/a.js', 'x/__tests__/a.ts', 'a/../b.test.js', './test/a.js', '../test/a.js', 'test/x/../a.js', 'x\\tests\\a.mts', '**/*.test.ts']) {
+      assert.equal(isTestPath(path), true, path);
+    }
+    for (const path of ['push.js', 'latest.js', 'contest.ts', 'a.test.py', 'test/a.json', 'a.test', 'tests.js/push.sh', 'test/../push.js', './test/../x.js', 'test/./../push.js', 'x/test/../../push.mjs', 'test\\..\\push.js', 'a.test.js/../push.js', 'tests/../push.js', '__tests__/../push.js']) {
+      assert.equal(isTestPath(path), false, path);
+    }
   });
 });

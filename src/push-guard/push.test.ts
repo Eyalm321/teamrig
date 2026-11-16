@@ -1117,8 +1117,9 @@ describe('evaluatePushes: pushGuard.trustedScripts', () => {
         evaluatePushes(command, { cwd: dir, home: HOME, dialect: 'bash', protectedBranches: ['main'], pushToProtected: 'ask', repo: fakeRepo(), ...(trustedScripts === undefined ? {} : { trustedScripts }) }).decision;
       assert.equal(verdict('node tools/ship/ship.ts'), 'ask');
       assert.equal(verdict('node tools/ship/ship.ts', ['tools/ship/*.ts']), 'allow');
-      assert.equal(verdict('node --test main.test.ts'), 'ask');
-      assert.equal(verdict('node --test main.test.ts', ['*.test.ts']), 'allow');
+      assert.equal(verdict('node main.test.ts'), 'ask');
+      assert.equal(verdict('node main.test.ts', ['*.test.ts']), 'allow');
+      assert.equal(verdict('node --test main.test.ts'), 'allow', 'a test run reads no test file');
       assert.equal(verdict('node tools/ship/ship.ts; git push origin main', ['tools/ship/*.ts']), 'ask', 'a push on the line still asks');
     } finally {
       rmSync(dir, { recursive: true, force: true });
