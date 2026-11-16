@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { MemoryFiles } from '../testing/memory-files.ts';
 import { commandHeader, endLine, HELD_OPEN_LINE, KEPT_LOGS, LiveLog, pruneLogs, reserveLog } from './logs.ts';
+import type { ShellEnd } from './shell.ts';
 
 const DIR = '/kit/teams/app/state/logs';
 
@@ -82,7 +83,7 @@ describe('pruneLogs', () => {
 describe('LiveLog', () => {
   const LOG = `${DIR}/test-1.log`;
   /** The log after `chunks` and the run's end, as `LiveLog` writes it. */
-  async function logged(chunks: readonly string[], end: Parameters<LiveLog['end']>[0], heldOpen = false): Promise<string | undefined> {
+  async function logged(chunks: readonly string[], end: ShellEnd, heldOpen = false): Promise<string | undefined> {
     const files = new MemoryFiles({ [LOG]: '$ npm test\n' });
     const live = new LiveLog(files, LOG);
     for (const chunk of chunks) {
