@@ -475,14 +475,14 @@ export function claudeExit(runtime: CliRuntime, command: string, result: RunOutc
 }
 
 /**
- * `--plugin-dir <dir>` for each folder `open.pluginDirs` names, refusing a folder that holds no plugin: Claude Code
+ * `--plugin-dir <dir>` for each folder the team config's `pluginDirs` names, refusing a folder that holds no plugin: Claude Code
  * would start without the hooks the team expects, and say nothing.
  */
 export async function pluginDirArgs(config: KitConfig, runtime: CliRuntime): Promise<string[]> {
   const args: string[] = [];
-  for (const dir of config.open.pluginDirs) {
+  for (const dir of config.pluginDirs) {
     if ((await runtime.probe.kind(`${dir}/.claude-plugin/plugin.json`)) !== 'file') {
-      throw new RefusedError(`open.pluginDirs names ${dir}, which holds no .claude-plugin/plugin.json`);
+      throw new RefusedError(`pluginDirs names ${dir}, which holds no .claude-plugin/plugin.json`);
     }
     args.push('--plugin-dir', dir);
   }

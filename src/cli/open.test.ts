@@ -497,9 +497,9 @@ describe('teamrig launch', () => {
     assert.deepEqual(processes.ran.map((run) => run.env), [{ ...SESSION_ENV, ANTHROPIC_API_KEY: value, GH_TOKEN: value }]);
   });
 
-  it('loads each plugin folder open.pluginDirs names with --plugin-dir, and refuses to start while one holds no plugin', async () => {
+  it('loads each plugin folder pluginDirs names with --plugin-dir, and refuses to start while one holds no plugin', async () => {
     const dirs = ['/opt/app/teamrig', '/opt/app/pane'];
-    const team = { ...TEAM, open: { pluginDirs: dirs } };
+    const team = { ...TEAM, pluginDirs: dirs };
     const probe = new FakePathProbe({ folders: [APP, ...dirs], files: [CLAUDE, ...dirs.map((dir) => `${dir}/.claude-plugin/plugin.json`)] });
     const loaded = new FakeProcesses();
     const result = await new CliHarness(team).run(LAUNCH, { probe, processes: loaded, env: { PATH: '/usr/local/bin' } });
@@ -510,7 +510,7 @@ describe('teamrig launch', () => {
     assert.equal(unset.ran[0]?.args.includes('--plugin-dir'), false, 'none set, none loaded');
     const empty = new FakeProcesses();
     const refused = await new CliHarness(team).run(LAUNCH, { probe: new FakePathProbe({ folders: [APP, ...dirs], files: [CLAUDE, `${dirs[0]}/.claude-plugin/plugin.json`] }), processes: empty, env: { PATH: '/usr/local/bin' } });
-    assert.deepEqual(refused.stdout, ['REFUSED open.pluginDirs names /opt/app/pane, which holds no .claude-plugin/plugin.json']);
+    assert.deepEqual(refused.stdout, ['REFUSED pluginDirs names /opt/app/pane, which holds no .claude-plugin/plugin.json']);
     assert.deepEqual(empty.ran, [], 'Claude Code never starts without a named plugin');
   });
 

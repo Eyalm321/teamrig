@@ -1569,13 +1569,6 @@ export interface OpenConfig {
   readonly teamWindow: boolean;
   readonly headroom: HeadroomConfig;
   readonly idle: IdleConfig;
-  /**
-   * Plugin folders each session's Claude Code loads (`claude --plugin-dir`), absolute paths: a teamrig, or a plugin beside
-   * it, that runs from a copy Claude Code has not installed, such as one bundled with another app or a checkout. Read
-   * from the team's config, never the environment, so nothing a session's caller sets chooses the hooks every session
-   * runs. Empty, the installed plugins only.
-   */
-  readonly pluginDirs: readonly string[];
 }
 
 /** What `teamrig statusline` shows beside the model and the plan's use of the week. */
@@ -1789,6 +1782,13 @@ export interface KitConfig {
   readonly leads: Readonly<Record<string, readonly string[]>>;
   /** Decision areas only the human owner can approve; silence never counts as consent for them. */
   readonly ownerGates: readonly string[];
+  /**
+   * Plugin folders each session's Claude Code loads (`claude --plugin-dir`), absolute paths: a teamrig, or a plugin beside
+   * it, that runs from a copy Claude Code has not installed, such as one bundled with another app or a checkout. Read
+   * from the team's config, never the environment, so nothing a session's caller sets chooses the hooks every session
+   * runs; owner-gated (the config guard refuses a session's edit). Empty, the installed plugins only.
+   */
+  readonly pluginDirs: readonly string[];
   /**
    * The owner gates whose cards reach the owner only with the security reviewer's verdict on the card (T2761), each
    * spelt as ownerGates spells it.

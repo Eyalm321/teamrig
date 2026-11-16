@@ -1804,7 +1804,7 @@ describe('parseConfig', () => {
     const chosen = { terminal: 'tmux', teamWindow: true, headroom: { sessionMb: 900, commitMaxPct: 95, closeIdleMinutes: 120, floorMb: 3000, loadMinutes: 8 } };
     const set = parseConfig({ ...ROSTER, open: chosen });
     assert.deepEqual(set.issues, []);
-    assert.deepEqual(set.config.open, { ...chosen, idle: DEFAULT_IDLE, pluginDirs: [] });
+    assert.deepEqual(set.config.open, { ...chosen, idle: DEFAULT_IDLE });
     const bad = parseConfig({ ...ROSTER, open: { terminal: 'iterm', teamWindow: 'yes', headroom: { sessionMb: 99, commitMaxPct: 101, closeIdleMinutes: 5, floorMb: -1, loadMinutes: 0 } } });
     assert.deepEqual(paths(bad.issues).sort(), ['open.headroom.closeIdleMinutes', 'open.headroom.commitMaxPct', 'open.headroom.floorMb', 'open.headroom.loadMinutes', 'open.headroom.sessionMb', 'open.teamWindow', 'open.terminal']);
     assert.deepEqual(paths(parseConfig({ ...ROSTER, open: { headroom: { floorMb: '4096', loadMinutes: 61 } } }).issues).sort(), ['open.headroom.floorMb', 'open.headroom.loadMinutes']);
@@ -1814,15 +1814,15 @@ describe('parseConfig', () => {
   });
 
   it('reads the plugin folders each session loads, refusing a path that is not an absolute folder on one line', () => {
-    assert.deepEqual(parseConfig(ROSTER).config.open.pluginDirs, []);
-    const set = parseConfig({ ...ROSTER, open: { pluginDirs: ['/opt/app/teamrig', 'C:/app/plugins/pane'] } });
+    assert.deepEqual(parseConfig(ROSTER).config.pluginDirs, []);
+    const set = parseConfig({ ...ROSTER, pluginDirs: ['/opt/app/teamrig', 'C:/app/plugins/pane'] });
     assert.deepEqual(set.issues, []);
-    assert.deepEqual(set.config.open.pluginDirs, ['/opt/app/teamrig', 'C:/app/plugins/pane']);
-    const bad = parseConfig({ ...ROSTER, open: { pluginDirs: ['/opt/app/teamrig', 'plugins/teamrig', '/opt/a\nb', 7] } });
-    assert.deepEqual(paths(bad.issues), ['open.pluginDirs[1]', 'open.pluginDirs[2]', 'open.pluginDirs[3]']);
+    assert.deepEqual(set.config.pluginDirs, ['/opt/app/teamrig', 'C:/app/plugins/pane']);
+    const bad = parseConfig({ ...ROSTER, pluginDirs: ['/opt/app/teamrig', 'plugins/teamrig', '/opt/a\nb', 7] });
+    assert.deepEqual(paths(bad.issues), ['pluginDirs[1]', 'pluginDirs[2]', 'pluginDirs[3]']);
     assert.match(bad.issues[0]?.message ?? '', /expected an absolute folder path on one line/);
-    assert.deepEqual(bad.config.open.pluginDirs, ['/opt/app/teamrig']);
-    assert.deepEqual(paths(parseConfig({ ...ROSTER, open: { pluginDirs: '/opt/app/teamrig' } }).issues), ['open.pluginDirs']);
+    assert.deepEqual(bad.config.pluginDirs, ['/opt/app/teamrig']);
+    assert.deepEqual(paths(parseConfig({ ...ROSTER, pluginDirs: '/opt/app/teamrig' }).issues), ['pluginDirs']);
   });
 
   it('reads whether the idle pass runs and the sessions it keeps open, refusing a mode it does not know or a session not on the team', () => {
