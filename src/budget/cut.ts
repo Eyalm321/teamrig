@@ -11,7 +11,7 @@ import type { Lift } from './lift.ts';
  * A leader's cut, for today at most, of one session to its own daily budget: past that budget the session is held
  * whatever room the team has left today, so it wakes, and is reopened, for p0 work only, and `budget.overAction`
  * holds its new helpers back as it says. Under `budget.overAction` `warn` the budget holds nothing (src/wake/decide.ts
- * `wakeRestOf`, #922), a cut included: the cut session is only warned past its own budget, its leader told, and
+ * `wakeRestOf`, #922), a cut included: the cut session is only warned past its own budget, and
  * `cutText` says so. Without a cut a session past its part uses the room the others left (src/budget/warn.ts
  * `isHeld`). A cut leaves a lift in force: the session works up to its lifted part, then is held. It ends at its
  * `--until`, the end of the budget day, or a lift of the session given after it, whichever comes first; a newer cut
