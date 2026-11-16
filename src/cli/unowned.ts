@@ -1,6 +1,8 @@
 import type { IdleMode } from '../config/types.ts';
 import { clipEnd } from '../core/clip.ts';
+import { isAbsolute } from 'node:path';
 import { KIT_NAME } from '../core/home.ts';
+import { homeRelative } from '../core/paths.ts';
 import type { Task } from '../register/fold.ts';
 import { ACTIVE_STATUSES } from '../register/model.ts';
 import { formatFinding, type AllowFinding, type ContextFinding, type DenyFinding } from '../doctor/doctor.ts';
@@ -95,15 +97,22 @@ export function splitUnowned(findings: readonly UnownedFinding[], skills: readon
 
 /**
  * The warnings an open task already covers, each with the first such task in `tasks`' order, and the rest, still
- * unowned. A task covers a warning when its title or description names one of the warning's names; a done or dropped
+ * unowned. A task covers a warning when its title or description names one of the warning's names, a file under
+ * `userHome` by its full path or as `~/...`; a done or dropped
  * task covers nothing, so a warning that comes back after its fix is told again.
  */
-export function coverUnowned(warnings: readonly UnownedWarning[], tasks: Iterable<Task>): { readonly unowned: UnownedWarning[]; readonly covered: CoveredWarning[] } {
+export function coverUnowned(
+  warnings: readonly UnownedWarning[],
+  tasks: Iterable<Task>,
+  userHome: string,
+): { readonly unowned: UnownedWarning[]; readonly covered: CoveredWarning[] } {
   const open = [...tasks].filter((task) => ACTIVE_STATUSES.includes(task.status));
+  // A task names a file under the home folder as `~/...` as often as by its full path (`homeRelative`).
+  const formsOf = (name: string): readonly string[] => (isAbsolute(name) ? [name, homeRelative(name, userHome)] : [name]);
   const unowned: UnownedWarning[] = [];
   const covered: CoveredWarning[] = [];
   for (const warning of warnings) {
-    const names = warning.names ?? [];
+    const names = (warning.names ?? []).flatMap(formsOf);
     const task = open.find(({ title, description }) => names.some((name) => title.includes(name) || (description ?? '').includes(name)));
     if (task === undefined) {
       unowned.push(warning);

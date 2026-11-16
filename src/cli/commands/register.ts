@@ -1181,7 +1181,7 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
   const logs = await logSizeWarnings(runtime.files, own.paths);
   const stalled = await restartStalledWarnings(runtime.files, runtime.sessionProcesses, own.paths, own.config, zone, now.getTime());
   const lead = own.config.roles.lead;
-  const cover = coverUnowned([...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs, ...stalled], own.snapshot.state.tasks.values());
+  const cover = coverUnowned([...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs, ...stalled], own.snapshot.state.tasks.values(), runtime.userHome);
   return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: cover.unowned, covered: cover.covered, lead, decisions };
 }
 

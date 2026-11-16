@@ -91,13 +91,19 @@ describe('coverUnowned (#814)', () => {
       testTask({ id: 'T3', status: 'waiting', owner: 'bravo', title: 'Memory', description: 'raise contextFiles.maxMemoryIndexChars' }),
       testTask({ id: 'T4', status: 'open', title: 'Trim /m/MEMORY.md' }),
     ];
-    const { unowned, covered } = coverUnowned([memory, nameless], tasks);
+    const { unowned, covered } = coverUnowned([memory, nameless], tasks, '/h/u');
     assert.deepEqual(unowned, [nameless]);
     assert.deepEqual(covered.map(({ warning, task }) => [warning.key, task.id, task.owner]), [['context maxMemoryIndexChars', 'T3', 'bravo']]);
   });
 
   it('covers nothing with only done or dropped tasks', () => {
     const tasks = [testTask({ id: 'T1', status: 'done', title: 'Trim /m/MEMORY.md' }), testTask({ id: 'T2', status: 'dropped', title: 'Trim /m/MEMORY.md' })];
-    assert.deepEqual(coverUnowned([memory], tasks), { unowned: [memory], covered: [] });
+    assert.deepEqual(coverUnowned([memory], tasks, '/h/u'), { unowned: [memory], covered: [] });
+  });
+
+  it('covers a warning on a file under the home folder by a task naming it as ~/...', () => {
+    const home: UnownedWarning = { ...memory, names: ['/h/u/.claude/MEMORY.md'] };
+    const { covered } = coverUnowned([home], [testTask({ id: 'T5', status: 'open', title: 'Trim ~/.claude/MEMORY.md' })], '/h/u');
+    assert.deepEqual(covered.map(({ task }) => task.id), ['T5']);
   });
 });
