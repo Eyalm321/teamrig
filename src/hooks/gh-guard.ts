@@ -323,7 +323,7 @@ function apiCommands(method: string, rest: string, words: Words, repo: string): 
     return /^\/issues(?:\/|$)/u.test(rest) ? [`issue sync --repo ${repo}`] : [];
   }
   if (number === undefined) {
-    return [];
+    return method === 'POST' && rest === '/issues' ? [`add ... --issue "<public title>" --issue-body "<public text>" --issue-repo ${repo}`] : [];
   }
   const target = `${repo}#${number}`;
   if (/^\/(?:sub_issues|dependencies\/blocked_by)(?:\/|$)/u.test(tail)) {

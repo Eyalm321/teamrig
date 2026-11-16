@@ -2,11 +2,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { ghGuardOutput, type GhGuardEnv } from './gh-guard.ts';
 
+/** A folder as a POSIX path: on Windows the shell reader resolves `/work/web` to `D:\work\web`. */
+function posix(dir: string): string {
+  return dir.replace(/\\/gu, '/').replace(/^[A-Za-z]:/u, '');
+}
+
 const ENV: GhGuardEnv = {
   cwd: '/work/web',
   home: '/home/me',
   repos: ['acme/web'],
-  originOf: (dir) => (dir.startsWith('/work/web') ? 'acme/web' : dir.startsWith('/work/other') ? 'acme/other' : undefined),
+  originOf: (dir) => (posix(dir).startsWith('/work/web') ? 'acme/web' : posix(dir).startsWith('/work/other') ? 'acme/other' : undefined),
   platform: 'linux',
   command: 'teamrig',
 };
@@ -44,6 +49,7 @@ describe('ghGuardOutput: the table from each gh shape to its teamrig command', (
     ['gh issue view 12 -R acme/web', '`teamrig issue sync --repo acme/web`'],
     ['gh issue list -R acme/web --state open', '`teamrig issue sync --repo acme/web`'],
     ['gh issue create -R acme/web -t x -b y', '`teamrig add ... --issue "<public title>" --issue-body "<public text>" --issue-repo acme/web`'],
+    ['gh api repos/acme/web/issues -f title=x', '`teamrig add ... --issue "<public title>" --issue-body "<public text>" --issue-repo acme/web`'],
     ['gh api repos/acme/web/issues/12/sub_issues -X POST -F sub_issue_id=5', '`teamrig issue links --repo acme/web`'],
     ['gh api repos/acme/web/issues/12/dependencies/blocked_by -f issue_id=5', '`teamrig issue links --repo acme/web`'],
     ['gh api /repos/acme/web/issues/12/comments -f body=hi', '`teamrig issue comment acme/web#12 --body <text>`'],

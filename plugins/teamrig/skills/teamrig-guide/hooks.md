@@ -909,11 +909,12 @@ reason names the teamrig command for each step:
 | `gh issue edit`, `gh pr edit` with `--body`/`--body-file` | `teamrig issue edit <owner/name#n> --body-file <path>` |
 | `gh issue close`, `gh pr close`; `gh api .../issues/<n>` PATCH with `state` | `teamrig issue close <owner/name#n>` |
 | `gh issue view`, `gh issue list`, `gh issue status`; `gh api .../issues...` GET | `teamrig issue sync --repo <owner/name>`, then read the issue in the task it holds |
-| `gh issue create` | `teamrig add ... --issue "<public title>" --issue-body "<public text>" --issue-repo <owner/name>` |
+| `gh issue create`; `gh api .../issues` POST | `teamrig add ... --issue "<public title>" --issue-body "<public text>" --issue-repo <owner/name>` |
 | `gh api .../issues/<n>/sub_issues` or `.../dependencies/blocked_by`, any write | `teamrig issue links --repo <owner/name>` |
 
 Any other write on those repositories (a merge, a review, an assignee, a run's rerun, a release) is refused with a line
-saying no teamrig command takes it yet: report the gap to your leader rather than run it another way. Reads no teamrig
+saying no teamrig command takes it yet (`teamrig merge` lands a local branch, not a pull request, so `gh pr merge` is
+one): report the gap to your leader rather than run it another way. Reads no teamrig
 command takes run as before (a pull request's `view`, `diff`, `checks` or `list`, a run's `view` or `list`, a
 `gh api` GET outside `/issues`, `gh repo view` or `clone`), and so does `gh pr create`, a session's way to open a pull
 request. `gh` on a repository not
