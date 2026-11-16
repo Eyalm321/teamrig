@@ -474,7 +474,11 @@ describe('pushGuardOutput on interpreter scripts', () => {
   it('lets a python heredoc that posts a message through, quoted or not', async () => {
     const post = "python3 - <<'PY'\nimport json,urllib.request\nbody='pushed as PR #61; push your branch'\nurllib.request.urlopen(urllib.request.Request('http://localhost:1/x', data=body.encode()))\nPY";
     assert.equal(await pushGuardOutput(payload(post), env()), '');
-    assert.equal(await pushGuardOutput(payload('python3 - <<EOF\nbody="head `$X` push"\nEOF'), env()), '');
+    assert.equal(await pushGuardOutput(payload("python3 - <<'EOF'\nbody=\"head `$X` push\"\nEOF"), env()), '');
+  });
+
+  it('refuses, as on main, when an unquoted heredoc runs a program only known when it runs and the script names a push (T3356)', async () => {
+    assert.equal(decisionOf(await pushGuardOutput(payload('python3 - <<EOF\nbody="head `$X` push"\nEOF'), env())), 'deny');
   });
 
   it('refuses a script that may push, and still refuses a push to main however the shell runs it (T3356)', async () => {

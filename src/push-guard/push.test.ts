@@ -1089,10 +1089,18 @@ describe('evaluatePushes: an interpreter whose text may write shell code the gua
     ]);
   });
 
+  it('asks where a program, a git command or an env -S line is only known when it runs and an interpreter names a push', () => {
+    expectRows([
+      ['python3 -c \'print("push your branch")\'; $T status', 'ask', 'doubt'],
+      ['python3 -c \'print("git push origin main")\' > c.txt; git "$(cat c.txt)"', 'ask', 'doubt'],
+      ['python3 -c \'print("git push origin main")\' > c.txt; env -S "$(cat c.txt)"', 'ask', 'doubt'],
+      ['python3 -c \'print("push your branch")\'; env -S \'git status \\q\'', 'ask', 'doubt'],
+    ]);
+  });
+
   it('lets an interpreter that names a push pass beside doubts about anything else', () => {
     expectRows([
       ["python3 - <<'PY'\nbody = 'pushed as PR 61; push your branch'\nprint(body)\nPY", 'allow'],
-      ['python3 -c \'print("push your branch")\'; $T status', 'allow'],
       ['eval "$SETUP"', 'allow'],
     ]);
   });
