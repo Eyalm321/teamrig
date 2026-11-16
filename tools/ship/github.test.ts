@@ -216,6 +216,14 @@ test('a job listed running after its run completed is read as done: its conclusi
   assert.equal(stamped?.note, 'listed in_progress after its completion time was set, with no conclusion');
 });
 
+test('a run read as completed settles only its own attempt\'s jobs, so a re-run\'s queued jobs still wait (#1341)', () => {
+  const rerunJob = { ...job('test', null, 'queued'), jobAttempt: 2 };
+  assert.equal(settleJobs([rerunJob], [run('completed')], undefined, 30)[0]?.status, 'queued');
+  assert.equal(settleJobs([{ ...rerunJob, jobAttempt: 1 }], [run('completed')], undefined, 30)[0]?.status, 'completed');
+  const [parsed] = parseJobs('{"jobs":[{"name":"a","status":"queued","conclusion":null,"run_attempt":2}]}', { id: 9, runAttempt: 1 });
+  assert.equal(parsed?.jobAttempt, 2);
+});
+
 test('a job queued or running for checkMinutes or more fails, naming its minutes and the limit (#1341)', () => {
   const queued = { ...job('test', null, 'queued'), createdAt: at(0) };
   const running = { ...job('test', null, 'in_progress'), createdAt: at(0), startedAt: at(10) };
