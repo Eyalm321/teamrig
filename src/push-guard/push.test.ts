@@ -1075,3 +1075,23 @@ describe('evaluatePushes: an interpreter whose output feeds a shell', () => {
     ]);
   });
 });
+
+describe('evaluatePushes: an interpreter whose text may write shell code the guard cannot read', () => {
+  it('asks where a shell, eval or -c runs code the guard cannot read and an interpreter on the line names a push', () => {
+    expectRows([
+      ['python3 -c \'print("git push origin main")\' > c.txt; sh < c.txt', 'ask', 'doubt'],
+      ['python3 -c \'print("git push origin main")\' > c.txt; eval "$(cat c.txt)"', 'ask', 'doubt'],
+      ['python3 -c \'print("git push origin main")\' > c.txt; bash -c "$(cat c.txt)"', 'ask', 'doubt'],
+      ["python3 - <<'PY'\nopen('c.txt', 'w').write('git push origin main')\nPY\nbash -c \"$(cat c.txt)\"", 'ask', 'doubt'],
+      ['node -e \'console.log("push")\' && eval "$SETUP"', 'ask', 'doubt'],
+    ]);
+  });
+
+  it('lets an interpreter that names a push pass beside doubts about anything else', () => {
+    expectRows([
+      ["python3 - <<'PY'\nbody = 'pushed as PR 61; push your branch'\nprint(body)\nPY", 'allow'],
+      ['python3 -c \'print("push your branch")\'; $T status', 'allow'],
+      ['eval "$SETUP"', 'allow'],
+    ]);
+  });
+});

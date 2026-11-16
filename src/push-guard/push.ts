@@ -508,7 +508,8 @@ export function judgePushes(found: GitInvocations, context: GuardContext): PushV
   if (protectedPush === 'leased' || (protectedPush === 'normal' && context.pushToProtected === 'ask')) {
     return { decision: 'ask', updates, protectedPush };
   }
-  doubt ??= found.doubts.find((candidate) => !candidate.gated || found.mentionsPush)?.reason;
+  // An interpreter's text is its script: it names a push only for the doubts about shell code it may have written.
+  doubt ??= found.doubts.find((candidate) => !candidate.gated || found.mentionsPush || (candidate.shellCode === true && found.scriptMentionsPush))?.reason;
   if (doubt !== undefined) {
     return { decision: 'ask', updates, doubt };
   }
