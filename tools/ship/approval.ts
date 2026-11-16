@@ -4,6 +4,7 @@ import { RefusedError } from '../../src/cli/runtime.ts';
 import { mergeStandingOf, tabCallerOf, type MergeStanding } from '../../src/cli/ship-approval.ts';
 import { ENV, type Env } from '../../src/core/home.ts';
 import { approvedTaskOf } from '../../src/register/approval.ts';
+import { branchTaskOf } from '../../src/worktree/owner.ts';
 import type { VersionFile } from './version-bump.ts';
 
 /**
@@ -15,14 +16,16 @@ export type MergeClearance =
   | { readonly kind: 'self' }
   | { readonly kind: 'approved'; readonly by: string };
 
-const BRANCH_TASK = /^t(\d+)-/;
 const SHA = /^[0-9a-f]{7,40}$/;
 const SHA_RUN = /\b[0-9a-f]{7,40}\b/g;
 
-/** The task a branch is cut for, from its `t<id>-` prefix (`t2788-ship-approval` → `T2788`); null for any other name. */
+/**
+ * The task a branch is cut for (`t2788-ship-approval` and `fix/t2788-ship-approval` → `T2788`); null for a name with no
+ * task id. Read as the worktree owner check reads it (`branchTaskOf`), so a branch `teamrig worktree add --task` names
+ * by `delivery.branches.pattern` merges, and the two readers cannot drift apart.
+ */
 export function taskOfBranch(branch: string): string | null {
-  const match = BRANCH_TASK.exec(branch);
-  return match === null ? null : `T${match[1]}`;
+  return branchTaskOf(branch) ?? null;
 }
 
 const refused = (reason: string): MergeClearance => ({ kind: 'refused', reason });
@@ -91,7 +94,7 @@ export interface MergeReads {
 export async function clearMerge(caller: MergeCaller, reads: MergeReads, branch: string, head: string, approved: string | null): Promise<MergeClearance> {
   const taskId = taskOfBranch(branch);
   if (taskId === null) {
-    return refused(`branch ${branch} names no task: a merged branch is t<id>-<name>`);
+    return refused(`branch ${branch} names no task: a merged branch is t<id>-<name>, after any type folder (fix/t<id>-<name>)`);
   }
   if (caller.session === undefined || caller.session === '' || caller.team === undefined || caller.team === '') {
     return refused('TEAMRIG_SESSION and TEAMRIG_TEAM must name the merging session and its team');

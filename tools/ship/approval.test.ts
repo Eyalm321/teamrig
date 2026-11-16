@@ -40,6 +40,14 @@ describe('taskOfBranch', () => {
     assert.equal(taskOfBranch('fix-t12-thing'), null);
     assert.equal(taskOfBranch('t-12-thing'), null);
   });
+
+  it('reads the task after a type folder, as delivery.branches names a task branch (GeneralA6/teamrig#1306, #1264)', () => {
+    assert.equal(taskOfBranch('fix/t12-x'), 'T12');
+    assert.equal(taskOfBranch('feat/t123-slug'), 'T123');
+    assert.equal(taskOfBranch('t12-x'), 'T12');
+    assert.equal(taskOfBranch('fix/x'), null);
+    assert.equal(taskOfBranch('cli-fix'), null);
+  });
 });
 
 describe('mergeClearance: the merge needs its approver to have approved the head it merges (T2788)', () => {
