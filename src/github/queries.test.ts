@@ -4,6 +4,7 @@ import {
   BLOCKERS_PER_ISSUE,
   CHECK_CONTEXTS,
   CLOSED_ISSUES_QUERY,
+  COMMENTS_READ,
   closedPageArgs,
   ISSUE_LINKS_QUERY,
   ISSUE_PAGE_SIZE,
@@ -67,7 +68,7 @@ describe('the shipped queries', () => {
 
   it('read pull requests newest change first, with no body or comment text', () => {
     assert.match(PULL_REQUESTS_QUERY, /^query\(/);
-    assert.doesNotMatch(PULL_REQUESTS_QUERY, /mutation|body|comments/i);
+    assert.doesNotMatch(PULL_REQUESTS_QUERY, /mutation|body/i);
     assert.ok(PULL_REQUESTS_QUERY.includes(`first: ${PULL_PAGE_SIZE}`));
     assert.ok(PULL_REQUESTS_QUERY.includes('orderBy: {field: UPDATED_AT, direction: DESC}'));
     for (const field of ['updatedAt', 'mergedAt', 'authorAssociation', 'isCrossRepository', 'mergeable', 'reviewDecision', 'statusCheckRollup { state', 'CheckRun { name conclusion databaseId }', `contexts(first: ${CHECK_CONTEXTS})`]) {
@@ -76,9 +77,16 @@ describe('the shipped queries', () => {
     assert.deepEqual(pullPageArgs({ ...PAGE, after: 'Y3Vyc29y' }, 'changed'), ['api', 'graphql', '-f', `query=${PULL_REQUESTS_QUERY}`, '-f', 'owner=acme', '-f', 'name=web', '-f', 'after=Y3Vyc29y']);
   });
 
+  it("ask for each pull request comment's and review's time and author, never its text (#1351)", () => {
+    for (const query of [PULL_REQUESTS_QUERY, OPEN_PULLS_QUERY]) {
+      assert.ok(query.includes(`comments(last: ${COMMENTS_READ}) { nodes { createdAt authorAssociation author { __typename login } } }`), query);
+      assert.ok(query.includes(`reviews(last: ${COMMENTS_READ}) { nodes { submittedAt authorAssociation author { __typename login } } }`), query);
+    }
+  });
+
   it('read the open pull requests alone, with the same fields', () => {
     assert.ok(OPEN_PULLS_QUERY.includes('states: [OPEN]'));
-    assert.doesNotMatch(OPEN_PULLS_QUERY, /mutation|body|comments/i);
+    assert.doesNotMatch(OPEN_PULLS_QUERY, /mutation|body/i);
     assert.equal(OPEN_PULLS_QUERY.replace('states: [OPEN], ', ''), PULL_REQUESTS_QUERY);
     assert.deepEqual(pullPageArgs(PAGE, 'open'), ['api', 'graphql', '-f', `query=${OPEN_PULLS_QUERY}`, '-f', 'owner=acme', '-f', 'name=web']);
   });

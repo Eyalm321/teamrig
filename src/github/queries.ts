@@ -88,11 +88,14 @@ export const CHECK_CONTEXTS = 20;
 /**
  * What both pull request reads get of one: no body and no comment text, only what tells a monitor that something
  * happened to it, and who opened it from where (`isCrossRepository`: a fork). Each check run of its last commit
- * gives its name, how it ended and its id (an Actions job's id), so a failed one's log can be read (pulls.ts).
+ * gives its name, how it ended and its id (an Actions job's id), so a failed one's log can be read (pulls.ts). Its
+ * newest comments and reviews give only when and by whom, so the response clock sees who spoke last (clock.ts).
  */
 const PULL_NODE = `nodes {
         number title url state isDraft createdAt updatedAt closedAt mergedAt authorAssociation
         author { __typename login }
+        comments(last: ${COMMENTS_READ}) { nodes { createdAt authorAssociation author { __typename login } } }
+        reviews(last: ${COMMENTS_READ}) { nodes { submittedAt authorAssociation author { __typename login } } }
         headRefName isCrossRepository mergeable reviewDecision
         commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${CHECK_CONTEXTS}) { nodes { __typename ... on CheckRun { name conclusion databaseId } } } } } } }
       }`;
