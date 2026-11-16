@@ -78,3 +78,40 @@ describe('GIT_TREES', () => {
     }
   });
 });
+
+describe('GIT_TREES.ranIn', () => {
+  it('reads a folder outside any repository, or one git cannot run in, as outside', () => {
+    assert.deepEqual(GIT_TREES.ranIn(join(tmpdir(), 'teamrig-no-such-folder')), { kind: 'outside' });
+    const repo = committed('ran-outside');
+    try {
+      assert.deepEqual(GIT_TREES.ranIn(repo.outside), { kind: 'outside' });
+    } finally {
+      repo.remove();
+    }
+  });
+
+  it("reads a subfolder's top level and HEAD's commit, clean, then dirty for an untracked file", () => {
+    const repo = committed('ran-clean');
+    try {
+      repo.write('sub/b.txt', 'b');
+      repo.git('add', 'sub/b.txt');
+      repo.git('commit', '-q', '-m', 'second');
+      const top = repo.git('rev-parse', '--show-toplevel').trim();
+      const head = repo.git('rev-parse', 'HEAD').trim();
+      assert.deepEqual(GIT_TREES.ranIn(join(repo.dir, 'sub')), { kind: 'git', top, head, dirty: false });
+      repo.write('c.txt', 'new');
+      assert.deepEqual(GIT_TREES.ranIn(repo.dir), { kind: 'git', top, head, dirty: true });
+    } finally {
+      repo.remove();
+    }
+  });
+
+  it('reads a repository before its first commit with no commit', () => {
+    const repo = new TempRepo('ran-empty').init();
+    try {
+      assert.deepEqual(GIT_TREES.ranIn(repo.dir), { kind: 'git', top: repo.git('rev-parse', '--show-toplevel').trim(), head: null, dirty: false });
+    } finally {
+      repo.remove();
+    }
+  });
+});
