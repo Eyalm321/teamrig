@@ -40,7 +40,8 @@ export interface Doubt {
   readonly gated: boolean;
   /**
    * True when it is about shell code the guard cannot read (a shell reading its commands from stdin, `eval` or `-c`
-   * of a command line only known when it runs, a part that never closes): an interpreter's text may have written that
+   * of a command line only known when it runs, a program, git command or `env -S` line only known when it runs, a part
+   * that never closes): an interpreter's text may have written that
    * code, so for this doubt an interpreter's words and stdin name a push too (`scriptMentionsPush`).
    */
   readonly shellCode?: true;
@@ -458,7 +459,7 @@ class GitInvocationFinder {
       case 'nothing':
         break;
       case 'opaque':
-        this.doubt(launched.reason, launched.gated, launched.stdinScript === true);
+        this.doubt(launched.reason, launched.gated, launched.stdinScript === true || launched.shellCode === true);
         break;
       case 'script': {
         const inner = location.child();
@@ -643,7 +644,7 @@ class GitInvocationFinder {
       return;
     }
     if (sub.dynamic) {
-      this.doubt('the git command it runs is only known when it runs', true);
+      this.doubt('the git command it runs is only known when it runs', true, true);
       return;
     }
     const state: GitState = { dir, gitDir, configOverride, aliases, aliasesUnknown, hooksOverride };
