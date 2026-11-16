@@ -5,7 +5,7 @@ import { KIT_VERSION } from "../core/version.js";
 import { isSettingsWriter, settingsWriteRefusal, WRITE_SWITCH } from "../core/settings-writers.js";
 import { cutLineMessage, shimArgs } from "./cmd-shim.js";
 import { CommandHelp } from "./help.js";
-import { parseArgs, UsageError } from "./args.js";
+import { COMMON_FLAGS, parseArgs, UsageError } from "./args.js";
 import { RENAMED } from "./renamed.js";
 import { EXIT, RefusedError } from "./runtime.js";
 const registerCommands = () => import("./commands/register.js");
@@ -336,7 +336,7 @@ export const COMMAND_EFFECTS = Object.fromEntries(Object.entries(COMMANDS).map((
 export const COMMAND_REST = new Set(Object.entries(COMMANDS).flatMap(([name, spec]) => (spec.rest === true ? [name] : [])));
 /** The table a line is read with, and each command's effect: what `/teamrig` plans a line from (src/slash/plan.ts). */
 export const COMMAND_TABLE = { flags: COMMAND_FLAGS, switches: COMMAND_SWITCHES, renamed: RENAMED, rest: COMMAND_REST, effects: COMMAND_EFFECTS };
-export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session})
+export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session}; every command takes --session <id|name> and --team <team>)
   team create <team> --sessions <id,id> [--lead <id>] [--project <dir>] [--parent <team>] [--dry-run]
       writes the team config, ties the project folder to the team (the lead defaults to lead) and
       starts a root team's lead on its first task, setting the team up; --parent hangs it under
@@ -1068,6 +1068,10 @@ export async function runCli(given, runtime) {
             throw new UsageError(`unknown command "${args.command}"`);
         }
         refuseSettingsWrite(args.command, args.switches, runtime);
+        if (COMMON_FLAGS.some((name) => args.flags.has(name) && !spec.flags.includes(name))) {
+            // Loaded only then, as it reads the team's config: a hook passes neither flag and loads only its own code.
+            await (await import("./common-flags.js")).checkCommonFlags(args.command, spec.flags, args, runtime);
+        }
         const command = await spec.load();
         return await command(args, runtime);
     }
