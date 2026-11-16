@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { closeSync, constants, fstatSync, openSync, readSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
 import { programName, type ProgramLaunch } from './launchers.ts';
 import type { ShellWord } from './tokenizer.ts';
 
@@ -82,16 +82,49 @@ export function scriptMayPush(text: string, language: string): boolean {
 /** The most of a script file the guard reads; a longer one is judged by its start. */
 const MAX_SCRIPT_BYTES = 256 * 1024;
 
-/** Reads a script file a command names, or undefined when it is not a readable regular file. */
-export function readScriptFile(path: string): string | undefined {
+/** All the script files one command line's interpreters read, together: a line naming many big files reads no more. */
+export const MAX_LINE_SCRIPT_BYTES = 1024 * 1024;
+
+/** Windows' reserved device names, which name a device in any folder and with any extension (`nul.txt`). */
+const WINDOWS_DEVICE = /^(?:con|prn|aux|nul|conin\$|conout\$|clock\$|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/i;
+
+/**
+ * True for a path no script file is read from: a UNC or Windows device path (`\\server\share`, `//server/share`,
+ * `\\.\pipe\x`, `\\?\C:\x`), a Windows reserved device name, or a POSIX device or kernel file (`/dev`, `/proc`,
+ * `/sys`). Reading one may block, reach the network, or never end.
+ */
+export function isDevicePath(path: string): boolean {
+  if (/^[\\/]{2}/.test(path)) {
+    return true;
+  }
+  if (/^\/(?:dev|proc|sys)(?:\/|$)/.test(path)) {
+    return true;
+  }
+  return WINDOWS_DEVICE.test(basename(path.replaceAll('\\', '/')));
+}
+
+/**
+ * Reads up to `maxBytes` (at most {@link MAX_SCRIPT_BYTES}) of a script file a command names, or undefined when it is
+ * not a regular file. It never blocks: a device or UNC path is skipped (`isDevicePath`), the path is stat'ed before it
+ * is opened, so a FIFO, socket or device is never opened, and the file is opened non-blocking where the platform has
+ * that, then checked again to be the same regular file.
+ */
+export function readScriptFile(path: string, maxBytes: number = MAX_SCRIPT_BYTES): string | undefined {
+  if (maxBytes <= 0 || isDevicePath(path)) {
+    return undefined;
+  }
   let fd: number | undefined;
   try {
-    fd = openSync(path, 'r');
-    const stat = fstatSync(fd);
-    if (!stat.isFile()) {
+    const before = statSync(path);
+    if (!before.isFile()) {
       return undefined;
     }
-    const buffer = Buffer.alloc(Math.min(stat.size, MAX_SCRIPT_BYTES));
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOCTTY ?? 0));
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.ino !== before.ino || stat.dev !== before.dev) {
+      return undefined;
+    }
+    const buffer = Buffer.alloc(Math.min(stat.size, MAX_SCRIPT_BYTES, maxBytes));
     const read = readSync(fd, buffer, 0, buffer.length, 0);
     return buffer.subarray(0, read).toString('utf8');
   } catch {
@@ -103,16 +136,23 @@ export function readScriptFile(path: string): string | undefined {
   }
 }
 
+/** What is left of a command line's {@link MAX_LINE_SCRIPT_BYTES}, shared by every interpreter on it. */
+export interface ScriptBudget {
+  left: number;
+}
+
 /**
  * The text an interpreter run takes as its program: every argument (inline `-c`/`-e`/`--eval` code, and the rest,
  * which only makes the rule stricter), the stdin a heredoc or here-string gives it, and any argument that names a
- * readable file in `dir`. An argument only known when it runs is read as written.
+ * readable file in `dir`, together no more than `budget` bytes for the line. An argument only known when it runs is read
+ * as written.
  */
 export function interpreterText(
   launched: ProgramLaunch,
   stdin: ShellWord | undefined,
   dir: string | undefined,
-  readScript: (path: string) => string | undefined,
+  readScript: (path: string, maxBytes: number) => string | undefined,
+  budget: ScriptBudget = { left: MAX_LINE_SCRIPT_BYTES },
 ): string {
   const parts = launched.args.map((arg) => arg.text);
   if (stdin !== undefined) {
@@ -123,8 +163,9 @@ export function interpreterText(
       continue;
     }
     const path = isAbsolute(arg.text) ? arg.text : dir === undefined ? undefined : join(dir, arg.text);
-    const body = path === undefined ? undefined : readScript(path);
+    const body = path === undefined || budget.left <= 0 ? undefined : readScript(path, budget.left);
     if (body !== undefined) {
+      budget.left -= Buffer.byteLength(body, 'utf8');
       parts.push(body);
     }
   }

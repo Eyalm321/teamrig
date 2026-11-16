@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { scriptMayPush } from './interpreters.ts';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { interpreterText, isDevicePath, MAX_LINE_SCRIPT_BYTES, readScriptFile, scriptMayPush } from './interpreters.ts';
+import type { ProgramLaunch } from './launchers.ts';
 import { findGitInvocations, type FinderContext } from './invocations.ts';
 
 // Interpreter scripts are judged by their text, not read as shell words.
@@ -89,5 +94,65 @@ describe('findGitInvocations on interpreter scripts', () => {
     const dynamic = findGitInvocations("\"$PY\" - <<'PY'\nprint('push')\nPY", context());
     assert.equal(dynamic.mentionsPush, true);
     assert.ok(dynamic.doubts.some((doubt) => doubt.gated));
+  });
+});
+
+describe('readScriptFile', () => {
+  it('reads a regular file, up to the bytes it is given', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'teamrig-script-'));
+    try {
+      const file = join(dir, 'ship.py');
+      writeFileSync(file, 'import subprocess\n');
+      assert.equal(readScriptFile(file), 'import subprocess\n');
+      assert.equal(readScriptFile(file, 6), 'import');
+      assert.equal(readScriptFile(file, 0), undefined);
+      assert.equal(readScriptFile(dir), undefined, 'a folder');
+      assert.equal(readScriptFile(join(dir, 'missing.py')), undefined);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined at once for a FIFO, which an open would block on with no writer', { skip: process.platform === 'win32' ? 'no FIFO on Windows' : false }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'teamrig-fifo-'));
+    try {
+      const fifo = join(dir, 'pipe');
+      execFileSync('mkfifo', [fifo]);
+      const started = Date.now();
+      assert.equal(readScriptFile(fifo), undefined);
+      assert.ok(Date.now() - started < 1000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never reads a UNC, device or kernel path', () => {
+    for (const path of ['\\\\server\\share\\x.py', '//server/share/x.py', '\\\\.\\pipe\\x', '\\\\?\\C:\\x.py', '/dev/stdin', '/dev/tcp/host/80', '/proc/self/environ', '/sys/x', 'C:\\work\\NUL', 'nul.txt', 'COM1', 'lpt3.py']) {
+      assert.equal(isDevicePath(path), true, path);
+    }
+    for (const path of ['/work/app/ship.py', 'C:\\work\\ship.py', 'tools/null.py', 'console.py', '/devices/x.py']) {
+      assert.equal(isDevicePath(path), false, path);
+    }
+    assert.equal(readScriptFile('/dev/zero'), undefined);
+  });
+});
+
+describe('interpreterText: the read budget of a line', () => {
+  it('reads the files of a line together up to the budget, then no more', () => {
+    const read: string[] = [];
+    const big = 'x'.repeat(600 * 1024);
+    const files: Record<string, string> = { '/w/a.py': big, '/w/b.py': big, '/w/c.py': 'import subprocess' };
+    const readScript = (path: string, maxBytes: number): string | undefined => {
+      read.push(path);
+      const body = files[path.replace(/^[A-Za-z]:/, '').replaceAll('\\', '/')];
+      return body?.slice(0, maxBytes);
+    };
+    const budget = { left: MAX_LINE_SCRIPT_BYTES };
+    const launched = (script: string) => ({ kind: 'program', program: { text: 'python3', dynamic: false }, args: [{ text: script, dynamic: false }], env: [], chdirs: [], stdinArgs: false }) as unknown as ProgramLaunch;
+    interpreterText(launched('/w/a.py'), undefined, '/w', readScript, budget);
+    interpreterText(launched('/w/b.py'), undefined, '/w', readScript, budget);
+    interpreterText(launched('/w/c.py'), undefined, '/w', readScript, budget);
+    assert.equal(budget.left, 0);
+    assert.deepEqual(read.length, 2, 'the third file is past the budget');
   });
 });
