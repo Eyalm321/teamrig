@@ -18,7 +18,7 @@ import { openTeamKit, requireConfig } from "../kit.js";
 import { EXIT, RefusedError } from "../runtime.js";
 import { teamRegister } from "../team-register.js";
 import { claimBudget, recordClaims } from "./issue-claim.js";
-import { recordClocks, repoThreads } from "./issue-clock.js";
+import { pullThreads, recordClocks, repoThreads } from "./issue-clock.js";
 import { issuePush, pushEndLine, pushRepos } from "./issue-push.js";
 import { GITHUB_OFF, githubOff, readSyncState, reportAutoSync } from "./issue-sync-auto.js";
 /** The rows of steps a repository prints; the rest are counted. */
@@ -124,11 +124,11 @@ export async function issueSync(args, runtime) {
         leftOut.set(repo, plan.leftOut);
         const leftOutText = leftOutLines(repo, plan.leftOut, rules.acceptLabel);
         let end = 'ok';
+        let issueThreads = [];
         if (write) {
             const outcomes = await applySteps(register, plan.steps);
             // Against the tasks as written, so an issue the import just took is held by its new task.
-            threads.push(...repoThreads(read.issues, [...(await register.snapshot()).state.tasks.values()], rules));
-            clocked.add(repo);
+            issueThreads = repoThreads(read.issues, [...(await register.snapshot()).state.tasks.values()], rules);
             claimRead.set(repo, read.issues);
             [...resultLines(repo, plan, outcomes), ...leftOutText].forEach(say);
             written += outcomes.filter((outcome) => outcome.result.ok).length;
@@ -153,6 +153,12 @@ export async function issueSync(args, runtime) {
         }
         pulls.set(repo, watch.after);
         pullNews.push(...watch.events);
+        if (write) {
+            // Only once both reads are in: a repository whose pull requests could not be read keeps every clock it had.
+            const ownerOf = (id) => tasks.find((held) => held.id === id)?.owner;
+            threads.push(...issueThreads, ...pullThreads(watch.pulls, (pull) => pullRecipient(pull, ours, ownerOf, watcher)));
+            clocked.add(repo);
+        }
         if (auto) {
             const items = mentionItems(repo, { issues: read.issues, pulls: watch.pulls }, { ofRef: (ref) => imported.get(ref)?.owner, ofTask: (id) => tasks.find((held) => held.id === id)?.owner }, ours);
             const scan = await readMentions(host, repo, scanned.get(repo), { readAt: mentionTime(runtime.clock.now()), cutoffMs: Date.parse(since), itemOf: items, routing });
