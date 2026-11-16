@@ -98,8 +98,8 @@ async function meetingsKit(args: ParsedArgs, runtime: CliRuntime, access: Access
 }
 
 /**
- * The kit and session `--meets` names: a bare id or name on the caller's own team, or `<team>/<id>` on any team of its
- * tree (#834), booked in that team's schedule so its tab, status line and held messages see the meeting as one of its
+ * The kit and session `--meets` names: a bare id or name on the caller's own team, or `<team>/<id>` on a team below it
+ * (#834), booked in that team's schedule so its tab, status line and held messages see the meeting as one of its
  * own. Only the caller's own lead books for another team, and that team's lines name it `<team>/<id>`.
  */
 async function meetsOf(runtime: CliRuntime, mk: MeetingsKit, access: Access, meets: string): Promise<{ readonly mk: MeetingsKit; readonly session: string }> {
@@ -109,8 +109,9 @@ async function meetsOf(runtime: CliRuntime, mk: MeetingsKit, access: Access, mee
     return { mk, session: sessionIdOf(mk.roster, slash < 0 ? meets : meets.slice(slash + 1)) };
   }
   const { tree } = await loadTree(runtime);
-  if (tree.node(team) === undefined || !tree.sameTree(mk.team, team)) {
-    throw new RefusedError(`team ${team} is not in the tree of team ${mk.team}`);
+  // Below only, as audit, exec and budget: the booking acts as a lead above the team met (leadAbove).
+  if (!tree.ancestorsOf(team).includes(mk.team)) {
+    throw new RefusedError(`team ${team} is not below team ${mk.team}: --meets <team>/<id> names a session of a team below yours`);
   }
   const lead = mk.roster.holderOf('lead');
   if (mk.caller !== lead) {
@@ -290,6 +291,10 @@ async function bookingOf(args: ParsedArgs, runtime: CliRuntime, mk: MeetingsKit,
   const secrets = new SecretScanner(mk.config.register.secretPatterns);
   const withText = args.flags.get('with');
   const brief = args.flags.get('brief')?.trim();
+  // The ids are the caller's register's, but the team met reads them against its own, where they name other tasks.
+  if (mk.leadAbove && args.flags.get('tasks') !== undefined) {
+    throw new RefusedError(`--tasks links tasks of your own team; a meeting booked in team ${mk.team}'s schedule takes none`);
+  }
   return {
     with: withText === undefined ? [] : [...new Set(listOf('--with', withText).map((each) => sessionIdOf(mk.roster, each)))].filter((each) => each !== session),
     at,
