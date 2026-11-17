@@ -37,7 +37,7 @@ class Step {
   readonly tasks = new Map<string, GatedTask>([['T9', { owner: 'alpha', status: 'in-progress', answer: null }]]);
   readonly said: string[] = [];
   tree: string | undefined = TREE;
-  commits: CommitRange = COMMITS;
+  commits: CommitRange = { kind: 'listed', commits: COMMITS };
   pass: PassRecord | undefined = PASS;
 
   run(change: Partial<GatedChange> = {}, setup: GatedSetup = SETUP): Promise<GatedVerdict> {
@@ -88,13 +88,13 @@ describe('gatedVerdict: a change that holds every gate', () => {
     step.tree = undefined;
     assert.match(reasonOf(await step.run()), /^could not read the tree hhhhhhhh makes/);
     step.tree = TREE;
-    step.commits = undefined;
+    step.commits = { kind: 'refused' };
     assert.match(reasonOf(await step.run()), /^could not read the commits of t9-gate against bbbbbbbb/);
   });
 
   it('is held as git giving no answer when its log run was stopped, not as unreadable commits (#1523)', async () => {
     const step = new Step();
-    step.commits = { unanswered: 'stopped by SIGTERM' };
+    step.commits = { kind: 'unanswered', reason: 'stopped by SIGTERM' };
     assert.equal(
       reasonOf(await step.run()),
       'git gave no answer reading the commits of t9-gate against bbbbbbbb (stopped by SIGTERM), so the self-merge gates cannot weigh them; merge again once git answers',
