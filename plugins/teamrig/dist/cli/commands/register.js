@@ -1021,7 +1021,7 @@ export async function checkReport(args, runtime) {
     const late = await githubLateWarnings(runtime.files, own.paths.githubClocks, zone, now.getTime());
     const restore = await restoreLauncherWarnings(runtime.files, resolveKitHome(runtime.env, runtime.userHome));
     const holds = await promptHoldWarnings(runtime, own.paths, zone, new SecretScanner(own.config.register.secretPatterns), now.getTime());
-    const stalled = await restartStalledWarnings(runtime.files, own.paths, own.config, zone, now.getTime());
+    const stalled = await restartStalledWarnings(runtime.files, runtime.sessionProcesses, own.paths, own.config, zone, now.getTime());
     const lead = own.config.roles.lead;
     return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: [...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...stalled], lead, decisions };
 }
