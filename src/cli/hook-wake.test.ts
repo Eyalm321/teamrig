@@ -964,7 +964,7 @@ describe('hook wake-check runs the idle pass', () => {
    * Bravo runs in Claude Code 9100 in tab 9000, quiet 75 min since `quietSince`, with p1 work handed to it; alpha's
    * tab's wake check runs the pass.
    */
-  async function quietBravo(kit: CliHarness, quietSince: number): Promise<(processes: FakeProcesses) => Promise<CliResult>> {
+  async function quietBravo(kit: CliHarness, quietSince: number): Promise<(processes: FakeProcesses, files?: Files) => Promise<CliResult>> {
     await handBravo(kit);
     await new SessionRecordStore(kit.files, { sessions: join(STATE, 'sessions') }).write('bravo', { claudePid: 9100, claudeSession: 'claude-bravo', at: '2030-01-08T08:00:00.000Z' });
     const transcript = projectTranscriptPath(join(USER_HOME, '.claude', 'projects'), APP, 'claude-bravo');
@@ -974,8 +974,8 @@ describe('hook wake-check runs the idle pass', () => {
       .add({ pid: 9000, parentPid: 1, name: 'powershell.exe', commandLine: 'powershell -NoExit -Command claude --resume claude-bravo' })
       .add({ pid: 9100, parentPid: 9000, name: 'claude.exe', commandLine: 'claude --resume claude-bravo' });
     const memory = new FakeHostMemory().lists([{ pid: 9100, parent: 9000, bytes: 1100 * 2 ** 20 }], COMMIT);
-    return (processes) =>
-      kit.run(['hook', 'wake-check'], { stdin: payload(), platform: 'win32', processes, sessionProcesses, memory, probe: new FakePathProbe({ folders: [APP] }), transcripts: new MemoryTranscripts({ [transcript]: line }, quietSince) });
+    return (processes, files) =>
+      kit.run(['hook', 'wake-check'], { stdin: payload(), platform: 'win32', processes, sessionProcesses, memory, ...(files === undefined ? {} : { files }), probe: new FakePathProbe({ folders: [APP] }), transcripts: new MemoryTranscripts({ [transcript]: line }, quietSince) });
   }
 
   /** Bravo's lines in the pass log, the wakes' lines marked. */
@@ -1003,7 +1003,7 @@ describe('hook wake-check runs the idle pass', () => {
     ]);
     const state: unknown = JSON.parse(kit.files.get(PASS_STATE) ?? '');
     assert.ok(isRecord(state));
-    assert.deepEqual(state['woken'], { bravo: { at: woken, ids: ['T1'] } });
+    assert.deepEqual(state['woken'], { bravo: { at: woken, ids: ['T1'], posted: false } });
     assert.deepEqual(await new WakeAsks(kit.files, ASKS).read('bravo'), [], 'dry-run posts no wake');
     kit.clock.advance(MINUTE);
     await pass(processes);
@@ -1025,6 +1025,26 @@ describe('hook wake-check runs the idle pass', () => {
     assert.equal(asks.length, 1);
     assert.match(asks[0] ?? '', /^teamrig: The idle pass found you quiet with work you can start: T1\. Start it now; .+ Still quiet at 11:00 UTC, you are closed/);
     assert.match((await bravoLines(kit))[1] ?? '', /^wake: The idle pass found you quiet/);
+  });
+
+  it('in mode on marks a wake whose post failed as not posted, and wakes the session again, not closing it, once that wake is the threshold old (T1247)', async () => {
+    const kit = await idleTeam(ON);
+    const pass = await quietBravo(kit, kit.clock.now() - 75 * MINUTE);
+    const faulty = new FaultyFiles(kit.files).fail('append', join(STATE, 'inbox', 'bravo.md'), systemError('EACCES', 'EACCES: permission denied'));
+    const first = kit.clock.now();
+    const processes = new FakeProcesses();
+    await pass(processes, faulty);
+    const woken = (): unknown => {
+      const state: unknown = JSON.parse(kit.files.get(PASS_STATE) ?? '');
+      return isRecord(state) ? state['woken'] : undefined;
+    };
+    assert.deepEqual(woken(), { bravo: { at: first, ids: ['T1'], posted: false } });
+    assert.deepEqual(await new WakeAsks(kit.files, ASKS).read('bravo'), []);
+    kit.clock.advance(60 * MINUTE);
+    await pass(processes);
+    assert.deepEqual(woken(), { bravo: { at: kit.clock.now(), ids: ['T1'], posted: true } }, 'woken again, its line out this time');
+    assert.equal((await new WakeAsks(kit.files, ASKS).read('bravo')).length, 1);
+    assert.deepEqual(processes.hidden, [], 'and no close started');
   });
 
   it('logs a failed pass once until its error changes, keeps the wake answer, and logs every step once it runs through', async () => {

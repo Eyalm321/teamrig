@@ -62,19 +62,19 @@ describe('the idle pass state', () => {
   });
 
   it('reads back the sessions woken for work, keeps them through a failed pass, and writes none while none is woken (T1247)', () => {
-    const woken = { alpha: { at: AT - 6 * 60_000, ids: ['T1', 'T2'] } };
+    const woken = { alpha: { at: AT - 6 * 60_000, ids: ['T1', 'T2'], posted: true } };
     const passed = passedState(AT, STEPS, {}, {}, undefined, woken);
     assert.deepEqual(passed, { at: AT, kinds: { lead: 'keep', alpha: 'closed', bravo: 'away' }, woken });
     assert.deepEqual(parseIdlePassState(formatIdlePassState(passed)), passed);
     assert.deepEqual(failedState(passed, AT + 1, 'EACCES').woken, woken);
     assert.equal(formatIdlePassState(passedState(AT, STEPS)).includes('woken'), false);
-    for (const damaged of ['[]', '{"alpha":{"at":1}}', '{"alpha":{"at":1,"ids":[2]}}', '{"alpha":{"at":"x","ids":[]}}']) {
+    for (const damaged of ['[]', '{"alpha":{"at":1}}', '{"alpha":{"at":1,"ids":[2],"posted":true}}', '{"alpha":{"at":"x","ids":[],"posted":true}}', '{"alpha":{"at":1,"ids":[]}}']) {
       assert.equal(parseIdlePassState(`{"v":1,"at":1,"kinds":{},"woken":${damaged}}`), undefined, damaged);
     }
   });
 
   it('pins the fields of format 2, the woken sessions added (T1247)', () => {
-    const state = passedState(AT, STEPS, { alpha: { act: 'close', at: AT } }, { bravo: AT }, AT, { alpha: { at: AT, ids: ['T1'] } });
+    const state = passedState(AT, STEPS, { alpha: { act: 'close', at: AT } }, { bravo: AT }, AT, { alpha: { at: AT, ids: ['T1'], posted: false } });
     assert.deepEqual(fieldPaths(parseObject(formatIdlePassState({ ...state, failed: 'EACCES' }).trim()), new Set(['kinds', 'pending', 'told', 'woken'])), [
       'at',
       'failed',
@@ -86,12 +86,13 @@ describe('the idle pass state', () => {
       'v',
       'woken.*.at',
       'woken.*.ids[]',
+      'woken.*.posted',
     ]);
     assert.match(formatIdlePassState(state), /^\{"v":2,/);
   });
 
-  it('marks each woken session now, keeps a mark while its session is kept, and lets it go on any other step (T1247)', () => {
-    const before = { alpha: { at: AT - 60_000, ids: ['T1'] }, bravo: { at: AT - 60_000, ids: ['T2'] }, carol: { at: AT - 60_000, ids: ['T3'] }, gone: { at: AT - 60_000, ids: ['T4'] } };
+  it('marks each woken session now with whether its line went out, keeps a mark while its session is kept, and lets it go on any other step (T1247)', () => {
+    const before = { alpha: { at: AT - 60_000, ids: ['T1'], posted: true }, bravo: { at: AT - 60_000, ids: ['T2'], posted: true }, carol: { at: AT - 60_000, ids: ['T3'], posted: true }, gone: { at: AT - 60_000, ids: ['T4'], posted: true } };
     const steps: PassStep[] = [
       { kind: 'wake', id: 'alpha', ids: ['T1', 'T5'], why: 'app-alpha (session alpha) has work it can start (T1, T5)' },
       { kind: 'keep', id: 'bravo', why: 'app-bravo (session bravo) is in a turn' },
@@ -99,8 +100,8 @@ describe('the idle pass state', () => {
       { kind: 'wake', id: 'dave', ids: ['T6'], why: 'app-dave (session dave) has work it can start (T6)' },
       KEEP_LEAD,
     ];
-    assert.deepEqual(wokenAfter(before, steps, AT), { alpha: { at: AT, ids: ['T1', 'T5'] }, bravo: before.bravo, dave: { at: AT, ids: ['T6'] } });
-    assert.deepEqual(wokenAfter(undefined, STEPS, AT), {});
+    assert.deepEqual(wokenAfter(before, steps, AT, new Set(['alpha'])), { alpha: { at: AT, ids: ['T1', 'T5'], posted: true }, bravo: before.bravo, dave: { at: AT, ids: ['T6'], posted: false } });
+    assert.deepEqual(wokenAfter(undefined, STEPS, AT, new Set()), {});
   });
 
   it('reads back when a pass last logged its steps, keeps it through a failed pass, and writes none before the first', () => {

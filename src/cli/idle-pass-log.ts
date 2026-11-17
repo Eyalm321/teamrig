@@ -54,6 +54,8 @@ export interface PendingAct {
 export interface WokenMark {
   readonly at: number;
   readonly ids: readonly string[];
+  /** Whether its line went out: none in dry-run or when the post failed, and mode `on` then wakes again (`wokenFor`). */
+  readonly posted: boolean;
 }
 
 /**
@@ -114,8 +116,8 @@ function isWokenMark(value: unknown): value is WokenMark {
   if (!isRecord(value)) {
     return false;
   }
-  const { at, ids } = value;
-  return isTime(at) && Array.isArray(ids) && ids.every((id) => typeof id === 'string');
+  const { at, ids, posted } = value;
+  return isTime(at) && Array.isArray(ids) && ids.every((id) => typeof id === 'string') && typeof posted === 'boolean';
 }
 
 /** The wakes in a state file: none when absent (as in a file from before them); undefined when one is damaged. */
@@ -128,7 +130,7 @@ function wokenOf(value: unknown): Readonly<Record<string, WokenMark>> | undefine
   }
   const entries = Object.entries(value);
   const known = entries.filter((entry): entry is [string, WokenMark] => isWokenMark(entry[1]));
-  return known.length === entries.length ? Object.fromEntries(known.map(([id, { at, ids }]) => [id, { at, ids: [...ids] }])) : undefined;
+  return known.length === entries.length ? Object.fromEntries(known.map(([id, { at, ids, posted }]) => [id, { at, ids: [...ids], posted }])) : undefined;
 }
 
 /** The state file's content; undefined when it is damaged or from another format, which reads as no pass yet. */
@@ -175,7 +177,7 @@ function wokenField(woken: Readonly<Record<string, WokenMark>> | undefined): { r
 export function formatIdlePassState(state: IdlePassState): string {
   const pending = Object.fromEntries(Object.entries(state.pending ?? {}).map(([id, { act, at }]) => [id, { act, at }]));
   const told = { ...state.told };
-  const woken = Object.fromEntries(Object.entries(state.woken ?? {}).map(([id, { at, ids }]) => [id, { at, ids: [...ids] }]));
+  const woken = Object.fromEntries(Object.entries(state.woken ?? {}).map(([id, { at, ids, posted }]) => [id, { at, ids: [...ids], posted }]));
   return toJsonlLine({
     [VERSION_FIELD]: IDLE_PASS_STATE_FORMAT,
     at: state.at,
@@ -279,16 +281,16 @@ export function passedState(
 
 /**
  * The wakes kept after a pass (T1247, upstream #1354): each wake step marks its session woken now for the tasks it
- * names; an earlier mark stays while its session's step is a keep, as it is while it answers the wake or stays quiet
+ * names, and whether its line was `posted`; an earlier mark stays while its session's step is a keep, as it is while it answers the wake or stays quiet
  * under `open.headroom.closeIdleMinutes`. A close, a reopen, a closed or away session and one gone from the roster let
  * it go, so a session back from a close is woken again before it closes again.
  */
-export function wokenAfter(previous: Readonly<Record<string, WokenMark>> | undefined, steps: readonly PassStep[], now: number): Record<string, WokenMark> {
+export function wokenAfter(previous: Readonly<Record<string, WokenMark>> | undefined, steps: readonly PassStep[], now: number, posted: ReadonlySet<string>): Record<string, WokenMark> {
   const woken: Record<string, WokenMark> = {};
   for (const step of steps) {
     const mark = previous?.[step.id];
     if (step.kind === 'wake') {
-      woken[step.id] = { at: now, ids: [...step.ids] };
+      woken[step.id] = { at: now, ids: [...step.ids], posted: posted.has(step.id) };
     } else if (step.kind === 'keep' && mark !== undefined) {
       woken[step.id] = mark;
     }
