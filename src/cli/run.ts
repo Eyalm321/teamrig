@@ -1022,9 +1022,11 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
   deploy-status                the deploy state now: the host lock's holder, the queue cutoff and the
       reset blackout, the deploy freezes and jobs still open, and what each repository with a deploy block
       has pushed but not deployed (it fetches each main checkout)
-  test [--session <id|name>] -- <command ...>   runs a test command in the shell, writes all it printed
-      to a log (each session keeps its newest 20) and prints one PASS or FAIL line, then each failing
-      test within tests.maxFailureChars; exit 0 when the command passed, 1 otherwise
+  test [--session <id|name>] -- <command ...>   runs a test command: one word after -- runs as a shell line
+      (chain there: teamrig test -- "npm run build && npm test"); several words run as one command, each word
+      quoted, so a quoted && among them is an argument; writes all it printed to a log (each session keeps its
+      newest 20) and prints one PASS or FAIL line, then each failing test within tests.maxFailureChars; exit 0
+      when the command passed, 1 otherwise
   hook push-guard | hook package-guard | hook secret-guard | hook db-write-guard | hook exec-guard | hook pass-record-guard | hook service-role-guard | hook cold-send | hook failed-send | hook missing-cli | hook route-reminder | hook loop-nudge | hook secret-redact | hook helper-gate | hook inbox-reminder | hook session-start | hook stop | hook subagent-start | hook subagent-stop | hook refresh-wake | hook restore-track | hook effort-writeback | hook tab-status | hook pre-compact | hook tool-end | hook readonly-allow | hook picker-guard | hook prompt-refuse | hook route-allow
       (run by Claude Code, hook JSON on stdin)
   hook clear-dir | hook clear-claim [--hold [--why <reason>]] [--end]

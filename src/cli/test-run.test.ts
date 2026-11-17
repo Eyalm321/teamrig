@@ -21,6 +21,15 @@ function harness(config = TEAM): { kit: CliHarness; shell: FakeShell } {
 }
 
 describe('teamrig test', () => {
+  it('says in its help that one quoted word runs as a shell line and several are each quoted, so a chain is one word', async () => {
+    const { kit } = harness();
+    const text = (await kit.run(['test', '--help'])).stdout.join('\n').replace(/\s+/g, ' ');
+    assert.match(text, /one word after -- runs as a shell line/);
+    assert.match(text, /several words run as one command, each word quoted/);
+    assert.match(text, /teamrig test -- "npm run build && npm test"/);
+    assert.doesNotMatch(text, /runs a test command in the shell/);
+  });
+
   it('prints one PASS line with the count, and logs the command and all it printed', async () => {
     const { kit, shell } = harness();
     const result = await kit.run(['test', '--session', 'alpha', '--', 'npm', 'test'], { shell: shell.prints(PASSED, 0, 41_000) });
