@@ -939,7 +939,7 @@ describe('runCli: hook gh-guard', () => {
   const origin = (url: string) => ({
     branch: () => 'main',
     head: () => undefined,
-    pushTarget: () => undefined,
+    remoteUrls: () => [], pushTarget: () => undefined,
     config: (_dir: string, key: string) => (key === 'remote.origin.url' ? { kind: 'set' as const, value: url } : { kind: 'unset' as const }),
   });
 

@@ -54,7 +54,7 @@ describe('hook route-allow', () => {
     const git: RunOptions['git'] = {
       branch: () => 'dev',
       head: () => undefined,
-      pushTarget: () => undefined,
+      remoteUrls: () => [], pushTarget: () => undefined,
       config: (_dir, key) => (key === 'remote.origin.url' ? { kind: 'set', value: 'u' } : { kind: 'unset' }),
     };
     const env = { TEAMRIG_SESSION: 'alpha' };

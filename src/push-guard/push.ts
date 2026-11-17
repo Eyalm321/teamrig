@@ -44,6 +44,8 @@ export interface RepoState extends GitConfigReader {
   head(dir: string): string | undefined;
   /** The remote branch a bare `git push` of `branch` (by default the checked-out one) in `dir` updates, such as `origin/main`, if any. */
   pushTarget(dir: string, branch?: string): string | undefined;
+  /** The URL of each remote of `dir` (`remote.<name>.url`), in git's config order; none when git cannot tell. */
+  remoteUrls(dir: string): readonly string[];
 }
 
 export interface GuardContext {

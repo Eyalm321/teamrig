@@ -40,7 +40,7 @@ export const ROOMY_FREE_MB = 16_000;
 export function quietWorld(branch: string = 'dev', stdin: string = ''): OutsideWorld {
   let ids = 0;
   return {
-    git: { branch: () => branch, head: () => undefined, pushTarget: () => undefined, config: () => ({ kind: 'unset' }) },
+    git: { branch: () => branch, head: () => undefined, remoteUrls: () => [], pushTarget: () => undefined, config: () => ({ kind: 'unset' }) },
     pointerGit: { state: () => ({ kind: 'no-git' }) },
     commitLog: { between: () => [] },
     secretsGit: { root: () => undefined, staged: () => undefined, isCommit: () => false, commits: () => undefined, tagMessages: () => undefined, hooksDir: () => undefined, blob: () => undefined },

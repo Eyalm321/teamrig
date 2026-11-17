@@ -73,6 +73,22 @@ describe('GIT_CLI', () => {
       repo.remove();
     }
   });
+
+  it("reads every remote's URL: a fork's origin, its upstream and a remote gh repo set-default chose", () => {
+    const repo = new TempRepo('git-remotes').init();
+    try {
+      assert.deepEqual(GIT_CLI.remoteUrls(repo.dir), []);
+      repo.git('remote', 'add', 'origin', 'https://github.com/me/web.git');
+      repo.git('remote', 'add', 'upstream', 'git@github.com:acme/web.git');
+      repo.git('remote', 'add', 'team', 'https://github.com/acme/api');
+      // What `gh repo set-default` writes for the remote it chose.
+      repo.git('config', 'remote.team.gh-resolved', 'base');
+      assert.deepEqual(GIT_CLI.remoteUrls(repo.dir), ['https://github.com/me/web.git', 'git@github.com:acme/web.git', 'https://github.com/acme/api']);
+      assert.deepEqual(GIT_CLI.remoteUrls(repo.outside), []);
+    } finally {
+      repo.remove();
+    }
+  });
 });
 
 describe('GIT_COMMIT_LOG', () => {
