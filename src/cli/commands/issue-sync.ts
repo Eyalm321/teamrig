@@ -196,7 +196,7 @@ export async function issueSync(args: ParsedArgs, runtime: CliRuntime): Promise<
     if (write) {
       // Only once both reads are in: a repository whose pull requests could not be read keeps every clock it had.
       const ownerOf = (id: string): string | undefined => tasks.find((held) => held.id === id)?.owner;
-      threads.push(...issueThreads, ...pullThreads(watch.pulls, (pull) => pullRecipient(pull, ours, ownerOf, watcher), ours));
+      threads.push(...issueThreads, ...pullThreads(watch.open, (pull) => pullRecipient(pull, ours, ownerOf, watcher), ours));
       clocked.add(repo);
     }
     if (auto) {
@@ -288,7 +288,7 @@ export async function issueSync(args: ParsedArgs, runtime: CliRuntime): Promise<
 /** One repository's pull request read: the lines it prints, and why it failed or what it read and the events since the last read. */
 type PullRead =
   | { readonly kind: 'failed'; readonly reason: string; readonly lines: readonly string[] }
-  | { readonly kind: 'read'; readonly after: PullWatch; readonly events: readonly PullEvent[]; readonly pulls: readonly HostPull[]; readonly lines: readonly string[] };
+  | { readonly kind: 'read'; readonly after: PullWatch; readonly events: readonly PullEvent[]; readonly pulls: readonly HostPull[]; readonly open: readonly HostPull[]; readonly lines: readonly string[] };
 
 /**
  * Reads `repo`'s pull requests and compares them with `before`, the watch the last `--auto` run kept (pull-news.ts).
@@ -301,7 +301,7 @@ async function readPulls(host: IssueHost, repo: string, before: PullWatch | unde
     return { kind: 'failed', reason, lines: [`FAILED ${repo} ${reason}; what was last read of them stays`] };
   }
   const step = pullEvents(before, read.open, read.changed);
-  return { kind: 'read', after: step.after, events: step.events, pulls: [...read.open, ...read.changed], lines: read.notes.map((note) => `NOTE ${repo}: ${note}`) };
+  return { kind: 'read', after: step.after, events: step.events, pulls: [...read.open, ...read.changed], open: read.open, lines: read.notes.map((note) => `NOTE ${repo}: ${note}`) };
 }
 
 /**

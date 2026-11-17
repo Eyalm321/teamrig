@@ -120,6 +120,12 @@ export function commentNode(at: string, association: string, kind = 'User', text
   return { createdAt: at, authorAssociation: association, author: { __typename: kind, ...(text.login === undefined ? {} : { login: text.login }) }, body: text.body ?? '' };
 }
 
+/** A pull request as the changed read gives it: that query asks for no comments or reviews (github/queries.ts). */
+function withoutPosts(pull: JsonRecord): JsonRecord {
+  const { comments: _comments, reviews: _reviews, ...rest } = pull;
+  return rest;
+}
+
 /** A pull request review as the pull request query reads it: submitted at `at` (null while pending), by an author of that tie, kind and login. */
 export function reviewNode(at: string | null, association: string, kind = 'User', login = kind === 'Bot' ? 'ci-bot' : 'reviewer'): JsonRecord {
   return { submittedAt: at, authorAssociation: association, author: { __typename: kind, login } };
@@ -517,7 +523,7 @@ export class FakeGh implements GhRunner {
           : query === ISSUE_LINKS_QUERY
             ? (issues ?? [])
             : query === PULL_REQUESTS_QUERY
-              ? (pulls ?? [])
+              ? (pulls ?? []).map(withoutPosts)
               : query === OPEN_PULLS_QUERY
                 ? (pulls ?? []).filter((pull) => pull['state'] === 'OPEN')
                 : undefined;
