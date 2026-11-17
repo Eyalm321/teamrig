@@ -307,7 +307,7 @@ export const DEFAULT_TESTS: TestsConfig = { maxFailureChars: 4000 };
  * per further hundred open, or recently changed closed, issues). An outsider's issue waits for the `teamrig` label,
  * named after the tool so it does not clash with a repository's own triage labels.
  */
-export const DEFAULT_GITHUB: GithubConfig = { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35 };
+export const DEFAULT_GITHUB: GithubConfig = { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35, activity: true, followMax: 20 };
 
 /**
  * Claude Code compacts a 200k window at about 167k, so 120k refreshes before that; every 3 tasks catches a
@@ -351,7 +351,7 @@ export const DEFAULT_HEADROOM: HeadroomConfig = { sessionMb: 1200, commitMaxPct:
  * The idle pass closes and reopens sessions unless the team sets it to dry-run or off, so an idle tab spends no tokens
  * on any team (owner order, T1409); it keeps open only the sessions its roles name.
  */
-export const DEFAULT_IDLE: IdleConfig = { mode: 'on', keepOpen: [] };
+export const DEFAULT_IDLE: IdleConfig = { mode: 'on', keepOpen: [], leaders: 'root', reopenUnreadLines: 10 };
 
 export const DEFAULT_OPEN: OpenConfig = { terminal: 'auto', teamWindow: false, headroom: DEFAULT_HEADROOM, idle: DEFAULT_IDLE };
 
@@ -434,6 +434,9 @@ export const DEFAULT_DELIVERY_WAIT: DeliveryWaitConfig = { pollSeconds: 30, maxM
 
 /** A deploy's check answers within 20 seconds, else the deploy waits. */
 export const DEFAULT_CHECK_TIMEOUT_SECONDS = 20;
+
+/** No credential variable reaches a program teamrig starts until the owner names it. */
+export const DEFAULT_PASS_ENV: readonly string[] = [];
 
 /** A deploy freeze lasts at most two hours. */
 export const DEFAULT_FREEZES: FreezesConfig = { maxMinutes: 120 };

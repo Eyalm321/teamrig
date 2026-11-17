@@ -890,10 +890,10 @@ with no permission check when all of these hold:
   only other flag, as one plain command (an output redirect such as `2>&1` aside). The issue's repository is on
   `github.repos`. A text is double-quoted with no `"`, `\`, `$`, backtick or line break inside, and the line has no
   single quote or backslash outside one, so bash runs the text as written. Every text the Bash tool's shell may run
-  reads as the same call. A ship or merge is `teamrig queue --kind ship|merge --session <you> --what "<text>" [--task
-  T<id>] [--detach] [--max-minutes <n>] -- node <shipTool> <worktree> <plan.json> [--merge [--approved <sha>]
-  [--note-file <file>]]`, or `... -- node <shipTool> merge <worktree> [--approved <sha>] [--note-file <file>]`, every
-  path absolute, `--session` required here too;
+  reads as the same call. A ship is `teamrig queue --kind test --session <you> --what "<text>" [--task
+  T<id>] [--detach] [--max-minutes <n>] -- node <shipTool> <worktree> <plan.json>`, and a merge the same under
+  `--kind ship|merge` with `--merge [--approved <sha>] [--note-file <file>]` after it, or `... -- node <shipTool>
+  merge <worktree> [--approved <sha>] [--note-file <file>]`, every path absolute, `--session` required here too;
 - **the text posts as it reads**: no format or bidi character (a right-to-left override, a zero-width space), no line
   or paragraph separator, and no @-mention (`@bob`, `@acme/team`; an @ inside a word, as in an e-mail address, is fine),
   so a role never pings someone or posts text that reads other than it is without the owner seeing it;
@@ -1398,7 +1398,8 @@ do, and the asks wait for the first check after them. The wake log marks such a 
 in another format goes at the next check. A session busy in a turn is not woken for them: at its next tool call's
 end (its own, not a helper's), `hook tool-end` shows it its new inbox lines, recorded as shown so its next prompt
 does not repeat them, and takes its asks under the session's wake lock, so its turn's end wakes nothing for lines it
-already saw; with a wake check holding the lock, the next tool end looks again. The idle pass's close posts one to the lead, and with `open.idle.mode` on
+already saw; with a wake check holding the lock, the next tool end looks again. The idle pass's close posts none: it
+tells no one, the session log holds it. With `open.idle.mode` on
 the `cold-send` hook turns a message to a session teamrig closed into one for that session. The idle pass never
 closes a session with one waiting; a closed session with one reopens at the next pass, ahead of every reopen for
 work, with its lines quoted in its first prompt and taken once its tab opened.
@@ -1728,7 +1729,11 @@ wakes a tab of a session in the rush, other than the lead, that has sat idle `[r
 default) since its last turn with a task of its own it can go on with (open or in progress, not waiting). The prompt
 reads `Rush on PROD: this tab sat idle 5 min with work left ... Start or continue T12 (...) now`, naming the session's
 top task of the goal, else its top task; the toast says the tab was poked, with the rush's goal, the idle minutes and the task, and
-the wake log marks the line `poke`. A tab gets one poke per idle stretch: none again until it has a new turn. While a
+the wake log marks the line `poke`. A tab gets one poke per idle stretch: none again until it has a new turn. After a
+poke, another comes only once something changed for the session since: a line posted to its inbox (a queued run's end
+posts one), a register event on one of its tasks by another session (a new task, a handover, an answer), or a task it
+can start that it could not then. Its own note or status write is no change, so a session that answers "nothing can
+move" is left alone; the prompt says to set the task `waiting` with its reason (`--waits`). While a
 queued step of the session runs (`teamrig queue`), the poke waits for it to end; a step only waiting in line counts as
 idle. A task that a queued run of the session is for (the task id its label names), waiting or running, is passed over:
 the poke names the next task with work left, or none, since that run's end line wakes the tab anyway. A shell the tab

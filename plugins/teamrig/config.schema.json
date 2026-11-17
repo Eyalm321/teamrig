@@ -406,7 +406,7 @@
           "default": []
         },
         "webhookEnv": {
-          "description": "The name of the environment variable holding the webhook URL that every exec approval, refusal and run is posted to, never the URL itself. Absent: nothing is posted; named but unset: each would-be post warns.",
+          "description": "The name of the environment variable holding the webhook URL that every exec approval, refusal and run is posted to, never the URL itself. Only an https URL is posted to: any other warns instead. Absent: nothing is posted; named but unset: each would-be post warns.",
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
         }
@@ -704,7 +704,7 @@
                 "default": ".claude/worktrees"
               },
               "shipTool": {
-                "description": "The ship tool a service role may run through teamrig queue --kind ship or merge with no permission check: its script, in a checkout of this repository kept clean at main's current code, checked at every allow, as a queued step that runs it is queued and again when it starts. A relative path is in the main checkout. Unset: no role runs a ship.",
+                "description": "The ship tool a service role may run through teamrig queue with no permission check, a run without --merge as --kind test and a merge as --kind ship or merge: its script, in a checkout of this repository kept clean at main's current code, checked at every allow, as a queued step that runs it is queued and again when it starts. A relative path is in the main checkout. Unset: no role runs a ship.",
                 "type": "string",
                 "minLength": 1
               },
@@ -915,6 +915,13 @@
           "minimum": 1,
           "maximum": 600,
           "default": 20
+        },
+        "passEnv": {
+          "description": "Credential variables the programs teamrig starts still get. teamrig leaves a fixed list (GH_TOKEN, GITHUB_TOKEN, NPM_TOKEN, NODE_AUTH_TOKEN, cloud and AI provider keys) out of the environment of queued and tested commands, merge, deploy and worktree hooks, refresh.endCommand and the team's sessions; a name here passes that one on, as a private registry's npm ci needs NPM_TOKEN. Only the owner sets it.",
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$" },
+          "default": []
         },
         "freezes": {
           "description": "Deploy freezes (teamrig freeze), which hold deploys of their targets while a session measures them.",
@@ -1419,8 +1426,20 @@
           "maximum": 1,
           "default": 0.35
         },
+        "activity": {
+          "description": "Whether the automatic sync tells a task's owner each new comment, review, CI result, label, close and merge on the issue or pull request the task holds, and each session the same on the issues and pull requests it follows (teamrig follow). What asks the session to act (changes requested, a failed check, a question, a mention) wakes it; the rest are quiet inbox lines. It reads nothing more from GitHub than the sync already does. Off, a session hears only mentions and the pull request news of its own branches.",
+          "type": "boolean",
+          "default": true
+        },
+        "followMax": {
+          "description": "The most issues and pull requests one session follows at once with teamrig follow. 0 turns following off.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 20
+        },
         "watcher": {
-          "description": "The session that hears the pull request news no task owner takes: a pull request from a fork or by an author outside the repository, or from a branch that names no task. Unset, the lead.",
+          "description": "The session that hears the pull request news no task owner takes: a pull request from a fork or by an author outside the repository, or from a branch that names no task, and a mention no one else takes. Unset, the first holder of a service role holding issue comment, the session that answers on GitHub, else the lead.",
           "$ref": "#/$defs/sessionName"
         },
         "issueAtAdd": {
@@ -1456,7 +1475,7 @@
             ]
           },
           "commands": {
-            "description": "The commands the role holds: issue close (teamrig issue close on a repository of github.repos), issue comment (teamrig issue comment on one), queue ship and queue merge (teamrig queue --kind ship or merge running the shipTool of a delivery repository on a worktree whose task branch the holding session owns, so a role of holders team gives each session its own ships only). The daily cap counts closes and comments.",
+            "description": "The commands the role holds: issue close (teamrig issue close on a repository of github.repos), issue comment (teamrig issue comment on one), queue ship and queue merge (teamrig queue --kind test, or --kind ship or merge for a merge, running the shipTool of a delivery repository on a worktree whose task branch the holding session owns, so a role of holders team gives each session its own ships only). The daily cap counts closes and comments.",
             "type": "array",
             "items": { "enum": ["issue close", "issue comment", "queue ship", "queue merge"] },
             "minItems": 1,
@@ -1793,7 +1812,7 @@
           }
         },
         "idle": {
-          "description": "The idle pass: it would close a session the wake check would not wake once it has been quiet open.headroom.closeIdleMinutes, and reopen it when the wake check would wake it. The lead and the delivery owner are never closed.",
+          "description": "The idle pass: it would close a session the wake check would not wake once it has been quiet open.headroom.closeIdleMinutes, and reopen it when the wake check would wake it. The delivery owner is never closed, nor the leads open.idle.leaders keeps.",
           "type": "object",
           "properties": {
             "mode": {
@@ -1803,10 +1822,23 @@
               "default": "on"
             },
             "keepOpen": {
-              "description": "Sessions the idle pass and teamrig close never close for being quiet, on top of the lead and the delivery owner.",
+              "description": "Sessions the idle pass and teamrig close never close for being quiet, on top of the delivery owner and the leads open.idle.leaders keeps.",
               "type": "array",
               "items": { "$ref": "#/$defs/sessionName" },
               "default": []
+            },
+            "leaders": {
+              "description": "Which leads are never closed for being quiet. root, the default: only the lead of the tree's root team (one with no team.parent); a child team's lead and a sub-lead close like any session once no task of theirs can start, nothing waits on them (an approval or decision they have not given, an open meeting they are in, an urgent line) and no session they lead runs, and reopen on the same triggers as any closed session. all: every team's lead stays open, as before.",
+              "type": "string",
+              "enum": ["root", "all"],
+              "default": "root"
+            },
+            "reopenUnreadLines": {
+              "description": "How many inbox lines a session the idle pass closed has not seen (neither read nor shown at a prompt) reopen it, though none of them is urgent, unless its budget's rest holds it; 0 never reopens it for them. A lead or sub-lead reopens on it like any session.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000,
+              "default": 10
             }
           }
         }

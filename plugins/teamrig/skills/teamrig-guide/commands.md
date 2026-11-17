@@ -132,6 +132,11 @@ Flags:
   and any start past `focus.wip.maxInProgress` tasks in progress. A reopen of a verifying or done task is never held,
   as its owner is finishing started work; a wait or a dropped task going back to `in-progress` is held like a first
   start. An expedite task and a task the owner ordered are never held.
+- `--drop-approval`: gives up the approval a leader gave the task. A set that would clear it before its step ends
+  (any status but `verifying`, `done` or `dropped`, unless it holds the approval behind a task or a time) is refused
+  without it, naming the approval and its sha, since a merge waiting on it would be refused too: record progress with
+  `teamrig update T<id> --note "..."` instead. Say it only for a new ask, such as a new head; on a set that drops no
+  approval it is refused.
 - `--evidence <proof>`: required for `done`: a commit, test count, path or number that proves it. Evidence
   already on the task counts.
 - `--watch "<what a sighting shows>"`: allowed only with `done`, and needs evidence (given or already on the task)
@@ -502,7 +507,12 @@ An approved task shows `· lead approved`
 in its waiting text and `check` flags it `READY` until its owner sets the next status, which clears the answer.
 To hold an approved task until another task lands or a time comes, set it waiting again with the approval wait and the
 new one (`--waits approval:<lead>,task:T<id>`): that keeps the approval, and `check` flags the task `READY` once the
-new wait clears, so merge then. Restating the same waits, or adding a decision or another approval, asks anew.
+new wait clears, so merge then. Setting the same waits again keeps the approval too, say to log a refused merge,
+unless the note names another commit than the approval's: that asks anew, as adding a decision or another approval
+does, and a new head always needs one, since `ship.ts merge` takes only a head the approval's note names.
+Any set before the step ends (a status but `verifying`, `done` or `dropped`) that would clear the approval, a new
+head's ask included, would leave a merge waiting on it refused, so `set` refuses it: record progress with
+`teamrig update T<id> --note "..."`, or add `--drop-approval` to give the approval up for a new ask.
 Only the lead answers (or a sub-lead above the task's owner, or the security reviewer, `roles.securityReviewer`, on
 a task not its own), only a task waiting on its approval, always with a note; an approval of the owner's stays the
 owner's. The same answer clears a review hold or a gate hold that `teamrig merge` made on the task's branch
@@ -1268,10 +1278,13 @@ the session that answers it gets one unwoken inbox line from `github` (a `REMIND
 shows the lead GH-LATE. A preview times nothing.
 Pull requests: each run also reads every open pull request of each repository, and those changed since the last
 `--auto` read, and compares them with what that read kept. The news is a pull request opened, merged or closed
-unmerged, or one that starts to conflict with its base, to fail its checks, or gets approved or changes requested;
-each is told once, never again while it lasts, and the first read of a repository only marks what is there. It goes
-to the owner of the task the pull request's branch names (`t<id>-...`) when an author inside the repository pushed
-that branch to the repository itself, else to `[github.watcher]` (unset: the lead). A run by hand prints a
+unmerged, or one that starts to conflict with its base, to fail its checks, or gets approved or changes requested,
+and with [github.activity] on one whose checks pass after failing or running; each is told once, never again while
+it lasts, and the first read of a repository only marks what is there. It goes to the owner of the task the pull
+request's branch names (`t<id>-...`) when an author inside the repository pushed that branch to the repository
+itself, else to `[github.watcher]` (unset: the first holder of a service role holding `issue comment`, else the
+lead). With [github.activity] on, an unwoken copy also goes to the owner of the task holding the pull request or a
+same-repository issue it closes, and to each session following it (`teamrig follow`). A run by hand prints a
 `PULL NEWS <session>` line per session and keeps nothing; `--auto` posts it. Titles are outside input, quoted as data.
 A repository whose pull requests cannot be read gets a `FAILED <repo> pull requests:` line and exit 1; its issues still
 sync. Reading them needs Pull requests: Read-only on the token.
@@ -1284,8 +1297,9 @@ Flags:
   naming the tasks added for it, and one to the lead when a repository starts failing (once, not at every run) or
   when every repository reads again, and one when it leaves out an outsider's issue it did not leave out before (by
   ref only, at most ten named), and one to each session with pull request news (at most eight pull requests named;
-  it also wakes the session for a conflict or failing checks on its own pull request, a `t<id>-` branch by the
-  repository's owner or a login in `github.owners`, or an outsider's new pull request, when `wake.enabled`). When its own pull request's checks start failing, it reads the
+  it also wakes the session for a conflict, failing checks or changes requested on its own pull request, a `t<id>-` branch by the
+  repository's owner or a login in `github.owners`, when `wake.enabled`; an outsider's new pull request wakes no one, as
+  it is the watcher's intake work). When its own pull request's checks start failing, it reads the
   end of each failed job's log (at most 5 a run) into `state/github-ci/<owner>-<name>-<number>.md` and the line names
   the job, its failed step and that file. An open issue labelled `security` wakes the session it routes to and pages
   the owner through the `alerts` page webhook, once per issue ever and for at most 3 issues a run (the rest go to the
@@ -1293,7 +1307,11 @@ Flags:
   since its last `--auto` read (the first read only starts the scan) and sends each new `@` mention of a login in
   `github.owners` to one session: the task owner of the item, else its area owner, else the login's session, else
   `github.watcher`, with the link and up to 300 characters around it, quoted; it wakes that session at most once per
-  item every 30 minutes. A read cut short (over 10 pages of 100 posts per list, or the reviews of 20 pull requests)
+  item every 30 minutes. With [github.activity] on (the default) it also tells the task's owner, and each session
+  following the item, every other new comment, review comment and review on it, in one line per session (a question
+  wakes the owner, in the same 30-minute gap), and each close, reopen and label put on or taken off an issue, in one
+  line that never wakes: a close of a task already done or dropped, teamrig's own labels and a label put on by a login
+  in `github.owners` are not told, and the first read of an issue only marks it. A read cut short (over 10 pages of 100 posts per list, or the reviews of 20 pull requests)
   is told to the watcher and goes on from the cut next run; a failed one fails the repository and keeps its scan. A
   run without `--auto` reads no posts. It reads every
   repository, so it refuses `--repo`. With `github.statusPush` on it
@@ -1620,6 +1638,55 @@ SUB-ISSUE #10 under #9
 WROTE 2 link(s) on GitHub; the task list was only read
 ```
 
+### teamrig follow
+
+Follows an issue or pull request of `github.repos`, named `owner/name#n` (its ref `gh:owner/name#n` works too), for
+the calling session. With [github.activity] on, the automatic sync then tells the session the item's new comments,
+reviews, review comments, CI results, labels, closes and merges, as it tells a task's owner those of the item its
+task holds, in quiet inbox lines that never wake it: only the task's owner is woken, for a question, a mention, or
+changes requested, a conflict or a failed check on its own pull request. It reads nothing more from GitHub. A session follows at most [github.followMax] items
+(20 by default). Refused while `github.activity` is off or `github.followMax` is 0, past that cap, and for a
+repository outside `github.repos`, which the sync never reads. Following an item again only says so. Exit 0, 2 when
+refused, 64 for an item not named `owner/name#n`.
+
+Flags:
+
+- `--list`: prints each item the session follows, oldest first, and takes no item.
+- `--session <id|name>`: the session that follows; else `$TEAMRIG_SESSION`.
+
+Example:
+
+```sh
+teamrig follow acme/web#7
+```
+
+Output:
+
+```text
+FOLLOWING gh:acme/web#7: its new comments, reviews, CI results, labels, closes and merges reach your inbox from the next sync
+```
+
+### teamrig unfollow
+
+Stops the calling session following an issue or pull request it follows (`teamrig follow`). Refused, exit 2, for one
+it does not follow; else exit 0.
+
+Flags:
+
+- `--session <id|name>`: the session that stops following; else `$TEAMRIG_SESSION`.
+
+Example:
+
+```sh
+teamrig unfollow acme/web#7
+```
+
+Output:
+
+```text
+UNFOLLOWED gh:acme/web#7
+```
+
 ## Inbox
 
 ### teamrig inbox read
@@ -1761,7 +1828,8 @@ A command that writes a database, calls a writing route, writes the cluster or a
 a request a reviewer approved: the session asks (`exec request`), the read-only dry run runs (`exec dry-run`), the
 security reviewer (`roles.securityReviewer`) or the owner reads it and approves, refuses or escalates it, and then
 the approved command runs once (`exec run`). Each step is one line of the team's exec audit log, and with
-`exec.webhookEnv` set, each review and run is posted to the security channel too. The examples have `api` asking and
+`exec.webhookEnv` set, each review and run is posted to the security channel too, only when the variable holds an
+https URL (any other warns `WARN <id> is logged, but not posted: the webhook address is not an https URL`). The examples have `api` asking and
 `lead` as the security reviewer. The guard that keeps a tab reviewing only as itself is
 [`hook exec-guard`](#teamrig-hook-exec-guard).
 
@@ -2152,9 +2220,10 @@ With `--pass` it prints, in the roster's order, what an idle pass would do, and 
 session [teamrig close](#teamrig-close) would close (quiet `open.headroom.closeIdleMinutes` or more, nothing it can
 start under the wake priority its budget leaves it, no [urgent line](hooks.md#urgent-lines) waiting to wake it),
 `KEEP` one it keeps open and why, `REOPEN` a session teamrig closed that the wake check would now wake (urgent lines
-posted for it, work handed to it since its close, or the day's start with work it can start), `LATER` such a session
+posted for it, work handed to it since its close, or, unless its budget rests it, [open.idle.reopenUnreadLines] (10)
+inbox lines it has not seen, or the day's start with work it can start), `LATER` such a session
 this pass leaves for the next (one reopen a pass, urgent lines first, the oldest first, then the most urgent top task,
-and only on a settled plugin install with room on the host), `CLOSED` one teamrig closed with nothing it can start,
+then a pile of unseen lines, and only on a settled plugin install with room on the host), `CLOSED` one teamrig closed with nothing it can start,
 and `AWAY` one not running that teamrig did not close; then a `PASS` total. A session whose project folder
 (`launch.<id>.project`, else `team.project`, else the folder holding the team's pointer) is no folder holds only
 itself: running, it is `KEEP`, closed, its reopen `LATER`, the refusal its why; the pass goes on for the rest. A tab
@@ -2205,8 +2274,10 @@ PASS 3 session(s): 0 to close, 1 to reopen, 0 to reopen later, 1 kept open, 0 cl
 
 Ends an idle session's Claude Code and its tab to free the host, and logs it in `state/session-log.jsonl`, so
 [teamrig open](#teamrig-open) goes on in that Claude Code session later (`teamrig close <id|name>`; the lead only).
-It refuses the lead, the delivery owner and a session listed in `open.idle.keepOpen`, one in the owner's open booked
-meeting (started, under 4 hours, neither ended nor dropped: the owner talks to its tab), a session not running, one
+It refuses the lead of the tree's root team (every team's lead with [open.idle.leaders] `all`), the delivery owner and a
+session listed in `open.idle.keepOpen`, one in the owner's open booked
+meeting (started, under 4 hours, neither ended nor dropped: the owner talks to its tab), a lead or sub-lead that a
+live task's approval or decision waits on (the team's lead for the owner's too) or one of whose sessions runs, a session not running, one
 with work it can start or a time wait of its own ending within 30 minutes, one quiet under
 `open.headroom.closeIdleMinutes` (60) since its transcript's last entry of the person or the model (a slash command,
 an away summary or a file change with no entry is no activity), in a turn, at a tool call (running, or waiting on a permission or an answer), waiting on a decision it put to the
@@ -2851,6 +2922,11 @@ count line before its rows, which leave out its Other work. `MERGES` reads each 
 `delivery.dir` is the root's shares the root's rows, unlabelled; it shows when any team of the tree is gated. `GOALS`
 stays the root's ranked goals: a team's own goals are its lead's to steer, never the owner's scoreboard. `UNGATED`
 stays the root team's own.
+The day's first `meeting start` opens the owner's daily meeting. One started after it the same day, on the team's
+clock, is an extra meeting: it holds messages and prints the agenda as the daily one does, its start line says so
+(`MEETING started Thu 10-15 15:00 IDT, an extra meeting after the day's daily one: ...`) and the lead's status line
+reads `Meeting: extra`. The next day's first start opens the daily meeting again.
+
 
 With a meeting id, `meeting start M3` starts a scheduled meeting instead, one booked with `meeting schedule`: any
 session runs it, as the owner starts it from whichever tab is at hand. The session met gets the opening prompt (the
@@ -3453,7 +3529,9 @@ WAKES shop-web (session web) within about 15 s: an inbox line from owner asks it
 What a tab started by `open` runs: it sets the session's variables and starts Claude Code under the session's
 name, model and effort. You do not run it yourself; `open` writes it. When the automatic context refresh ends
 Claude Code for a fresh start, launch starts it again in the same tab, fresh, with a prompt to read its handover
-first.
+first. Claude Code starts without the credential variables (see [teamrig queue](#teamrig-queue)) but its own login
+(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`) and those [delivery.passEnv] names, as the
+session's tools run the team's code.
 
 Flags:
 
@@ -3719,7 +3797,8 @@ the session still running, the mod holds the ask instead: the restart ends nothi
 again, and gives up an hour after it started. A mod that held an ask of the run and then answers none (as one did
 after a `/reload-plugins`) counts as holding too: it ends nothing. When no mod claims the ask
 within 10 seconds, it ends the session's Claude Code instead: `launch` starts it again in the same tab, and a tab
-teamrig did not open gets a new tab first; then it runs `refresh.endCommand`, if set. It ends no Claude Code that
+teamrig did not open gets a new tab first; then it runs [refresh.endCommand], if set, without the credential variables (see [teamrig queue](#teamrig-queue))
+but those [delivery.passEnv] names. It ends no Claude Code that
 still runs a background shell (a background command or a monitor), since the end would take that too; the session
 is told to type `/clear`, which keeps it. A prompt typed before then cancels it. A restart that did not happen, or an end command that failed, leaves a line in the session's inbox.
 One that ended without a word (its process was killed) is started again from the session's tab by `hook wake-check`,
@@ -4598,7 +4677,8 @@ upstream, then runs the repository's setup in it, such as a link to the main che
 worktree's folder is the branch's name with each `/` as `-`, in [delivery.repos.<name>.worktreeFolder] (default
 `.claude/worktrees` in the main checkout; a relative folder is in the main checkout). The setup, a program and its
 arguments in [delivery.repos.<name>.worktreeSetup], runs without a shell in the new worktree, with the main
-checkout's folder in `TEAMRIG_MAIN_CHECKOUT`, and is killed after 10 minutes; exit 0 is a success.
+checkout's folder in `TEAMRIG_MAIN_CHECKOUT` and without the credential variables (see [teamrig queue](#teamrig-queue))
+but those [delivery.passEnv] names, and is killed after 10 minutes; exit 0 is a success.
 
 The repository is the one `--repo` names, else the one the current folder belongs to, with the folder and setup of
 the delivery.repos entry whose `mainCheckout` is its main checkout; outside a team, or with no entry, it uses the
@@ -4714,7 +4794,13 @@ to link again by hand.
 ### teamrig queue
 
 Runs one queued step (a build, a test run, a database script) under the host lock, so the host's queued steps run one
-at a time instead of competing for its CPU and memory. It waits for the lock until its line has not moved
+at a time instead of competing for its CPU and memory. The step starts without the credential variables teamrig knows
+(`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `NPM_TOKEN`, `NODE_AUTH_TOKEN`,
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`GOOGLE_API_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `SLACK_TOKEN`, `SLACK_BOT_TOKEN`,
+`STRIPE_SECRET_KEY`, named in any case) but those the owner lists in [delivery.passEnv], as does each program teamrig
+starts for the team's code: `test`, the hooks of `merge`, `deploy` and `worktree add`, [refresh.endCommand] and the
+sessions `launch` starts. A build or a test runs the repository's code, which needs none of the session's tokens. It waits for the lock until its line has not moved
 for `delivery.queue.waitMinutes` (60 by default). Waiters take it in their turn: each joins a line of tickets in `<lock>.queue` and only the
 first live one may take the lock, looking every 2 s; the rest look every `delivery.wait.pollSeconds` (30). With
 `delivery.queue.admission` `pipeline` the line is in admission order: a p0 step first, then by class
@@ -4820,7 +4906,11 @@ origin/main, then queue the step again`). A git read of that checkout that got n
 stopped, or died starting, as under a burst of new processes) says nothing of the tool: as the step is queued it pins
 no commit, so only the newest main runs, and the check reads again up to 4 times, 15 s apart, before it is REFUSED
 naming the read and git's error (`REFUSED could not read the checkout of the ship tool ..., so the step did not run:
-git rev-parse ... did not answer: ...`), never as a changed tool.
+git rev-parse ... did not answer: ...`), never as a changed tool. Such a step is REFUSED at once, too, when its
+kind does not fit it: a run without `--merge` moves no main branch, so it is `--kind test` and runs beside other
+steps while a merge holds the ship slot (`REFUSED a ship tool run without --merge moves no main branch, so it takes
+no ship slot: queue it with --kind test, not --kind ship`), and a run that merges (`--merge`, or the `merge` form)
+is `--kind ship` or `merge`, never a kind that takes no slot.
 
 The lock is `host.lock` in the kit home, one for every team on the host, unless `delivery.queue.lockPath` names
 another. It lasts `delivery.queue.lockTtlMinutes` (150); a lock past that, or one whose process is gone, is
@@ -5119,6 +5209,8 @@ UNFROZEN F3 2030-01-09 02:00 IST → 2030-01-09 04:00 IST, all steps, by lead (b
 
 Merges the branch checked out in the current folder, a worktree or a plain checkout, into origin's default branch (the
 one `origin/HEAD` names), so every session merges its work one way: checked, pushed under the host lock and recorded.
+The hooks and command its delivery.repos entry names start without the credential variables (see
+[teamrig queue](#teamrig-queue)) but those [delivery.passEnv] names; its own git and gh calls keep them.
 Its old name, integrate, is refused with this one (exit 64).
 
 REFUSED (exit 2) before any change for a folder outside git, a detached HEAD, uncommitted changes, the default branch
@@ -5358,7 +5450,8 @@ merges, and is recorded when the next `teamrig merge` finishes the merge.
 ### teamrig deploy
 
 Brings what was pushed to a repository's default branch to the running system, one deploy on the host at a time, the
-same way for every session: checked, pulled under the host lock, deployed and recorded.
+same way for every session: checked, pulled under the host lock, deployed and recorded. The programs its deploy block
+names start without the credential variables (see [teamrig queue](#teamrig-queue)) but those [delivery.passEnv] names.
 
 The repository is an entry of `delivery.repos` with a `deploy` block: the one `--repo` names, else the one whose
 `mainCheckout` this folder is in, else the only one with a deploy block.
@@ -5651,7 +5744,8 @@ model little. The whole output goes to a numbered log, `test-<session>-<n>.log` 
 the counts, the time and the log's path, and for a failed run each failing test in full within
 `tests.maxFailureChars` (4,000 characters by default), or the output's last 40 lines when no test runner is
 recognised. It reads the Node.js test runner (spec and TAP), Jest and Vitest. Exit 0 when the command passed,
-1 otherwise.
+1 otherwise. The command starts without the credential variables (see [teamrig queue](#teamrig-queue)) but those
+[delivery.passEnv] names.
 
 Everything after `--` is the command. One quoted word runs as written, so `"npm run build && npm test"` works;
 several words are passed on as typed, globs included. An empty command is REFUSED (exit 64), as a shell would run
@@ -6339,7 +6433,8 @@ reset, and over the seven days before the week's reset only until those hooks na
 team, or once the reading's week reset, no pace is shown. The team config's `statusLine` turns `folder`, `branch` and `pace` off one by one (each is
 on by default; with `branch` off, git is never asked). While the owner's meeting is open on a team or a team above
 it (`teamrig meeting start`, until `meeting end` or its lapse), the lead's tab that started it leads its line with
-`Meeting: daily | ` and every other tab, a sub-team's too, adds `meeting.statusLine.heldText` (`meeting on: held`)
+`Meeting: daily | ` (`Meeting: extra | ` for one started after the day's daily meeting) and every other tab, a
+sub-team's too, adds `meeting.statusLine.heldText` (`meeting on: held`)
 last; only that mark takes `meeting.statusLine.colour` (`#8b57e3`, teamrig's purple, by default), and
 `meeting.statusLine.enabled: false` turns both off. The tab of a session the owner meets in a booked or on-the-spot
 meeting, any session's, a worker's too, leads its line with `Meeting: <its title> | `, what the meeting is about cut

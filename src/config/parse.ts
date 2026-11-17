@@ -24,6 +24,7 @@ import {
   DEFAULT_DECISIONS,
   DEFAULT_DELIVERY_WAIT,
   DEFAULT_CHECK_TIMEOUT_SECONDS,
+  DEFAULT_PASS_ENV,
   DEFAULT_GITHUB,
   DEFAULT_QUEUE,
   DEFAULT_HIRING,
@@ -109,6 +110,7 @@ import {
   isHiringPolicy,
   isOverAction,
   isHookAsks,
+  isIdleLeaderKeep,
   isIdleMode,
   isOtherAreaListing,
   isPushToProtected,
@@ -127,6 +129,7 @@ import {
   type ModelWeight,
   type ResetStock,
   HOOK_ASKS,
+  IDLE_LEADER_KEEPS,
   IDLE_MODES,
   OTHER_AREA_LISTINGS,
   OVER_ACTIONS,
@@ -752,6 +755,8 @@ function parseGithub(read: ConfigReader, raw: JsonRecord, sessions: readonly str
     statusPush: read.boolean(raw, 'statusPush', 'github', DEFAULT_GITHUB.statusPush),
     acceptLabel: read.string(raw, 'acceptLabel', 'github', DEFAULT_GITHUB.acceptLabel, shortLine(GITHUB_LABEL_MAX_LENGTH)),
     similarThreshold: read.number(raw, 'similarThreshold', 'github', DEFAULT_GITHUB.similarThreshold, CONFIG_LIMITS.similarThreshold),
+    activity: read.boolean(raw, 'activity', 'github', DEFAULT_GITHUB.activity),
+    followMax: read.integer(raw, 'followMax', 'github', DEFAULT_GITHUB.followMax, CONFIG_LIMITS.githubFollowMax),
     ...readGithubWatcher(read, raw, sessions),
     ...(issueAtAdd === undefined ? {} : { issueAtAdd }),
   };
@@ -787,7 +792,7 @@ function readProbeSeconds(read: ConfigReader, raw: JsonRecord): number {
   return seconds;
 }
 
-/** `github.watcher`: one of the sessions, else left unset (the lead) with the wrong one reported. */
+/** `github.watcher`: one of the sessions, else left unset (githubWatcher then picks the GitHub answerer, else the lead) with the wrong one reported. */
 function readGithubWatcher(read: ConfigReader, raw: JsonRecord, sessions: readonly string[]): { watcher?: string } {
   const watcher = read.optionalString(raw, 'watcher', 'github', isSessionName);
   if (watcher === undefined) {
@@ -1028,6 +1033,7 @@ function parseDelivery(read: ConfigReader, raw: JsonRecord): DeliveryConfig {
       maxMinutes: read.integer(wait, 'maxMinutes', `${path}.wait`, DEFAULT_DELIVERY_WAIT.maxMinutes, CONFIG_LIMITS.deliveryWaitMaxMinutes),
     },
     checkTimeoutSeconds: read.integer(raw, 'checkTimeoutSeconds', path, DEFAULT_CHECK_TIMEOUT_SECONDS, CONFIG_LIMITS.checkTimeoutSeconds),
+    passEnv: read.stringList(raw, 'passEnv', path, DEFAULT_PASS_ENV, ENV_VARIABLE, CONFIG_LIMITS.passEnv.maxItems),
     freezes: { maxMinutes: read.integer(freezes, 'maxMinutes', `${path}.freezes`, DEFAULT_FREEZES.maxMinutes, CONFIG_LIMITS.freezeMaxMinutes) },
     stablePeriods: parseStablePeriods(read, read.section(raw, 'stablePeriods', path), deployTargetsOf(repos)),
     branches: parseBranches(read, read.section(raw, 'branches', path)),
@@ -1672,7 +1678,10 @@ function parseOpen(read: ConfigReader, raw: JsonRecord, sessions: readonly strin
   };
 }
 
-/** `open.idle`: whether the idle pass runs, and the sessions it keeps open; one not on the team is reported and left out. */
+/**
+ * `open.idle`: whether the idle pass runs, the sessions it keeps open (one not on the team is reported and left out),
+ * which leads it never closes, and how many unseen inbox lines reopen a closed session.
+ */
 function parseIdle(read: ConfigReader, raw: JsonRecord, sessions: readonly string[]): IdleConfig {
   const path = 'open.idle';
   const mode = read.string(raw, 'mode', path, DEFAULT_IDLE.mode, (value) => (isIdleMode(value) ? undefined : `expected one of ${IDLE_MODES.join(', ')}`));
@@ -1684,7 +1693,9 @@ function parseIdle(read: ConfigReader, raw: JsonRecord, sessions: readonly strin
     }
     return id;
   });
-  return { mode: isIdleMode(mode) ? mode : DEFAULT_IDLE.mode, keepOpen };
+  const leaders = read.string(raw, 'leaders', path, DEFAULT_IDLE.leaders, (value) => (isIdleLeaderKeep(value) ? undefined : `expected one of ${IDLE_LEADER_KEEPS.join(', ')}`));
+  const reopenUnreadLines = read.integer(raw, 'reopenUnreadLines', path, DEFAULT_IDLE.reopenUnreadLines, CONFIG_LIMITS.idleReopenUnreadLines);
+  return { mode: isIdleMode(mode) ? mode : DEFAULT_IDLE.mode, keepOpen, leaders: isIdleLeaderKeep(leaders) ? leaders : DEFAULT_IDLE.leaders, reopenUnreadLines };
 }
 
 /** `open.headroom`: the room a new session needs on the host. */

@@ -28,7 +28,7 @@ describe('parseConfig', () => {
     assert.deepEqual(config.needsYou, { enabled: true, kinds: ['permission', 'question', 'elicitation', 'decision'], osToast: false });
     assert.deepEqual(config.meetingNotices, { enabled: true, beforeMinutes: 10, atStart: true, missedAfterMinutes: 5, osToast: true, tabToast: true, leadInbox: true });
     assert.deepEqual(config.tests, { maxFailureChars: 4000 });
-    assert.deepEqual(config.github, { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35 });
+    assert.deepEqual(config.github, { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35, activity: true, followMax: 20 });
     assert.deepEqual(config.register, DEFAULT_REGISTER);
     assert.deepEqual(config.budget, DEFAULT_BUDGET);
     assert.deepEqual(config.delivery, {
@@ -36,6 +36,7 @@ describe('parseConfig', () => {
       queue: { lockTtlMinutes: 150, maxRunMinutes: 45, smallMaxRunMinutes: 10, waitMinutes: 60, memorySampleSeconds: 15, memoryFloorMb: 4096, smallReserveMb: 2048, heavyReserveMb: 2048, admission: 'pipeline', agingMinutes: 15, memoryPassMinutes: 15, perSessionRunning: 2, maxHeavyParallel: 2, maxSmallParallel: 4, heavyIdleCpuPct: 25 },
       wait: { pollSeconds: 30, maxMinutes: 60 },
       checkTimeoutSeconds: 20,
+      passEnv: [],
       freezes: { maxMinutes: 120 },
       stablePeriods: { settleMinutes: 30, targetSettleMinutes: {}, assumedDeployMinutes: 20, minMinutes: 15 },
       branches: DEFAULT_BRANCHES,
@@ -406,6 +407,22 @@ describe('parseConfig', () => {
     }
   });
 
+  it('reads github.activity as a boolean and github.followMax within 0 to 100, reporting a wrong one and keeping its default', () => {
+    const set = parseConfig({ ...ROSTER, github: { activity: false, followMax: 0 } });
+    assert.deepEqual(set.issues, []);
+    assert.equal(set.config.github.activity, false);
+    assert.equal(set.config.github.followMax, 0);
+    assert.equal(parseConfig({ ...ROSTER, github: { followMax: 100 } }).config.github.followMax, 100);
+    const wrongSwitch = parseConfig({ ...ROSTER, github: { activity: 'yes' } });
+    assert.deepEqual(paths(wrongSwitch.issues), ['github.activity']);
+    assert.equal(wrongSwitch.config.github.activity, true);
+    for (const wrong of [-1, 101, 2.5, '5']) {
+      const parsed = parseConfig({ ...ROSTER, github: { followMax: wrong } });
+      assert.deepEqual(paths(parsed.issues), ['github.followMax']);
+      assert.equal(parsed.config.github.followMax, 20);
+    }
+  });
+
   it('reads github repos and owners in lowercase, closedDays within 1 to 365 and probeSeconds 0 or within 30 to 3600', () => {
     const { config, issues } = parseConfig({
       ...ROSTER,
@@ -422,6 +439,8 @@ describe('parseConfig', () => {
       statusPush: false,
       acceptLabel: 'teamrig',
       similarThreshold: 0.35,
+      activity: true,
+      followMax: 20,
     });
     assert.equal(parseConfig({ ...ROSTER, github: { statusPush: true } }).config.github.statusPush, true);
     for (const wrong of ['yes', 1]) {
@@ -699,12 +718,28 @@ describe('parseConfig', () => {
       queue: { lockPath: 'data/deploys/host.lock', lockTtlMinutes: 90, maxRunMinutes: 80, smallMaxRunMinutes: 80, waitMinutes: 0, memorySampleSeconds: 0, memoryFloorMb: 0, smallReserveMb: 512, heavyReserveMb: 1024, admission: 'serial', agingMinutes: 0, memoryPassMinutes: 0, perSessionRunning: 0, maxHeavyParallel: 3, maxSmallParallel: 6, heavyIdleCpuPct: 0 },
       wait: { pollSeconds: 5, maxMinutes: 0 },
       checkTimeoutSeconds: 45,
+      passEnv: ['NPM_TOKEN', 'gh_token'],
       freezes: { maxMinutes: 90 },
       stablePeriods: { settleMinutes: 10, targetSettleMinutes: {}, assumedDeployMinutes: 5, minMinutes: 30 },
     };
     const { config, issues } = parseConfig({ ...ROSTER, delivery });
     assert.deepEqual(issues, []);
     assert.deepEqual(config.delivery, { ...delivery, schedule: {}, branches: DEFAULT_BRANCHES, repos: {} });
+  });
+
+  it('passes no credential variable on until delivery.passEnv names it, and refuses a name that is not a variable', () => {
+    assert.deepEqual(parseConfig(ROSTER).config.delivery.passEnv, []);
+    const { config, issues } = parseConfig({ ...ROSTER, delivery: { passEnv: ['NPM_TOKEN', 'NPM TOKEN', '', 'A'.repeat(65), 7] } });
+    assert.deepEqual(config.delivery.passEnv, ['NPM_TOKEN']);
+    assert.deepEqual(
+      issues.map((issue) => issue.path),
+      ['delivery.passEnv[1]', 'delivery.passEnv[2]', 'delivery.passEnv[3]', 'delivery.passEnv[4]'],
+    );
+    assert.match(issues[0]?.message ?? '', /expected a variable name/);
+    assert.deepEqual(
+      parseConfig({ ...ROSTER, delivery: { passEnv: Array.from({ length: 33 }, (_, index) => `TOKEN_${index}`) } }).issues.map((issue) => issue.path),
+      ['delivery.passEnv'],
+    );
   });
 
   it('names new branches by Conventional Branch when delivery.branches is absent (T2690)', () => {
@@ -1016,6 +1051,7 @@ describe('parseConfig', () => {
       queue: { lockTtlMinutes: 150, maxRunMinutes: 45, smallMaxRunMinutes: 10, waitMinutes: 60, memorySampleSeconds: 15, memoryFloorMb: 4096, smallReserveMb: 2048, heavyReserveMb: 2048, admission: 'pipeline', agingMinutes: 15, memoryPassMinutes: 15, perSessionRunning: 2, maxHeavyParallel: 2, maxSmallParallel: 4, heavyIdleCpuPct: 25 },
       wait: { pollSeconds: 30, maxMinutes: 60 },
       checkTimeoutSeconds: 20,
+      passEnv: [],
       freezes: { maxMinutes: 120 },
       stablePeriods: { settleMinutes: 30, targetSettleMinutes: {}, assumedDeployMinutes: 20, minMinutes: 15 },
       branches: DEFAULT_BRANCHES,
@@ -1732,16 +1768,21 @@ describe('parseConfig', () => {
 
   it('reads whether the idle pass runs and the sessions it keeps open, refusing a mode it does not know or a session not on the team', () => {
     // A team that sets nothing closes and reopens its idle sessions (T1409).
-    assert.deepEqual(parseConfig(ROSTER).config.open.idle, { mode: 'on', keepOpen: [] });
-    const set = parseConfig({ ...ROSTER, open: { idle: { mode: 'dry-run', keepOpen: ['bravo'] } } });
+    // Only the tree's root lead is never closed unless set (T3387).
+    // Ten unseen inbox lines reopen a closed session unless set (T3387).
+    assert.deepEqual(parseConfig(ROSTER).config.open.idle, { mode: 'on', keepOpen: [], leaders: 'root', reopenUnreadLines: 10 });
+    const set = parseConfig({ ...ROSTER, open: { idle: { mode: 'dry-run', keepOpen: ['bravo'], leaders: 'all', reopenUnreadLines: 0 } } });
     assert.deepEqual(set.issues, []);
-    assert.deepEqual(set.config.open.idle, { mode: 'dry-run', keepOpen: ['bravo'] });
-    assert.deepEqual(parseConfig({ ...ROSTER, open: { idle: { mode: 'on' } } }).config.open.idle, { mode: 'on', keepOpen: [] });
-    const bad = parseConfig({ ...ROSTER, open: { idle: { mode: 'always', keepOpen: ['bravo', 'charlie', 7] } } });
-    assert.deepEqual(paths(bad.issues).sort(), ['open.idle.keepOpen[1]', 'open.idle.keepOpen[2]', 'open.idle.mode']);
+    assert.deepEqual(set.config.open.idle, { mode: 'dry-run', keepOpen: ['bravo'], leaders: 'all', reopenUnreadLines: 0 });
+    assert.deepEqual(parseConfig({ ...ROSTER, open: { idle: { mode: 'on' } } }).config.open.idle, { mode: 'on', keepOpen: [], leaders: 'root', reopenUnreadLines: 10 });
+    const bad = parseConfig({ ...ROSTER, open: { idle: { mode: 'always', keepOpen: ['bravo', 'charlie', 7], leaders: 'none', reopenUnreadLines: 1001 } } });
+    assert.deepEqual(paths(bad.issues).sort(), ['open.idle.keepOpen[1]', 'open.idle.keepOpen[2]', 'open.idle.leaders', 'open.idle.mode', 'open.idle.reopenUnreadLines']);
     assert.match(bad.issues.find((issue) => issue.path === 'open.idle.mode')?.message ?? '', /expected one of off, dry-run, on/);
+    assert.match(bad.issues.find((issue) => issue.path === 'open.idle.leaders')?.message ?? '', /expected one of root, all/);
+    assert.match(bad.issues.find((issue) => issue.path === 'open.idle.reopenUnreadLines')?.message ?? '', /0.*1000/);
     assert.match(bad.issues.find((issue) => issue.path === 'open.idle.keepOpen[1]')?.message ?? '', /"charlie" is not one of the sessions/);
-    assert.deepEqual(bad.config.open.idle, { mode: 'on', keepOpen: ['bravo'] });
+    assert.deepEqual(bad.config.open.idle, { mode: 'on', keepOpen: ['bravo'], leaders: 'root', reopenUnreadLines: 10 });
+    assert.deepEqual(paths(parseConfig({ ...ROSTER, open: { idle: { reopenUnreadLines: -1 } } }).issues), ['open.idle.reopenUnreadLines']);
     assert.deepEqual(paths(parseConfig({ ...ROSTER, open: { idle: { keepOpen: 'bravo' } } }).issues), ['open.idle.keepOpen']);
   });
 

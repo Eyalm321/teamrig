@@ -47,8 +47,28 @@ describe('the response clock in issue sync (T3028)', () => {
     await sync(kit, bug());
     assert.equal(githubLines(kit, 'lead').filter((text) => text.includes('(bug)')).length, 1, 'reminded once');
 
-    await sync(kit, bug([commentNode(new Date(kit.clock.now()).toISOString(), 'MEMBER')]));
+    await sync(kit, bug([commentNode(new Date(kit.clock.now()).toISOString(), 'MEMBER', 'User', { login: 'octocat' })]));
     assert.equal(parseClocks(kit.files.get(CLOCKS) ?? '').size, 0, 'answered: the clock stops');
+  });
+
+  it('times an outside collaborator as an outsider: their issue starts a clock and their follow-up is no answer (T3380)', async () => {
+    const kit = new CliHarness(GITHUB_TEAM);
+    const opened = new Date(kit.clock.now()).toISOString();
+    const later = new Date(kit.clock.now() + HOUR).toISOString();
+    const asked = (answer: JsonRecord): FakeGh =>
+      new FakeGh().holds('acme/web', [ghIssue('acme/web', 4, { authorAssociation: 'COLLABORATOR', author: 'contrib', createdAt: opened, comments: [answer] })]);
+    await sync(kit, asked(commentNode(later, 'COLLABORATOR', 'User', { login: 'contrib' })));
+    assert.equal(parseClocks(kit.files.get(CLOCKS) ?? '').get('gh:acme/web#4')?.since, kit.clock.now(), 'waits since the opening post');
+
+    await sync(kit, asked(commentNode(later, 'MEMBER', 'User', { login: 'OctoCat' })));
+    assert.equal(parseClocks(kit.files.get(CLOCKS) ?? '').size, 0, 'a login of github.owners answers, whatever its case');
+  });
+
+  it('counts the repository tie as ours when github.owners names no one', async () => {
+    const kit = new CliHarness({ ...TEAM, github: { repos: ['acme/web'] } });
+    const issue = ghIssue('acme/web', 4, { authorAssociation: 'COLLABORATOR', author: 'contrib', createdAt: new Date(kit.clock.now()).toISOString() });
+    await sync(kit, new FakeGh().holds('acme/web', [issue]));
+    assert.equal(parseClocks(kit.files.get(CLOCKS) ?? '').size, 0);
   });
 
   it("times an outside comment on a thread we hold as a comment, owned by the holding task's owner", async () => {
@@ -86,9 +106,9 @@ describe('the response clock in issue sync (T3028)', () => {
 
     await sync(kit, pull({ comments: [commentNode(at(0), 'MEMBER', 'Bot')], reviews: [reviewNode(at(0), 'NONE', 'Bot')] }));
     assert.deepEqual(running(), ['gh:acme/web#12'], "a bot's post is no answer of ours");
-    await sync(kit, pull({ reviews: [reviewNode(at(0), 'MEMBER')] }));
+    await sync(kit, pull({ reviews: [reviewNode(at(0), 'MEMBER', 'User', 'octocat')] }));
     assert.deepEqual(running(), [], 'our review answers it');
-    await sync(kit, pull({ reviews: [reviewNode(null, 'MEMBER')] }));
+    await sync(kit, pull({ reviews: [reviewNode(null, 'MEMBER', 'User', 'octocat')] }));
     assert.deepEqual(running(), ['gh:acme/web#12'], 'a review still pending answers nothing');
     await sync(kit, pull({ comments: [commentNode(at(0), 'OWNER')] }));
     assert.deepEqual(running(), [], 'our comment answers it');

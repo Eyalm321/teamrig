@@ -120,9 +120,9 @@ export function commentNode(at: string, association: string, kind = 'User', text
   return { createdAt: at, authorAssociation: association, author: { __typename: kind, ...(text.login === undefined ? {} : { login: text.login }) }, body: text.body ?? '' };
 }
 
-/** A pull request review as the pull request query reads it: submitted at `at` (null while pending), by an author of that tie and kind. */
-export function reviewNode(at: string | null, association: string, kind = 'User'): JsonRecord {
-  return { submittedAt: at, authorAssociation: association, author: { __typename: kind, login: kind === 'Bot' ? 'ci-bot' : 'reviewer' } };
+/** A pull request review as the pull request query reads it: submitted at `at` (null while pending), by an author of that tie, kind and login. */
+export function reviewNode(at: string | null, association: string, kind = 'User', login = kind === 'Bot' ? 'ci-bot' : 'reviewer'): JsonRecord {
+  return { submittedAt: at, authorAssociation: association, author: { __typename: kind, login } };
 }
 
 /** A timeline item: the issue's title was changed at `at`. */
@@ -158,6 +158,8 @@ export interface PullSpec {
   readonly checks?: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null;
   /** The rollup's contexts, as GitHub sends them (a CheckRun's `name`, `conclusion`, `databaseId`); none unless set. */
   readonly contexts?: readonly unknown[];
+  /** The issues it closes, each in `repo` unless given as `owner/name#n`; none unless set. */
+  readonly closes?: readonly (number | string)[];
 }
 
 /** A pull request as the shipped pull request query (queries.ts) gets it from GitHub, opened and changed on 2030-01-01. */
@@ -184,6 +186,18 @@ export function ghPull(repo: string, number: number, spec: PullSpec = {}): JsonR
     mergeable: spec.mergeable ?? 'MERGEABLE',
     reviewDecision: spec.reviewDecision ?? null,
     commits: { nodes: [{ commit: { statusCheckRollup: spec.checks === null || spec.checks === undefined ? null : { state: spec.checks, contexts: { nodes: [...(spec.contexts ?? [])] } } } }] },
+    closingIssuesReferences: { nodes: (spec.closes ?? []).map(closingNode(repo)) },
+  };
+}
+
+/** A closing reference as GitHub sends it: a number in `repo`, or `owner/name#n` in another repository. */
+function closingNode(repo: string): (closes: number | string) => JsonRecord {
+  return (closes) => {
+    if (typeof closes === 'number') {
+      return { number: closes, repository: { nameWithOwner: repo } };
+    }
+    const [home = '', number = ''] = closes.split('#');
+    return { number: Number(number), repository: { nameWithOwner: home } };
   };
 }
 

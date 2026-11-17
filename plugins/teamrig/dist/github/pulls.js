@@ -1,5 +1,5 @@
 import { isRecord, recordField, stringField } from "../core/guards.js";
-import { connectionPage, kindOf, loginOf, nodesOf, plainLine, postOf, repoPage, runRead, timeField, WEB_URL } from "./issues.js";
+import { connectionPage, loginOf, plainLine, repoPage, runRead, timeField, WEB_URL } from "./issues.js";
 import { pullPageArgs } from "./queries.js";
 /** How a failed pull request read is worded, and the permission a fine-grained token needs for it. */
 export const PULL_READ = { noun: 'pull requests', permission: 'Pull requests', command: 'gh api graphql' };
@@ -85,21 +85,27 @@ export function pullOf(item, repo) {
         closedAt: timeField(item, 'closedAt'),
         authorAssociation: stringField(item, 'authorAssociation') ?? '',
         author: loginOf(recordField(item, 'author')),
-        authorKind: kindOf(recordField(item, 'author')),
-        posts: postsOf(item),
         head,
         fork: item['isCrossRepository'] === true,
         mergeable: MERGEABLE[stringField(item, 'mergeable') ?? ''] ?? 'unknown',
         checks: CHECKS[rollupStateOf(item) ?? ''] ?? 'none',
         review: REVIEWS[stringField(item, 'reviewDecision') ?? ''] ?? 'none',
         failedJobs: failedJobsOf(rollupOf(item)),
+        closes: closedIssuesOf(recordField(item, 'closingIssuesReferences'), repo),
     };
 }
-/** Its comments and submitted reviews, oldest first; a review still pending has no time and is left out. */
-function postsOf(item) {
-    const comments = nodesOf(item['comments']).flatMap((post) => postOf(post, 'createdAt'));
-    const reviews = nodesOf(item['reviews']).flatMap((post) => postOf(post, 'submittedAt'));
-    return [...comments, ...reviews].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+/** The numbers of the issues of `repo` a closing-references read names; another repository's or an unreadable node is left out. */
+function closedIssuesOf(references, repo) {
+    const nodes = references?.['nodes'];
+    const numbers = [];
+    for (const node of Array.isArray(nodes) ? nodes : []) {
+        const number = isRecord(node) ? node['number'] : undefined;
+        const home = isRecord(node) ? stringField(recordField(node, 'repository') ?? {}, 'nameWithOwner') : undefined;
+        if (typeof number === 'number' && Number.isSafeInteger(number) && number > 0 && home?.toLowerCase() === repo.toLowerCase() && !numbers.includes(number)) {
+            numbers.push(number);
+        }
+    }
+    return numbers;
 }
 /** How a check run ends that counts as failed: each makes the rollup fail, and each may leave a log to read. */
 const FAILED_CONCLUSIONS = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE']);
