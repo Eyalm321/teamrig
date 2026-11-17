@@ -20,6 +20,19 @@ async function meetingOpen(runtime: CliRuntime, kit: Kit): Promise<boolean> {
 }
 
 /**
+ * The id of the meeting `session` holds in its own tab now (src/meeting/schedule.ts); undefined when none does, and
+ * when the schedule cannot be read (#1436): it only picks the refusal's reason, so a file error there reads as no
+ * meeting and never as the whole guard failing, which would let the picker through.
+ */
+async function meetingInTabIdOf(runtime: CliRuntime, kit: Kit, session: string, now: number): Promise<string | undefined> {
+  try {
+    return meetingInTabOf((await new MeetingSchedule(runtime.files, kit.paths.meetings).read()).meetings, session, now)?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The team's parent lead when its config names a parent team, read from every team config (cli/tree.ts); undefined
  * for a team with no parent, or one whose parent has no config, which `doctor` names and the guard treats as a root.
  */
@@ -49,7 +62,7 @@ export async function pickerRefusal(runtime: CliRuntime, kit: Kit, config: KitCo
     return undefined;
   }
   const now = runtime.clock.now();
-  const inTab = asker.role === 'helper' ? undefined : meetingInTabOf((await new MeetingSchedule(runtime.files, kit.paths.meetings).read()).meetings, asker.session, now)?.id;
+  const inTab = asker.role === 'helper' ? undefined : await meetingInTabIdOf(runtime, kit, asker.session, now);
   const meeting: LeadMeeting = { open: (asker.role === 'lead' || asker.role === 'subteam-lead') && (await meetingOpen(runtime, kit)), inTab };
   return pickerReason(KIT_NAME, asker, meeting);
 }

@@ -188,6 +188,15 @@ describe('hook picker-guard', () => {
     assert.deepEqual(await locked.run(HOOK, { stdin: call('AskUserQuestion'), env: ALPHA, files }), NOTHING);
   });
 
+  it('keeps refusing the picker when the meetings schedule cannot be read, as with no meeting (#1436)', async () => {
+    const kit = new CliHarness(ON_TEAM);
+    const plain = await kit.run(HOOK, { stdin: call('AskUserQuestion'), env: ALPHA });
+    const files = new FaultyFiles(kit.files).fail('read', join(TEAM_HOME, 'state', 'meetings.jsonl'), systemError('EIO'));
+    const unread = await kit.run(HOOK, { stdin: call('AskUserQuestion'), env: ALPHA, files });
+    assert.equal(decisionOf(unread), 'deny');
+    assert.equal(reasonOf(unread), reasonOf(plain));
+  });
+
   it("prints nothing outside a team's projects or for input that is not a hook payload", async () => {
     assert.deepEqual(await new CliHarness(ON_TEAM, null).run(HOOK, { stdin: call('AskUserQuestion'), env: ALPHA }), NOTHING);
     assert.deepEqual(await new CliHarness(ON_TEAM).run(HOOK, { stdin: 'not json', env: ALPHA }), NOTHING);
