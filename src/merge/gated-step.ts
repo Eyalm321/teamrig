@@ -1,7 +1,7 @@
 import type { LeadTree } from '../config/lead-tree.ts';
 import type { RolesConfig } from '../config/types.ts';
 import type { Clock } from '../core/lock.ts';
-import { listedCommits, renamedPath, type CommitRange, type CommitStat } from '../push-guard/commit-size.ts';
+import { renamedPath, type CommitRange, type CommitStat } from '../push-guard/commit-size.ts';
 import type { PassRecord } from '../push-guard/pass-record.ts';
 import { holdApproved, reviewRoute } from '../push-guard/review-gate.ts';
 import type { Task } from '../register/fold.ts';
@@ -35,7 +35,7 @@ export interface GatedPorts {
   taskOf(id: string): Promise<GatedTask | undefined>;
   /** The tree a commit makes; undefined when git cannot read it. */
   treeOf(head: string): string | undefined;
-  /** The commits `base..head` with their files, a no answer from git, or undefined when git cannot read them. */
+  /** The commits `base..head` with their files, or why git did not list them. */
   commitsOf(base: string, head: string): CommitRange;
   /** The pass record of a tree; undefined when none proves it. */
   passOf(tree: string): Promise<PassRecord | undefined>;
@@ -130,13 +130,15 @@ export async function gatedVerdict(setup: GatedSetup, ports: GatedPorts, change:
     return { kind: 'held', reason: `could not read the tree ${short(head)} makes, so the self-merge gates cannot read its pass record` };
   }
   const read = ports.commitsOf(base, head);
-  const commits = listedCommits(read);
-  if (read !== undefined && 'unanswered' in read) {
-    return { kind: 'held', reason: `git gave no answer reading the commits of ${branch} against ${short(base)} (${read.unanswered}), so the self-merge gates cannot weigh them; merge again once git answers` };
+  switch (read.kind) {
+    case 'refused':
+      return { kind: 'held', reason: `could not read the commits of ${branch} against ${short(base)}, so the self-merge gates cannot weigh them` };
+    case 'unanswered':
+      return { kind: 'held', reason: `git gave no answer reading the commits of ${branch} against ${short(base)} (${read.reason}), so the self-merge gates cannot weigh them; merge again once git answers` };
+    case 'listed':
+      break;
   }
-  if (commits === undefined) {
-    return { kind: 'held', reason: `could not read the commits of ${branch} against ${short(base)}, so the self-merge gates cannot weigh them` };
-  }
+  const { commits } = read;
   const taskId = taskOfBranch(branch);
   const task = taskId === undefined ? undefined : await ports.taskOf(taskId);
   const pass = await ports.passOf(tree);

@@ -7,8 +7,14 @@ import { join } from 'node:path';
 import { TempRepo } from '../../tools/lib/temp-repo.ts';
 import { DEFAULT_COMMITS } from '../config/defaults.ts';
 import { runGit, type GitRun } from '../core/git-run.ts';
-import { largeCommits, listedCommits } from './commit-size.ts';
-import { commitLogWith, GIT_CLI, GIT_COMMIT_LOG, GUARD_GIT_TIMEOUT_MS, repoStateWith, type GitRunner } from './git.ts';
+import { largeCommits, type CommitRange, type CommitStat } from './commit-size.ts';
+import { COMMIT_LOG_TIMEOUT_MS, commitLogWith, GIT_CLI, GIT_COMMIT_LOG, type GitRunner } from './git.ts';
+
+/** The commits of a range git listed; fails the spec on any other result. */
+function listed(range: CommitRange): readonly CommitStat[] {
+  assert.equal(range.kind, 'listed');
+  return range.kind === 'listed' ? range.commits : [];
+}
 
 describe('GIT_CLI', () => {
   it('reads the branch of a new repository, with no push target yet', () => {
@@ -94,7 +100,7 @@ describe('GIT_COMMIT_LOG', () => {
       repo.git('commit', '-q', '-m', 'Move a');
       const commits = GIT_COMMIT_LOG.between(repo.dir, 'base', 'HEAD');
       assert.deepEqual(
-        listedCommits(commits)?.map((commit) => [commit.sha.length, commit.subject, commit.body, commit.files]),
+        listed(commits).map((commit) => [commit.sha.length, commit.subject, commit.body, commit.files]),
         [
           [40, 'Move a', '', [{ path: 'a.ts => b.ts', added: 0, deleted: 0 }]],
           [
@@ -108,15 +114,15 @@ describe('GIT_COMMIT_LOG', () => {
           ],
         ],
       );
-      assert.deepEqual(GIT_COMMIT_LOG.between(repo.dir, 'HEAD', 'HEAD'), []);
-      assert.equal(GIT_COMMIT_LOG.between(repo.dir, 'no-such-ref', 'HEAD'), undefined);
+      assert.deepEqual(GIT_COMMIT_LOG.between(repo.dir, 'HEAD', 'HEAD'), { kind: 'listed', commits: [] });
+      assert.deepEqual(GIT_COMMIT_LOG.between(repo.dir, 'no-such-ref', 'HEAD'), { kind: 'refused' });
     } finally {
       repo.remove();
     }
   });
 });
 
-describe('the guard git reads, through a runner that keeps a no answer apart (#1523)', () => {
+describe('the commit log, through a runner that keeps a no answer apart (#1523)', () => {
   const STOPPED: GitRun = { status: null, stdout: '', stderr: '', unanswered: 'stopped by SIGTERM' };
   const runner = (done: GitRun): GitRunner & { readonly limits: number[] } => {
     const limits: number[] = [];
@@ -128,24 +134,14 @@ describe('the guard git reads, through a runner that keeps a no answer apart (#1
   };
 
   it('reads a log run its time limit stopped as no answer, and only git exiting non-zero as an unknown range', () => {
-    assert.deepEqual(commitLogWith(runner(STOPPED)).between('/repo', 'main', 'HEAD'), { unanswered: 'stopped by SIGTERM' });
-    assert.equal(commitLogWith(runner({ status: 128, stdout: '', stderr: 'fatal: bad revision' })).between('/repo', 'nope', 'HEAD'), undefined);
+    assert.deepEqual(commitLogWith(runner(STOPPED)).between('/repo', 'main', 'HEAD'), { kind: 'unanswered', reason: 'stopped by SIGTERM' });
+    assert.deepEqual(commitLogWith(runner({ status: 128, stdout: '', stderr: 'fatal: bad revision' })).between('/repo', 'nope', 'HEAD'), { kind: 'refused' });
   });
 
-  it('gives each query the guard limit', () => {
+  it('gives the query its limit, under the guard limit', () => {
     const run = runner({ status: 0, stdout: '', stderr: '' });
-    commitLogWith(run).between('/repo', 'main', 'HEAD');
-    const repo = repoStateWith(run);
-    repo.branch('/repo');
-    repo.config('/repo', 'alias.ship');
-    assert.deepEqual(run.limits, [GUARD_GIT_TIMEOUT_MS, GUARD_GIT_TIMEOUT_MS, GUARD_GIT_TIMEOUT_MS]);
-  });
-
-  it('reads a stopped config run as unreadable, never as a key that is not set', () => {
-    const repo = repoStateWith(runner(STOPPED));
-    assert.deepEqual(repo.config('/repo', 'alias.ship'), { kind: 'unreadable' });
-    assert.equal(repo.branch('/repo'), undefined);
-    assert.deepEqual(repoStateWith(runner({ status: 1, stdout: '', stderr: '' })).config('/repo', 'alias.ship'), { kind: 'unset' });
+    assert.deepEqual(commitLogWith(run).between('/repo', 'main', 'HEAD'), { kind: 'listed', commits: [] });
+    assert.deepEqual(run.limits, [COMMIT_LOG_TIMEOUT_MS]);
   });
 
   it('lists a range git answers slowly within its limit, so the size rule passes it', () => {
@@ -161,9 +157,9 @@ describe('the guard git reads, through a runner that keeps a no answer apart (#1
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
         return runGit(dir, args, timeoutMs);
       };
-      const commits = listedCommits(commitLogWith(slow).between(repo.dir, 'base', 'HEAD'));
-      assert.deepEqual(commits?.map((commit) => commit.subject), ['Grow a']);
-      assert.deepEqual(largeCommits(commits ?? [], DEFAULT_COMMITS), []);
+      const commits = listed(commitLogWith(slow).between(repo.dir, 'base', 'HEAD'));
+      assert.deepEqual(commits.map((commit) => commit.subject), ['Grow a']);
+      assert.deepEqual(largeCommits(commits, DEFAULT_COMMITS), []);
     } finally {
       repo.remove();
     }
