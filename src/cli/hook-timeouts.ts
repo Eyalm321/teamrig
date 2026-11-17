@@ -51,6 +51,8 @@ export const HOOK_TIMEOUT_MS: Readonly<Record<string, number | null>> = {
   'refresh-mid': 15_000,
   'compact-check': 15_000,
   'slash-command': 180_000,
+  // The mod's hand watch runs it with HAND_TRACE_TIMEOUT_MS (plugins/teamrig/hooks/register.ts).
+  'hand-trace': 10_000,
 };
 
 // A map, so a name such as `constructor` reads as no hook rather than the object's own fields.
