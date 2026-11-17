@@ -52,7 +52,7 @@ const PEER_MESSAGE = /^<cross-session-message\b(?:[^>]*\bfrom="([^"]*)")?/;
 
 /**
  * UserPromptSubmit: where the prompt came from (#706). teamrig's wake of this tab is known by the text it kept for the
- * tab, kept with the turn log on (`hook wake-check`) and taken here, so it marks one prompt only; a peer's message
+ * tab (`hook wake-check`, turn log on or off) and taken here, so it marks one prompt only; a peer's message
  * by its tag, as the usage meter reads a peer turn; anything else is a person's.
  */
 export async function promptOriginOf(runtime: CliRuntime, scope: TurnLogScope, payload: unknown): Promise<PromptOrigin> {
@@ -61,7 +61,7 @@ export async function promptOriginOf(runtime: CliRuntime, scope: TurnLogScope, p
   if (claude === null || prompt === undefined) {
     return { kind: 'person' };
   }
-  if (scope.config.turnLog.enabled && (await new WakePrompts(runtime.files, scope.paths.wake).take(scope.id, { tab: claude, text: prompt }))) {
+  if (await new WakePrompts(runtime.files, scope.paths.wake).take(scope.id, { tab: claude, text: prompt })) {
     return { kind: 'wake' };
   }
   const peer = PEER_MESSAGE.exec(prompt.trimStart());

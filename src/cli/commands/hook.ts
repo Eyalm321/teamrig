@@ -322,7 +322,7 @@ export async function inboxReminder(args: ParsedArgs, runtime: CliRuntime): Prom
   const session = await teamSessionOf(runtime, kit, own.roster, claudeSession);
   const turnScope = session === undefined ? undefined : { config, paths: kit.paths, id: session };
   // Taken once: teamrig's wake is known by the text it kept for the tab, which marks one prompt only.
-  const origin: PromptOrigin = turnScope === undefined ? { kind: 'person' } : await promptOriginOf(runtime, turnScope, payload).catch((): PromptOrigin => ({ kind: 'person' }));
+  const origin: PromptOrigin = turnScope === undefined ? { kind: 'person' } : await promptOriginOf(runtime, turnScope, payload).catch((): PromptOrigin => ({ kind: 'unknown' }));
   if (turnScope !== undefined) {
     await logPrompt(runtime, turnScope, payload, origin).catch(() => undefined);
   }
