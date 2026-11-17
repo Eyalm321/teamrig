@@ -135,7 +135,8 @@ Flags:
   as its owner is finishing started work; a wait or a dropped task going back to `in-progress` is held like a first
   start. An expedite task and a task the owner ordered are never held.
 - `--drop-approval`: gives up the approval a leader gave the task. A set that would clear it before its step ends
-  (any status but `verifying`, `done` or `dropped`, unless it holds the approval behind a task or a time) is refused
+  (any status but `verifying`, `done` or `dropped`, unless it holds the approval behind a task or a time, or sets the
+  same wait again with the approved head in its note) is refused
   without it, naming the approval and its sha, since a merge waiting on it would be refused too: record progress with
   `teamrig update T<id> --note "..."` instead. Say it only for a new ask, such as a new head; on a set that drops no
   approval it is refused.
@@ -509,8 +510,9 @@ An approved task shows `· lead approved`
 in its waiting text and `check` flags it `READY` until its owner sets the next status, which clears the answer.
 To hold an approved task until another task lands or a time comes, set it waiting again with the approval wait and the
 new one (`--waits approval:<lead>,task:T<id>`): that keeps the approval, and `check` flags the task `READY` once the
-new wait clears, so merge then. Setting the same waits again keeps the approval too, say to log a refused merge,
-unless the note names another commit than the approval's: that asks anew, as adding a decision or another approval
+new wait clears, so merge then. Setting the same waits again keeps the approval only when the note names the
+approved head, as fully as the approval wrote it, and no other commit, say `merge refused, head <sha>`; a note with
+no head ("new head ready, please re-approve") or another commit asks anew, as adding a decision or another approval
 does, and a new head always needs one, since `ship.ts merge` takes only a head the approval's note names.
 Any set before the step ends (a status but `verifying`, `done` or `dropped`) that would clear the approval, a new
 head's ask included, would leave a merge waiting on it refused, so `set` refuses it: record progress with
@@ -4808,7 +4810,8 @@ starts for the team's code: `test`, the hooks of `merge`, `deploy` and `worktree
 sessions `launch` starts. A build or a test runs the repository's code, which needs none of the session's tokens. It waits for the lock until its line has not moved
 for `delivery.queue.waitMinutes` (60 by default). Waiters take it in their turn: each joins a line of tickets in `<lock>.queue` and only the
 first live one may take the lock, looking every 2 s; the rest look every `delivery.wait.pollSeconds` (30). With
-`delivery.queue.admission` `pipeline` the line is in admission order: a p0 step first, then by class
+`delivery.queue.admission` `pipeline` the line is in admission order: a step of the task its lead put at the
+[front](#teamrig-pipeline-front) first, then a p0 step, then by class
 turn, then by priority, which rises a level for each `delivery.queue.agingMinutes` (15) waited but never to p0, then by
 arrival. Under `pipeline` a `--small` step and a heavy step stand in two lines, each in that order: a small step waits
 only behind earlier small steps, never behind a heavy one, and a heavy one only behind earlier heavy steps. Class turns
@@ -4950,10 +4953,23 @@ owner's. The re-run waits for memory and the lock like the first run, so a human
 Claude Code's own stop notice asks.
 
 A step that runs longer than a Bash tool's wait holds that tool's shell open the whole time, and the reaper may end it
-there. Give it `--detach`: the command checks its flags and the cutoff, starts the step hidden as `teamrig queue
---detached-run <id>` with the same flags, prints `QUEUED <id>: <what> runs detached; log <path>; <session>'s inbox gets
-a line when it starts and when it ends` and returns at once (exit 0). The hidden run outlives the shell, so it watches
-no shell; it waits for memory and the lock like any step, and its output and the queue's own lines go to
+there. Give it `--detach`: the command checks its flags and the cutoff, parks the step as a file in
+`<delivery dir>/detached/parked/` (its command, its folder, and of its environment only teamrig's own `TEAMRIG_*`
+variables and an allow-list of system ones such as `PATH`, `TEMP` and `NODE_OPTIONS`, so no secret lands on disk),
+makes sure the team's one hidden dispatcher runs (`teamrig queue --dispatch`, started by `--detach` only), prints `QUEUED <id>: <what> runs
+detached; log <path>; <session>'s inbox gets a line when it starts and when it ends` and returns at once (exit 0). The
+dispatcher takes each parked step and runs it as `teamrig queue --detached-run <id>` with the same flags inside its own
+process, so thirty waiting steps cost one node process, not thirty. A step runs with the dispatcher's environment
+under its own parked variables: every other variable, credentials too, is the dispatcher's, held in memory, and
+whoever started the dispatcher (a session's `--detach`, or a start or idle pass) is the same OS user on the same host;
+`delivery.passEnv` still decides which credentials the step's command gets. The dispatcher's teamrig and Claude Code
+session variables never reach a step: it keeps its own parker's session id and project folder, and goes without a
+messaging socket or token. The dispatcher ends once nothing is
+parked or running, and its
+own lines go to `<delivery dir>/detached/dispatcher.log`. Steps left parked with no dispatcher running, as after a
+reboot, get a new one from the next `teamrig start` of any session of the team or the next idle pass. The hidden run
+outlives the shell, so it watches no shell; it waits for memory and the lock like any step, and its output and the
+queue's own lines go to
 `<delivery dir>/detached/<id>.log`. Its session's inbox gets `queue <id> started: <what>; log <path>` when it takes its
 turn, and a line that wakes the session, `queue <id> ended: <what>: <last line>; log <path>`, when it ends (`DONE exit
 0`, `FAILED exit <n>`, `TIMED OUT ...`) or is refused (`REFUSED ...`). The run keeps a record,
@@ -5023,6 +5039,8 @@ Flags:
   the session's inbox (see above); refused with `--pre-push` and under a live host lock (exit 64).
 - `--detached-run <id>`: the hidden run `--detach` or a hand-over starts, `<id>` its `<UTC yyyymmdd-hhmmss>-<pid>`; set
   by them only, so another value is refused (exit 64), as is `--detach` with it.
+- `--dispatch`: the team's hidden dispatcher that runs the parked steps (see above); started by `--detach` and the
+  start or idle pass only, it takes no other flag or command (exit 64), and a second one ends at once.
 - `--arrived-at <ms>`: the epoch milliseconds a handed-over step first joined the line, so its detached run keeps that
   place; set by the hand-over only, with `--detached-run`; refused (exit 64) by hand or past now.
 
@@ -5216,6 +5234,35 @@ Output:
 
 ```text
 UNFROZEN F3 2030-01-09 02:00 IST → 2030-01-09 04:00 IST, all steps, by lead (backup)
+```
+
+### teamrig pipeline front
+
+Puts one of the team's active tasks at the front of the host line, say the fix of a blocker that holds other work: the
+steps queued for it (`teamrig queue --task`, `teamrig merge` on its branch) go first, ahead of the steps queued before
+them, instead of waiting their turn. A step already waiting moves at its next look at its task, within a minute. One
+task at a time: a new front replaces the last, `--off` takes it off, and fronting the task already there keeps its
+place. Each team's lead fronts only its own team's tasks; when two teams on the host front a task, the one put there
+first goes first. `delivery.queue.admission` `serial` keeps its plain order and ignores fronts.
+
+The lead only, since it moves every other session's steps back. REFUSED (exit 2) for a task the register lacks, one
+not active (open, in-progress, verifying, waiting), or another session.
+
+Flags:
+
+- `--off`: takes the task at the front off; its steps wait in the line's usual order again.
+- `--session <id|name>`: the lead; default `$TEAMRIG_SESSION`.
+
+Example:
+
+```sh
+teamrig pipeline front T5 --session lead
+```
+
+Output:
+
+```text
+FRONT T5: its queued steps go first in the host line (replaces T3)
 ```
 
 ### teamrig merge
