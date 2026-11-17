@@ -935,12 +935,13 @@ describe('runCli: hook service-role-guard', () => {
 
 describe('runCli: hook gh-guard', () => {
   const GH_TEAM: JsonRecord = { ...TEAM, github: { repos: ['acme/web'] } };
-  /** A folder whose origin is `url`. */
-  const origin = (url: string) => ({
+  /** A folder whose remotes have `urls`, in git's config order. */
+  const remotes = (...urls: string[]) => ({
     branch: () => 'main',
     head: () => undefined,
-    remoteUrls: () => [], pushTarget: () => undefined,
-    config: (_dir: string, key: string) => (key === 'remote.origin.url' ? { kind: 'set' as const, value: url } : { kind: 'unset' as const }),
+    remoteUrls: () => urls,
+    pushTarget: () => undefined,
+    config: () => ({ kind: 'unset' as const }),
   });
 
   it('refuses raw gh on a listed repository, naming the teamrig command, and lets other repositories run', async () => {
@@ -953,11 +954,12 @@ describe('runCli: hook gh-guard', () => {
     assert.deepEqual((await kit.run(['hook', 'gh-guard'], { stdin: bash('gh issue edit 12 -R acme/other --add-label p1') })).stdout, []);
   });
 
-  it("reads the folder's origin when the call names no repository", async () => {
+  it("reads the folder's remotes when the call names no repository: origin, or a fork's upstream", async () => {
     const kit = new CliHarness(GH_TEAM);
     const close = bash('gh issue close 3');
-    assert.equal(decisionOf(await kit.run(['hook', 'gh-guard'], { stdin: close, git: origin('git@github.com:Acme/web.git') })), 'deny');
-    assert.deepEqual((await kit.run(['hook', 'gh-guard'], { stdin: close, git: origin('https://github.com/acme/other') })).stdout, []);
+    assert.equal(decisionOf(await kit.run(['hook', 'gh-guard'], { stdin: close, git: remotes('git@github.com:Acme/web.git') })), 'deny');
+    assert.equal(decisionOf(await kit.run(['hook', 'gh-guard'], { stdin: close, git: remotes('https://github.com/me/web.git', 'https://github.com/acme/web') })), 'deny');
+    assert.deepEqual((await kit.run(['hook', 'gh-guard'], { stdin: close, git: remotes('https://github.com/acme/other', 'https://ghe.example.com/acme/web') })).stdout, []);
   });
 
   it('prints nothing with no repositories listed, a broken config, outside a team, or for input that is not a hook payload', async () => {

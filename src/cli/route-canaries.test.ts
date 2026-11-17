@@ -23,7 +23,8 @@ const GUARDS = ['push-guard', 'package-guard', 'secret-guard', 'db-write-guard',
 const GIT: RunOptions['git'] = {
   branch: () => 't1-canary',
   head: () => undefined,
-  remoteUrls: () => [], pushTarget: () => undefined,
+  remoteUrls: () => [],
+  pushTarget: () => undefined,
   config: (_dir, key) => (key === 'remote.origin.url' ? { kind: 'set', value: 'u' } : { kind: 'unset' }),
 };
 

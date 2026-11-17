@@ -18,7 +18,8 @@ const HOME = '/u';
 const repo: RepoState = {
   branch: () => 'feature',
   head: () => undefined,
-  remoteUrls: () => [], pushTarget: (_dir, branch) => `origin/${branch ?? 'feature'}`,
+  remoteUrls: () => [],
+  pushTarget: (_dir, branch) => `origin/${branch ?? 'feature'}`,
   config: () => ({ kind: 'unset' }),
 };
 const readRules: ReadonlyRules = { prefixes: [prefixWords('npx tsc --noEmit')], exported: new Set(['PATH', 'HOME']), exportsAll: false };

@@ -71,7 +71,8 @@ describe('hook prompt-refuse', () => {
     const git: RunOptions['git'] = {
       branch: () => 'dev',
       head: () => undefined,
-      remoteUrls: () => [], pushTarget: () => undefined,
+      remoteUrls: () => [],
+      pushTarget: () => undefined,
       config: (_dir, key) => (key === 'remote.origin.url' ? { kind: 'set', value: 'u' } : { kind: 'unset' }),
     };
     const push = (command: string, env: Env): Promise<CliResult> => kit.run(HOOK, { stdin: bashRequest(command), env, git });
@@ -87,7 +88,8 @@ describe('hook prompt-refuse', () => {
     const git: RunOptions['git'] = {
       branch: () => 'dev',
       head: () => undefined,
-      remoteUrls: () => [], pushTarget: () => undefined,
+      remoteUrls: () => [],
+      pushTarget: () => undefined,
       config: () => {
         throw new Error('git is gone');
       },

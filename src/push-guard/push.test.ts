@@ -33,7 +33,8 @@ function fakeRepo({ branch = 'feature', pushTarget, config = {}, unreadable = []
   return {
     branch: mock.fn((_dir: string): string | undefined => branch),
     head: mock.fn((_dir: string): string | undefined => undefined),
-    remoteUrls: () => [], pushTarget: mock.fn((_dir: string, _branch?: string): string | undefined => pushTarget),
+    remoteUrls: () => [],
+    pushTarget: mock.fn((_dir: string, _branch?: string): string | undefined => pushTarget),
     config: mock.fn((_dir: string, key: string): ConfigValue => {
       if (unreadable.includes(key)) {
         return { kind: 'unreadable' };
