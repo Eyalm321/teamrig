@@ -64,6 +64,9 @@ describe('runCli: commits check', () => {
     const failed = await kit.run(['commits', 'check', '--base', 'nope'], { commitLog: { between: () => undefined } });
     assert.equal(failed.code, EXIT.failed);
     assert.match(failed.stderr.join('\n'), /git cannot list the commits in nope\.\.HEAD/);
+    const slow = await kit.run(['commits', 'check', '--base', 'main'], { commitLog: { between: () => ({ unanswered: 'stopped by SIGTERM' }) } });
+    assert.equal(slow.code, EXIT.failed);
+    assert.match(slow.stderr.join('\n'), /git gave no answer listing the commits in main\.\.HEAD from .* \(stopped by SIGTERM\); run it again once git answers/);
     assert.equal((await kit.run(['commits', 'check'])).code, EXIT.usage);
   });
 });
