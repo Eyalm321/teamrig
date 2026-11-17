@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_COMMITS } from '../config/defaults.ts';
 import { LeadTree } from '../config/lead-tree.ts';
-import type { CommitStat } from '../push-guard/commit-size.ts';
+import type { CommitRange, CommitStat } from '../push-guard/commit-size.ts';
 import type { PassRecord } from '../push-guard/pass-record.ts';
 import type { ApprovalVerdict } from '../register/events.ts';
 import { testConfig } from '../testing/config.ts';
@@ -37,7 +37,7 @@ class Step {
   readonly tasks = new Map<string, GatedTask>([['T9', { owner: 'alpha', status: 'in-progress', answer: null }]]);
   readonly said: string[] = [];
   tree: string | undefined = TREE;
-  commits: readonly CommitStat[] | undefined = COMMITS;
+  commits: CommitRange = COMMITS;
   pass: PassRecord | undefined = PASS;
 
   run(change: Partial<GatedChange> = {}, setup: GatedSetup = SETUP): Promise<GatedVerdict> {
@@ -90,6 +90,15 @@ describe('gatedVerdict: a change that holds every gate', () => {
     step.tree = TREE;
     step.commits = undefined;
     assert.match(reasonOf(await step.run()), /^could not read the commits of t9-gate against bbbbbbbb/);
+  });
+
+  it('is held as git giving no answer when its log run was stopped, not as unreadable commits (#1523)', async () => {
+    const step = new Step();
+    step.commits = { unanswered: 'stopped by SIGTERM' };
+    assert.equal(
+      reasonOf(await step.run()),
+      'git gave no answer reading the commits of t9-gate against bbbbbbbb (stopped by SIGTERM), so the self-merge gates cannot weigh them; merge again once git answers',
+    );
   });
 });
 
