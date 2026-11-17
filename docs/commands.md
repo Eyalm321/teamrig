@@ -584,8 +584,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       it reuses their pass of the last 24 hours (DONE at once, even from the cutoff on) and records one
       when they pass; when they waited over a minute for the lock it declines the push (REFUSED), whose
       connection may have closed meanwhile: push again, it reuses the pass. --detach (a step longer than a
-      Bash tool's wait): prints QUEUED <id> at once and runs the step hidden as queue --detached-run <id>
-      (set only by --detach and that hand-over, which adds --arrived-at <ms>), which outlives its shell, so no shell watch stops it, its output and lines in
+      Bash tool's wait): prints QUEUED <id> at once and parks the step for the team's one hidden dispatcher
+      (queue --dispatch), which runs it as queue --detached-run <id> in its own process, so a waiting step
+      holds a file, not a node process (set only by --detach and that hand-over, which adds --arrived-at <ms>), which outlives its shell, so no shell watch stops it, its output and lines in
       <delivery dir>/detached/<id>.log; its session's inbox gets a line when it starts and a waking one
       when it ends or is refused, or, from the next start or idle pass, when it died with no end of its
       own (queue <id> died ...). Refused with --pre-push and under a live host lock
@@ -618,6 +619,11 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       lead or the delivery owner only; REFUSED for a start in the past or a secret in the reason
   pipeline unfreeze <id> [--session <id|name>]   ends pipeline freeze <id> (F3) now, or drops one
       still to come; the lead or the delivery owner only
+  pipeline front <task>|--off [--session <id|name>]   puts one of the team's active tasks at the
+      front of the host line, say a blocker's fix: its queued steps go first, ahead of the steps
+      queued before them; a new front replaces the last, --off takes it off. Each team's lead fronts
+      only its own team's tasks, two teams' fronts in the order they were put; serial admission
+      ignores fronts. The lead only; REFUSED for a task the register lacks or not active
   merge [--session <id|name>] [--keep-remote] [--no-delete-local]   merges the branch checked out
       here into origin's default branch: REFUSED for a detached HEAD, the default branch, uncommitted
       changes, nothing new, a dependency change delivery.repos.<name>.dependencyGate holds and
