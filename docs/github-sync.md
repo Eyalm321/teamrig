@@ -274,7 +274,7 @@ team after your last reply, so a "any news?" follow-up does not restart the wait
 author is a login of `github.owners` or the account that owns the repository; an outside contributor given
 collaborator access still waits on you. A team whose `github.owners` names no one counts every member's, owner's and
 collaborator's post as its own. A bot's post counts as nobody's. On a pull request a review counts as a post, once
-submitted. The target depends on the thread:
+submitted; a draft waits on nobody until it is marked ready for review. The target depends on the thread:
 
 | Thread | Answer within |
 | --- | --- |

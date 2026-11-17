@@ -131,6 +131,22 @@ describe('the response clock in issue sync (T3028)', () => {
     assert.deepEqual(running(), [], 'a login of github.owners answers it');
   });
 
+  it('keeps no clock on a draft pull request; its wait starts once it is marked ready (#1366)', async () => {
+    const kit = new CliHarness(GITHUB_TEAM);
+    const opened = new Date(kit.clock.now()).toISOString();
+    const pull = (draft: boolean): FakeGh =>
+      new FakeGh().holds('acme/web', []).holdsPulls('acme/web', [ghPull('acme/web', 12, { authorAssociation: 'NONE', author: 'stranger', createdAt: opened, updatedAt: opened, isDraft: draft })]);
+    const running = (): readonly string[] => [...parseClocks(kit.files.get(CLOCKS) ?? '').keys()];
+
+    await sync(kit, pull(true));
+    assert.deepEqual(running(), [], 'a draft asks nobody to look yet');
+    kit.clock.advance(30 * HOUR);
+    await sync(kit, pull(true));
+    assert.deepEqual(running(), [], 'still a draft past its target: no clock');
+    await sync(kit, pull(false));
+    assert.deepEqual(running(), ['gh:acme/web#12'], 'marked ready: it waits on us');
+  });
+
   it("keeps a repository's clocks when its pull requests could not be read", async () => {
     const kit = new CliHarness(GITHUB_TEAM);
     const issue = ghIssue('acme/web', 9, { authorAssociation: 'NONE', createdAt: new Date(kit.clock.now()).toISOString() });

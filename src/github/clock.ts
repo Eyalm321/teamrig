@@ -126,10 +126,11 @@ export function issueThread(issue: HostIssue, ref: string, owner: string, held: 
 
 /**
  * An open pull request as a `pull` thread: its opening and its comments and reviews read, a bot's left out, each ours
- * by postIsOurs, as on an issue; `owner` answers it. Undefined for a merged or closed one.
+ * by postIsOurs, as on an issue; `owner` answers it. Undefined for a merged or closed one, and for a draft: it asks
+ * nobody to look yet, so its wait starts once it is marked ready.
  */
 export function pullThread(pull: HostPull, ref: string, owner: string, ours: OurLogins): Thread | undefined {
-  if (pull.state !== 'open') {
+  if (pull.state !== 'open' || pull.draft) {
     return undefined;
   }
   const opening = { at: pull.createdAt, login: pull.author, authorAssociation: pull.authorAssociation, authorKind: pull.authorKind };
