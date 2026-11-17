@@ -366,7 +366,7 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       its Claude Code) and which lost their tab: the terminal that started it has ended; without --yes
       it ends nothing, with --yes it ends each orphaned one and what it started, never its own tab's
   rename <id|name> <new-name>  records a session's new name; its old names keep finding it
-      (the session itself or the lead)
+      (the session itself or the lead); then prints the follow-up steps under the new name
   hire <id> --scope "<its job>" --reason "<why>" [--name <name>] [--model <model>] [--effort <level>]
       [--review <YYYY-MM-DD>] [--approved-by "<who>"] [--burst] [--yes]
       (a lead: the lead, or a sub-lead into its own group) adds a worker the leader is sure the team needs,
