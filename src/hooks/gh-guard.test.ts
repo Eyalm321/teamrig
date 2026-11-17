@@ -139,6 +139,22 @@ describe('ghGuardOutput: option spellings', () => {
     assert.match(reason('gh issue close 12 -c "-R acme/other"') ?? '', /teamrig issue close acme\/web#12/);
   });
 
+  it("reads the -R after a switch that shares a letter with another command's valued option", () => {
+    const lines = [
+      'gh pr merge 12 -s -R acme/web',
+      'gh pr merge 12 -r -R acme/web',
+      'gh pr merge 12 -m -R acme/web',
+      'gh pr review 12 -a -R acme/web',
+      'gh pr review 12 -c -R acme/web -b hi',
+      'gh issue develop 12 -c -R acme/web',
+      'gh release create v1 -p -R acme/web',
+      'gh cache delete -a -R acme/web',
+    ];
+    for (const line of lines) {
+      assert.ok(reason(line, ENV, '/work/other') !== undefined, line);
+    }
+  });
+
   it('stops reading options at --, and passes what it cannot tie to a repository', () => {
     assert.equal(reason('gh issue close 3 -- -R acme/web', ENV, '/elsewhere'), undefined);
     for (const line of ['gh issue', 'gh run list -R "$R"', 'gh api "$P"', 'gh api repos/{owner}/{repo}/issues -X GET']) {
