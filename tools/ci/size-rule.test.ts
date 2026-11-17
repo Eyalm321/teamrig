@@ -13,13 +13,13 @@ function commitOf(path: string, lines: number, body = ''): CommitStat {
 }
 
 /** A commit log that answers base..tip with `commits` and records each range it was asked for. */
-function fakeLog(commits: CommitRange): CommitLog & { readonly asked: string[] } {
+function fakeLog(range: CommitRange | readonly CommitStat[]): CommitLog & { readonly asked: string[] } {
   const asked: string[] = [];
   return {
     asked,
     between: (dir, base, tip) => {
       asked.push(`${dir} ${base}..${tip}`);
-      return commits;
+      return 'kind' in range ? range : { kind: 'listed', commits: range };
     },
   };
 }
@@ -38,11 +38,11 @@ describe('checkCommitSizes', () => {
   });
 
   it('throws when git cannot list the range', () => {
-    assert.throws(() => run('main', fakeLog(undefined)), { message: 'git cannot list the commits in main..HEAD' });
+    assert.throws(() => run('main', fakeLog({ kind: 'refused' })), { message: 'git cannot list the commits in main..HEAD' });
   });
 
   it('throws naming no answer, not an unlistable range, when the log run was stopped (#1523)', () => {
-    assert.throws(() => run('main', fakeLog({ unanswered: 'stopped by SIGTERM' })), {
+    assert.throws(() => run('main', fakeLog({ kind: 'unanswered', reason: 'stopped by SIGTERM' })), {
       message: 'git gave no answer listing the commits in main..HEAD (stopped by SIGTERM); run it again once git answers',
     });
   });

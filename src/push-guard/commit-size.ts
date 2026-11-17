@@ -15,15 +15,14 @@ export interface CommitStat {
 }
 
 /**
- * A range git gave no answer for (#1523): it was stopped by its time limit, did not start, or died starting. A loaded
- * host causes it, so a reader says git gave no answer, never that the range is unknown.
+ * What git gave for a range: its commits, newest first; `refused` when git said it cannot tell (an unknown ref, no
+ * repository); or `unanswered` when git gave no answer of its own (#1523): stopped by its time limit, not started, or
+ * died starting. A loaded host causes the last, so a reader says git gave no answer, never that the range is unknown.
  */
-export interface CommitsUnanswered {
-  readonly unanswered: string;
-}
-
-/** The commits of a range, newest first; a no answer; or undefined when git says it cannot tell (an unknown ref, no repository). */
-export type CommitRange = readonly CommitStat[] | CommitsUnanswered | undefined;
+export type CommitRange =
+  | { readonly kind: 'listed'; readonly commits: readonly CommitStat[] }
+  | { readonly kind: 'refused' }
+  | { readonly kind: 'unanswered'; readonly reason: string };
 
 /** What the commit-size rule reads from a repository; the hook asks git, tests pass a fake. */
 export interface CommitLog {
@@ -31,14 +30,14 @@ export interface CommitLog {
   between(dir: string, base: string, tip: string): CommitRange;
 }
 
-/** The commits git listed, or undefined for a range git refused or gave no answer for. */
-export function listedCommits(range: CommitRange): readonly CommitStat[] | undefined {
-  return range === undefined || 'unanswered' in range ? undefined : range;
-}
-
-/** Why a range {@link listedCommits} gave nothing for could not be read: git's no answer apart from git's own refusal. */
-export function unreadRange(range: CommitRange, what: string): string {
-  return range !== undefined && 'unanswered' in range ? `git gave no answer listing ${what} (${range.unanswered}); run it again once git answers` : `git cannot list ${what}`;
+/** Why a range git did not list could not be read: git's no answer apart from git's own refusal. */
+export function unreadRange(range: Exclude<CommitRange, { readonly kind: 'listed' }>, what: string): string {
+  switch (range.kind) {
+    case 'refused':
+      return `git cannot list ${what}`;
+    case 'unanswered':
+      return `git gave no answer listing ${what} (${range.reason}); run it again once git answers`;
+  }
 }
 
 /** What a commit weighs against the rule: the changed lines and files that are not tests. */

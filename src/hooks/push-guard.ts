@@ -3,7 +3,7 @@ import type { ConfigLoad } from '../config/load.ts';
 import type { CommitsConfig, PushToProtected, SkipHooks } from '../config/types.ts';
 import { toolCommandReadings } from '../core/bash-tool-readings.ts';
 import { isRecord, recordField, stringField } from '../core/guards.ts';
-import { describeLargeCommits, largeCommits, listedCommits, type CommitLog, type CommitStat, type LargeCommit } from '../push-guard/commit-size.ts';
+import { describeLargeCommits, largeCommits, type CommitLog, type CommitStat, type LargeCommit } from '../push-guard/commit-size.ts';
 import { hookSkips, type HookSkip } from '../push-guard/hook-skips.ts';
 import { findGitInvocations } from '../push-guard/invocations.ts';
 import {
@@ -95,7 +95,8 @@ function largeCommitsIn(updates: readonly ProtectedUpdate[], env: PushGuardEnv):
   }
   const commits = new Map<string, CommitStat>();
   for (const update of updates) {
-    for (const commit of listedCommits(env.commitLog.between(update.dir, update.base, update.source)) ?? []) {
+    const read = env.commitLog.between(update.dir, update.base, update.source);
+    for (const commit of read.kind === 'listed' ? read.commits : []) {
       commits.set(commit.sha, commit);
     }
   }
