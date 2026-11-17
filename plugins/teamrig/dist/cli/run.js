@@ -5,7 +5,7 @@ import { KIT_VERSION } from "../core/version.js";
 import { isSettingsWriter, settingsWriteRefusal, WRITE_SWITCH } from "../core/settings-writers.js";
 import { cutLineMessage, shimArgs } from "./cmd-shim.js";
 import { CommandHelp } from "./help.js";
-import { COMMON_FLAGS, parseArgs, UsageError } from "./args.js";
+import { parseArgs, UsageError } from "./args.js";
 import { RENAMED } from "./renamed.js";
 import { EXIT, RefusedError } from "./runtime.js";
 const registerCommands = () => import("./commands/register.js");
@@ -1081,15 +1081,13 @@ export async function runCli(given, runtime) {
             throw new UsageError(`unknown command "${args.command}"`);
         }
         refuseSettingsWrite(args.command, args.switches, runtime);
-        let given = args;
-        if (COMMON_FLAGS.some((name) => args.flags.has(name) && !spec.flags.includes(name))) {
+        if (args.common.size > 0) {
             // Loaded only then, as it reads the team's config: a hook passes neither flag and loads only its own code.
             const common = await import("./common-flags.js");
-            await common.checkCommonFlags(args.command, spec.flags, args, runtime);
-            given = common.withoutUndeclared(args, spec.flags);
+            await common.checkCommonFlags(args, runtime);
         }
         const command = await spec.load();
-        return await command(given, runtime);
+        return await command(args, runtime);
     }
     catch (error) {
         if (error instanceof UsageError) {

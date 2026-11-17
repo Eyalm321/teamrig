@@ -56,14 +56,15 @@ export function parseArgs(argv, commandFlags, commandSwitches = {}, renamed = {}
     const switchable = commandSwitches[command] ?? [];
     const positionals = [];
     const flags = new Map();
+    const common = new Map();
     const switches = new Set();
     for (let index = 0; index < tail.length; index += 1) {
         const token = tail[index] ?? '';
         if (HELP_FLAGS.has(token)) {
-            return { command, positionals: [], flags: new Map(), switches: new Set(), rest: [], help: true };
+            return { command, positionals: [], flags: new Map(), switches: new Set(), rest: [], help: true, common: new Map() };
         }
         if (token === REST_MARKER && restCommands.has(command)) {
-            return { command, positionals, flags, switches, rest: tail.slice(index + 1), help: false };
+            return { command, positionals, flags, switches, rest: tail.slice(index + 1), help: false, common };
         }
         if (!token.startsWith('--')) {
             positionals.push(token);
@@ -88,13 +89,13 @@ export function parseArgs(argv, commandFlags, commandSwitches = {}, renamed = {}
         if (value === undefined || value.startsWith('--')) {
             throw new UsageError(`${token} needs a value`, command);
         }
-        if (flags.has(name)) {
+        if (flags.has(name) || common.has(name)) {
             throw new UsageError(`${token} is given twice`, command);
         }
-        flags.set(name, value);
+        (allowed.includes(name) ? flags : common).set(name, value);
         index += 1;
     }
-    return { command, positionals, flags, switches, rest: [], help: false };
+    return { command, positionals, flags, switches, rest: [], help: false, common };
 }
 export function noPositionals(args) {
     const [extra] = args.positionals;
