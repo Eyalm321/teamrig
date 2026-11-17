@@ -75,9 +75,11 @@ Flags:
   `--type` (`bug`, else `enhancement`) and `--priority` (p0 and p1 as `p1`, p2 as `p2`, lower as `p3`), and points
   the task's ref at it, so the sync adds no second task for it. The issue is public: one-line title, no task id,
   no secret, no private data (a home folder path, an e-mail address, an IP address, an internal host); the task
-  keeps its own title and description. It opens with the token saved for the repository's owner. When GitHub fails
-  the task stays written with no issue (`FAILED T<n>'s issue: ...`, exit 1); with GitHub off on the machine it
-  prints `OFF`. An add that posts its issue is not let through as a register command: it is judged as every
+  keeps its own title and description. It opens with the token saved for the repository's owner. All or nothing:
+  the add is judged, the issue opened, then the task written with its ref, so when GitHub fails nothing is written
+  (`FAILED the new task's issue: ...`, exit 1), and with GitHub off on the machine the add is refused (use
+  `--local`, or turn GitHub on). A task refused after its issue opened (one written between the two) closes that
+  issue as not planned (`CLOSED`), or says to close it by hand. An add that posts its issue is not let through as a register command: it is judged as every
   GitHub write is.
 - `--issue-body "<public text>"`: the issue's body; it comes with `--issue`.
 - `--issue-repo <owner/repo>`: where the issue opens, one of `github.repos`; else `[github.issueAtAdd]`, else the
@@ -4899,10 +4901,18 @@ both ends (`queueFreeMb`, `endFreeMb`). Exit 0 when the command passed, 1 when i
 and once more after the wait (`REFUSED the pipeline is frozen until 2030-01-08 14:00 IST by po (PC down; F2); ...
 teamrig pipeline unfreeze F2`), and while the freezes file is unreadable. A step whose command names a delivery
 repository's `shipTool` is REFUSED unless the tool is a tracked file of a checkout with no change whose HEAD makes
-the default branch's tree as of the last fetch, looked at as it is queued and once more after the wait, when the
-checkout must still be at that commit or at the newest main (`REFUSED the ship tool ... is not origin/main's current
-code in a checkout with no change: run git -C <checkout> fetch -q origin && git -C <checkout> checkout -q --detach
-origin/main, then queue the step again`). A git read of that checkout that got no answer (git did not start, was
+the default branch's tree as of the last fetch, looked at as it is queued and once more after the wait. After the
+wait the checkout must still be at that commit or at the newest main, or at a commit of main's history after it where
+no file the tool runs at either commit changed: the tool; the files its roots file beside it names as data
+(`<tool>.roots.json`, such as `tools/ship/ship.roots.json` holding `{"roots": ["src/cli/main.ts", "package.json"]}`:
+a CLI it spawns by a joined path, the package files that set how its modules load), and that file itself; every file
+those reach through their relative imports, read from the code and never from a comment or a string; and the data
+files they open beside themselves (`new URL('./repos.json', import.meta.url)`). So a ship that waited while main moved
+on still runs when the tool's own code is the same. A closure that cannot be read whole (a file missing, an import
+outside the checkout, a roots file that is not that JSON or names a path outside the checkout, more than 2000 files) runs only at the queued commit or the newest main (`REFUSED the ship tool ... is not
+origin/main's current code in a checkout with no change: run git -C <checkout> fetch -q origin && git -C <checkout>
+checkout -q --detach origin/main, then queue the step again`), and the refusal of a changed tool names its changed
+files (`REFUSED the ship tool ... changed from <commit> while the step waited (tools/ship/repos.ts) and is not ...`). A git read of that checkout that got no answer (git did not start, was
 stopped, or died starting, as under a burst of new processes) says nothing of the tool: as the step is queued it pins
 no commit, so only the newest main runs, and the check reads again up to 4 times, 15 s apart, before it is REFUSED
 naming the read and git's error (`REFUSED could not read the checkout of the ship tool ..., so the step did not run:

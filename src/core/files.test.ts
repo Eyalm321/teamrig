@@ -1,12 +1,23 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, open, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, open, readdir, rm, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isTemporaryName, nodeFiles } from './files.ts';
+import { errorCode } from './guards.ts';
 import { realSleep } from './lock.ts';
 import { TRANSIENT_RETRY_DELAYS_MS } from './retry.ts';
+
+/** Whether a removed file's name stays, pending its delete: a look at it is refused, never found missing. */
+async function stillNamed(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    return errorCode(error) !== 'ENOENT';
+  }
+}
 
 describe('nodeFiles', () => {
   const files = nodeFiles(realSleep);
@@ -102,6 +113,45 @@ describe('nodeFiles', () => {
     if (process.platform === 'win32') {
       assert.equal(waits, holdFor);
     }
+  });
+
+  it('reads a file removed while another process holds it open as missing once the holder closes it (T3201)', async () => {
+    const folder = join(root, 'pending');
+    const [ticket, tail, head] = ['ticket.json', 'tail.jsonl', 'head.txt'].map((name) => join(folder, name));
+    if (ticket === undefined || tail === undefined || head === undefined) {
+      throw new Error('three paths');
+    }
+    for (const path of [ticket, tail, head]) {
+      await files.write(path, 'x');
+    }
+    // A file removed while a handle holds it open stays, pending its delete, where Windows deletes without POSIX
+    // semantics, and every open of it is refused with EPERM until that handle closes; elsewhere, and on a Windows whose
+    // delete has POSIX semantics, the name is gone at once.
+    const holders = await Promise.all([ticket, tail, head].map((path) => open(path, 'r')));
+    let closed = false;
+    const closeHolders = async (): Promise<void> => {
+      if (!closed) {
+        closed = true;
+        await Promise.all(holders.map((holder) => holder.close()));
+      }
+    };
+    for (const path of [ticket, tail, head]) {
+      await unlink(path);
+    }
+    const pending = await stillNamed(ticket);
+    let waits = 0;
+    const reader = nodeFiles(async () => {
+      waits += 1;
+      await closeHolders();
+    });
+    try {
+      assert.equal(await reader.read(ticket), undefined);
+      assert.equal(await reader.readTail(tail, 10), undefined);
+      assert.equal(await reader.readHead(head, 10), undefined);
+    } finally {
+      await closeHolders();
+    }
+    assert.equal(waits, pending ? 1 : 0, pending ? 'the refused open waited once, until the holders closed' : 'a name gone at once reads as missing without a wait');
   });
 
   it('reads at most the first bytes of a regular file, and nothing that is no regular file', { timeout: 10_000 }, async () => {

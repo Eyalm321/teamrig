@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, posix, resolve } from 'node:path';
 import { DEFAULT_WORKTREE_FOLDER } from '../config/defaults.ts';
 import type { DeliveryRepoConfig, KitConfig } from '../config/types.ts';
 import { taskFolder } from '../core/home.ts';
@@ -6,10 +6,11 @@ import { isAtOrBelow, samePath } from '../core/paths.ts';
 import { teamPlace } from '../delivery/places.ts';
 import { takesShipSlot, type StepKind } from '../delivery/process-request.ts';
 import type { Sleep } from '../core/lock.ts';
-import { FALLBACK_BRANCH, ORIGIN, type GitRead, type MergeGit } from '../merge/git.ts';
+import { FALLBACK_BRANCH, ORIGIN, pathInCheckout, type GitRead, type MergeGit } from '../merge/git.ts';
 import { taskBranchOf } from '../permissions/route-git.ts';
 import type { ShipRun } from '../permissions/ship-role-call.ts';
 import { JsonlEventLog } from '../register/store.ts';
+import { moduleSpecifiersOf } from './module-specifiers.ts';
 import type { Kit } from './kit.ts';
 import type { CliRuntime } from './runtime.ts';
 
@@ -171,6 +172,110 @@ export function shipKindRefusal(kit: Kit, config: KitConfig, words: readonly str
   return undefined;
 }
 
+/** The most files the code a ship tool runs is read to; a larger closure tells nothing, so the start check fails closed. */
+export const TOOL_CODE_MAX_FILES = 2000;
+
+/** A file a module loads whose own imports are followed: JavaScript or TypeScript code, not a data file. */
+const MODULE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+/**
+ * The file beside a ship tool that names, as data, the files it runs beside its imports (T3419): a CLI it spawns by a
+ * joined path, the package files that set how its modules load. `tools/ship/ship.ts` has `tools/ship/ship.roots.json`.
+ */
+export function toolRootsPath(tool: string): string {
+  const extension = posix.extname(tool);
+  return `${extension === '' ? tool : tool.slice(0, -extension.length)}.roots.json`;
+}
+
+/** A roots file's shape: `{ "roots": ["src/cli/main.ts", "package.json"] }`, each path from the checkout's top. */
+function isRootsFile(value: unknown): value is { readonly roots: readonly string[] } {
+  return typeof value === 'object' && value !== null && 'roots' in value && Array.isArray(value.roots) && value.roots.every((root) => typeof root === 'string');
+}
+
+/**
+ * The roots a roots file names, as paths in the checkout; undefined when it is no JSON of that shape, or a root is
+ * absolute or leaves the checkout, so the caller cannot tell what the tool runs.
+ */
+export function toolRootsOf(text: string): string[] | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRootsFile(value)) {
+    return undefined;
+  }
+  const roots = value.roots.map((root) => posix.normalize(root));
+  return roots.some((root) => root === '.' || root.startsWith('../') || posix.isAbsolute(root) || /^[A-Za-z]:/.test(root)) ? undefined : roots;
+}
+
+/**
+ * The repository paths a module at `path` loads by a relative specifier: an import (`from './x.ts'`, `import('../y.ts')`)
+ * or a file it reads beside it (`new URL('./repos.json', import.meta.url)`), so a data file the tool runs on is its code
+ * too. Read from the module's code, never its comments or strings (see {@link moduleSpecifiersOf}); undefined when the
+ * code cannot be read apart from its text.
+ */
+export function relativeImportsOf(text: string, path: string): string[] | undefined {
+  const specifiers = moduleSpecifiersOf(text);
+  return specifiers
+    ?.filter((specifier) => specifier.startsWith('./') || specifier.startsWith('../'))
+    .map((specifier) => posix.normalize(posix.join(posix.dirname(path), specifier)));
+}
+
+/**
+ * The code a ship tool runs at `ref` (T3419): the tool's file, the roots its roots file names ({@link toolRootsPath}),
+ * that file's own path whether it is there or not (so adding or removing it is a change), and every module they
+ * import, followed through relative imports, as paths in its checkout. Undefined when one is not a file there, leaves
+ * the checkout, cannot be read apart from its text, or the closure passes {@link TOOL_CODE_MAX_FILES}, so the caller
+ * cannot tell the code is the same.
+ */
+export function toolCodeAt(git: MergeGit, top: string, ref: string, tool: string): readonly string[] | undefined {
+  const rootsPath = toolRootsPath(tool);
+  const present = git.blobsAt(top, ref, [rootsPath]);
+  const rootsText = present?.has(rootsPath) === true ? git.fileAt(top, ref, rootsPath) : '{"roots":[]}';
+  const roots = present === undefined || rootsText === undefined ? undefined : toolRootsOf(rootsText);
+  if (roots === undefined) {
+    return undefined;
+  }
+  const seen = new Set<string>([rootsPath]);
+  const next = [tool, ...roots];
+  for (let path = next.pop(); path !== undefined; path = next.pop()) {
+    if (seen.has(path)) {
+      continue;
+    }
+    const text = path.startsWith('../') || seen.size >= TOOL_CODE_MAX_FILES ? undefined : git.fileAt(top, ref, path);
+    const imports = text === undefined ? undefined : MODULE_FILE.test(path) ? relativeImportsOf(text, path) : [];
+    if (imports === undefined) {
+      return undefined;
+    }
+    seen.add(path);
+    next.push(...imports);
+  }
+  return [...seen].sort();
+}
+
+/**
+ * The files of the code a pinned tool runs that differ between its pin and `head`, a later commit of main's history its
+ * clean checkout moved to while the step waited (T3419): none when the tool runs the same code, so a main that moved on
+ * without touching it refuses no waiting ship. The code is what the tool runs at either commit, so a file it stopped
+ * loading counts too. Undefined when that cannot be told (`head` off main's history or not after the pin, a read git
+ * did not answer), so the step is refused as a changed tool.
+ */
+function toolCodeChangeOf(git: MergeGit, state: ToolState, tool: string, pinned: string, head: string): readonly string[] | undefined {
+  const path = pathInCheckout(state.top, tool);
+  if (path === undefined || !git.isAncestor(state.top, head, state.mainRef) || !git.isAncestor(state.top, pinned, head)) {
+    return undefined;
+  }
+  const before = toolCodeAt(git, state.top, pinned, path);
+  const after = toolCodeAt(git, state.top, head, path);
+  const changed = git.changedPaths(state.top, pinned, head);
+  if (before === undefined || after === undefined || changed === undefined) {
+    return undefined;
+  }
+  return [...new Set([...before, ...after])].sort().filter((file) => changed.includes(file));
+}
+
 /** A stale or changed ship tool's refusal: what it is not, and how to move its checkout to the newest main. */
 function staleToolReason(tool: string, state: ToolState, since: string): string {
   return `the ship tool ${tool}${since} is not ${state.mainRef}'s current code in a checkout with no change: run git -C ${state.top} fetch -q ${ORIGIN} && git -C ${state.top} checkout -q --detach ${state.mainRef}, then queue the step again`;
@@ -191,8 +296,9 @@ export function shipToolPinOf(git: MergeGit, kit: Kit, config: KitConfig, tool: 
 
 /**
  * Why a pinned ship tool may not run when its step starts, after waiting in the host lock's line; undefined when it
- * may. Its checkout must still be clean and at the pinned commit, or at main's current code if it moved on, so a
- * checkout moved to another commit while the step waited never runs that commit's tool. A read git does not answer is
+ * may. Its checkout must still be clean and at the pinned commit, or at main's current code if it moved on, or at a
+ * later commit of main's history where none of the code the tool runs changed (T3419), so a checkout moved to another
+ * commit while the step waited never runs other code than the one it was queued with or main's current one. A read git does not answer is
  * read again, {@link SHIP_TOOL_READS} times in all, then refused naming that read, never as a changed tool (T3368).
  */
 export async function shipToolStartRefusal(git: MergeGit, kit: Kit, config: KitConfig, pin: ShipToolPin, sleep: Sleep): Promise<string | undefined> {
@@ -200,8 +306,16 @@ export async function shipToolStartRefusal(git: MergeGit, kit: Kit, config: KitC
     const state = shipToolStateOf(git, kit, config, pin.tool);
     if (state.ok) {
       const { head, landed } = state.value;
-      const since = pin.head === undefined ? '' : ` changed from ${pin.head.slice(0, 9)} while the step waited and`;
-      return head !== undefined && (head === pin.head || landed) ? undefined : staleToolReason(pin.tool, state.value, since);
+      if (head !== undefined && (head === pin.head || landed)) {
+        return undefined;
+      }
+      const changed = head === undefined || pin.head === undefined ? undefined : toolCodeChangeOf(git, state.value, pin.tool, pin.head, head);
+      if (changed !== undefined && changed.length === 0) {
+        return undefined;
+      }
+      const files = changed === undefined ? '' : ` (${changed.slice(0, 5).join(', ')}${changed.length > 5 ? `, and ${changed.length - 5} more` : ''})`;
+      const since = pin.head === undefined ? '' : ` changed from ${pin.head.slice(0, 9)} while the step waited${files} and`;
+      return staleToolReason(pin.tool, state.value, since);
     }
     if (reads >= SHIP_TOOL_READS) {
       return `could not read the checkout of the ship tool ${pin.tool}, so the step did not run: ${state.reason}, at each of ${reads} reads ${SHIP_TOOL_REREAD_MS / 1000} s apart; git gave no answer, which says nothing of the tool, so queue the step again once git answers on this host`;
