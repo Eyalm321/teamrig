@@ -18,10 +18,26 @@ describe('runCli: rename', () => {
       stdout: [
         'RENAMED alpha: app-alpha -> scout',
         'NOTE app-alpha still finds alpha in every teamrig command; teamrig never edits permission or auto-mode rules, so update any that name app-alpha yourself',
+        'NEXT teamrig who: scout is listed under its new name',
+        'NEXT teamrig list --session scout: its tasks',
+        'NEXT teamrig inbox read --session scout: its unread lines',
       ],
       stderr: [],
     });
     assert.deepEqual(await renameRecordsOf(kit), [['alpha', 'app-alpha', 'scout', 'alpha']]);
+  });
+
+  it("prints the follow-up steps for the renamed session when the lead renames another one", async () => {
+    const kit = new CliHarness(NAMED);
+    const result = await kit.run(['rename', 'bravo', 'ranger', '--session', 'captain']);
+    assert.deepEqual(
+      result.stdout.filter((line) => line.startsWith('NEXT ')),
+      [
+        'NEXT teamrig who: ranger is listed under its new name',
+        'NEXT teamrig list --session ranger: its tasks',
+        'NEXT teamrig inbox read --session ranger: its unread lines',
+      ],
+    );
   });
 
   it('lets the lead rename any session, by any of their names', async () => {
