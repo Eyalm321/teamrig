@@ -155,6 +155,10 @@ describe('ghGuardOutput: option spellings', () => {
     }
   });
 
+  it('reads -R=owner/name as gh does', () => {
+    assert.match(reason('gh issue close 3 -R=acme/web', ENV, '/work/other') ?? '', /teamrig issue close acme\/web#3/);
+  });
+
   it('stops reading options at --, and passes what it cannot tie to a repository', () => {
     assert.equal(reason('gh issue close 3 -- -R acme/web', ENV, '/elsewhere'), undefined);
     for (const line of ['gh issue', 'gh run list -R "$R"', 'gh api "$P"', 'gh api repos/{owner}/{repo}/issues -X GET']) {

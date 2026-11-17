@@ -141,7 +141,8 @@ function optionValue(words: Words, short: string | undefined, long: string, valu
     } else if (word.startsWith(`${long}=`)) {
       value = word.slice(long.length + 1);
     } else if (short !== undefined && word.startsWith(short) && !word.startsWith('--') && word.length > short.length) {
-      value = word.slice(short.length);
+      // gh's flag parser reads `-R=x` as `x`, as it reads `-Rx`.
+      value = word.slice(short.length).replace(/^=/u, '');
     }
   }
   return value;
