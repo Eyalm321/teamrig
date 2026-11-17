@@ -45,7 +45,7 @@ export const CARD_USAGE = `--question "<what is decided>" --options "<one choice
 /** How `--waits` is typed, for the refusals that ask for it. */
 export const WAITS_USAGE = 'decision:<who>, approval:<who>, task:T<id> or time:<YYYY-MM-DD HH:MM>, comma-separated';
 /** How a verifying task names when its proof runs (T1306), for the refusals that ask for it. */
-export const PROOF_WAITS_USAGE = 'time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying whose end runs it';
+export const PROOF_WAITS_USAGE = 'time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying, or an open one of your own, whose end runs it';
 /** The statuses of a task a proof may wait on: one under way, whose end runs the proof. */
 const PROOF_TASK_STATUSES = ['in-progress', 'verifying'];
 /** How the refusals about an audit name what it reads, and the core rule behind it. */
@@ -1232,15 +1232,18 @@ function runsProof(reason) {
     return reason.kind === 'time' || reason.kind === 'task';
 }
 /**
- * A proof runs when the task it waits on ends, so it waits only on one in progress or verifying (T1306): one not
- * started has no end in sight, and the task stays waiting on it until it starts.
+ * A proof runs when the task it waits on ends, so it waits only on one in progress or verifying (T1306), or on an
+ * open one of the same owner (#1544), who can start it now, so its end is in sight and the verifying task stops being
+ * due meanwhile; another's open task, or one waiting, has no end in sight, and the task stays waiting on it until it
+ * starts.
  */
 function unstartedProofTask(task, id, context) {
     const target = context.state.tasks.get(id) ?? context.elsewhere.get(id)?.task;
-    if (target === undefined || PROOF_TASK_STATUSES.includes(target.status)) {
+    if (target === undefined || PROOF_TASK_STATUSES.includes(target.status) || (target.status === 'open' && target.owner === task.owner)) {
         return undefined;
     }
-    return `${id} is ${target.status}: a proof waits only on a task in progress or verifying; until it starts, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
+    const whose = target.status === 'open' ? ` and ${target.owner}'s` : '';
+    return `${id} is ${target.status}${whose}: a proof waits only on a task in progress or verifying, or an open one of its own owner's; until it starts, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
 }
 /**
  * The refusal of a verifying task set again without `--waits` whose kept waits hold one that cleared (T1306): its
