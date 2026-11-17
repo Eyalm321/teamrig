@@ -2842,7 +2842,8 @@ Records a session's new name (`teamrig rename <id|name> <new-name>`). Its old na
 command. Only the session itself or the lead may rename it. A name Claude Code keeps for itself (`main`,
 `team-lead`, `user`, `system`) is refused, since a message sent to it never reaches a session; `teamrig doctor`
 flags one an older rename recorded. A recorded rename then prints the follow-up steps for the session under its new
-name (`NEXT` lines: `teamrig who`, `teamrig list` and `teamrig inbox read`); an unchanged or refused one prints none.
+name (`NEXT` lines: `teamrig who`, `teamrig list`, and `teamrig inbox read` for its own rename or `teamrig inbox status`,
+which marks nothing read, for another session's); an unchanged or refused one prints none.
 
 Flags:
 
@@ -2859,9 +2860,9 @@ Output:
 ```text
 RENAMED web: shop-web -> shop-site
 NOTE shop-web still finds web in every teamrig command; teamrig never edits permission or auto-mode rules, so update any that name shop-web yourself
-NEXT teamrig who: shop-site is listed under its new name
-NEXT teamrig list --session shop-site: its tasks
-NEXT teamrig inbox read --session shop-site: its unread lines
+NEXT check shop-site is listed under its new name: teamrig who
+NEXT see its tasks: teamrig list --session shop-site
+NEXT count its unread lines, marking none read: teamrig inbox status --session shop-site
 ```
 
 ### teamrig hire

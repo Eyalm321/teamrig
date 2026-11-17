@@ -18,24 +18,24 @@ describe('runCli: rename', () => {
       stdout: [
         'RENAMED alpha: app-alpha -> scout',
         'NOTE app-alpha still finds alpha in every teamrig command; teamrig never edits permission or auto-mode rules, so update any that name app-alpha yourself',
-        'NEXT teamrig who: scout is listed under its new name',
-        'NEXT teamrig list --session scout: its tasks',
-        'NEXT teamrig inbox read --session scout: its unread lines',
+        'NEXT check scout is listed under its new name: teamrig who',
+        'NEXT see its tasks: teamrig list --session scout',
+        'NEXT read its unread lines: teamrig inbox read --session scout',
       ],
       stderr: [],
     });
     assert.deepEqual(await renameRecordsOf(kit), [['alpha', 'app-alpha', 'scout', 'alpha']]);
   });
 
-  it("prints the follow-up steps for the renamed session when the lead renames another one", async () => {
+  it('points the lead renaming another session at a count of its unread lines, never a read that marks them', async () => {
     const kit = new CliHarness(NAMED);
     const result = await kit.run(['rename', 'bravo', 'ranger', '--session', 'captain']);
     assert.deepEqual(
       result.stdout.filter((line) => line.startsWith('NEXT ')),
       [
-        'NEXT teamrig who: ranger is listed under its new name',
-        'NEXT teamrig list --session ranger: its tasks',
-        'NEXT teamrig inbox read --session ranger: its unread lines',
+        'NEXT check ranger is listed under its new name: teamrig who',
+        'NEXT see its tasks: teamrig list --session ranger',
+        'NEXT count its unread lines, marking none read: teamrig inbox status --session ranger',
       ],
     );
   });
