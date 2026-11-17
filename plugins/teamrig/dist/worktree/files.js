@@ -1,7 +1,10 @@
-import { lstat, readdir, readlink, rmdir, symlink, unlink } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { lstat, readdir, readFile, readlink, rmdir, symlink, unlink } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { errorCode } from "../core/guards.js";
+import { errorCode, errorMessage } from "../core/guards.js";
+/** How long `lsof` may take to list every program's working folder. */
+const LSOF_TIMEOUT_MS = 10_000;
 /** A folder's listing; undefined when the folder does not exist. */
 async function listing(dir) {
     try {
@@ -75,4 +78,67 @@ export const NODE_WORKTREE_FILES = {
             return undefined;
         }
     },
+    async workingFolders() {
+        if (process.platform === 'linux') {
+            return await procWorkingFolders();
+        }
+        if (process.platform === 'darwin') {
+            return await lsofWorkingFolders();
+        }
+        return { kind: 'unknown', reason: `${process.platform === 'win32' ? 'Windows' : process.platform} gives no plain way to read another program's working folder` };
+    },
 };
+/** Linux: each `/proc/<pid>/cwd` link this user may read; a program that ended, or another user's, is skipped. */
+async function procWorkingFolders() {
+    let pids;
+    try {
+        pids = (await readdir('/proc')).filter((name) => /^\d+$/u.test(name));
+    }
+    catch (error) {
+        return { kind: 'unknown', reason: `/proc cannot be read (${errorMessage(error)})` };
+    }
+    const programs = [];
+    for (const id of pids) {
+        const pid = Number(id);
+        if (pid === process.pid) {
+            continue;
+        }
+        try {
+            const folder = await readlink(`/proc/${id}/cwd`);
+            programs.push({ pid, name: (await readFile(`/proc/${id}/comm`, 'utf8')).trim(), folder });
+        }
+        catch {
+            // Ended since the listing, or another user's: neither is read.
+        }
+    }
+    return { kind: 'read', programs };
+}
+/** macOS: `lsof -d cwd`, whose exit is 1 when it could not read some program, though it lists the rest. */
+async function lsofWorkingFolders() {
+    return await new Promise((settle) => {
+        execFile('lsof', ['-n', '-P', '-d', 'cwd', '-F', 'pcn'], { timeout: LSOF_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
+            const programs = parseLsofFolders(stdout, process.pid);
+            settle(error !== null && programs.length === 0 ? { kind: 'unknown', reason: `lsof did not list them (${errorMessage(error)})` } : { kind: 'read', programs });
+        });
+    });
+}
+/** `lsof -F pcn` output: a `p<pid>` line opens each program, then its `c<name>`, and `n<folder>` for its cwd; `self` is left out. */
+export function parseLsofFolders(text, self) {
+    const programs = [];
+    let pid;
+    let name = '';
+    for (const line of text.split('\n')) {
+        const field = line.slice(1);
+        if (line.startsWith('p')) {
+            pid = Number(field);
+            name = '';
+        }
+        else if (line.startsWith('c')) {
+            name = field;
+        }
+        else if (line.startsWith('n') && pid !== undefined && Number.isInteger(pid) && pid !== self) {
+            programs.push({ pid, name, folder: field });
+        }
+    }
+    return programs;
+}
