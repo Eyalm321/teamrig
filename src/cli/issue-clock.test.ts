@@ -116,6 +116,21 @@ describe('the response clock in issue sync (T3028)', () => {
     assert.deepEqual(running(), ['gh:acme/web#13'], 'an open one waits from its opening; a closed one keeps no clock');
   });
 
+  it("times a collaborator's pull request as an outsider's: it starts a clock and their own follow-up is no answer (#1366)", async () => {
+    const kit = new CliHarness(GITHUB_TEAM);
+    const at = (hours: number): string => new Date(kit.clock.now() + hours * HOUR).toISOString();
+    const pull = (comments: readonly JsonRecord[]): FakeGh =>
+      new FakeGh().holds('acme/web', []).holdsPulls('acme/web', [ghPull('acme/web', 12, { authorAssociation: 'COLLABORATOR', author: 'contrib', createdAt: at(0), updatedAt: at(0), comments })]);
+    const running = (): readonly string[] => [...parseClocks(kit.files.get(CLOCKS) ?? '').keys()];
+
+    await sync(kit, pull([]));
+    assert.deepEqual(running(), ['gh:acme/web#12'], 'a collaborator outside github.owners waits on us');
+    await sync(kit, pull([commentNode(at(1), 'COLLABORATOR', 'User', { login: 'contrib' })]));
+    assert.deepEqual(running(), ['gh:acme/web#12'], 'their follow-up is no answer');
+    await sync(kit, pull([commentNode(at(2), 'MEMBER', 'User', { login: 'octocat' })]));
+    assert.deepEqual(running(), [], 'a login of github.owners answers it');
+  });
+
   it("keeps a repository's clocks when its pull requests could not be read", async () => {
     const kit = new CliHarness(GITHUB_TEAM);
     const issue = ghIssue('acme/web', 9, { authorAssociation: 'NONE', createdAt: new Date(kit.clock.now()).toISOString() });
