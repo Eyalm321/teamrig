@@ -394,8 +394,8 @@ CLOSED acme/web#12
   -R acme/web --add-label p1`, `gh api repos/acme/web/issues/12/sub_issues -X POST`) is refused before it runs, its
   reason naming the teamrig command for the step (`teamrig issue label acme/web#12 --add p1`, `teamrig issue links`):
   raw `gh` runs on the person's own login, which may not reach the repository, and skips the checks above. A step no
-  teamrig command takes yet is refused saying so, to be reported, not run another way. An issue read is refused naming
-  `teamrig issue sync`; other reads (a pull request's view, diff or checks, a run's log) and `gh pr create` run as before
+  teamrig command takes yet is refused saying so, to be reported, not run another way. Reads (an issue's view or
+  thread, a pull request's view, diff or checks, a run's log) and `gh pr create` run as before
   ([the gh guard](../plugins/teamrig/skills/teamrig-guide/hooks.md#before-a-shell-command-the-gh-guard)).
 - **Access.** The same token or `gh` login as the sync, which needs the [write permissions](#what-each-command-needs);
   a `FAILED` line names the permission a token lacks. `TEAMRIG_GITHUB=off` writes nothing.

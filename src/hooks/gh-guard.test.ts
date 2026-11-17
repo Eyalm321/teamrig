@@ -11,7 +11,7 @@ const ENV: GhGuardEnv = {
   cwd: '/work/web',
   home: '/home/me',
   repos: ['acme/web'],
-  originOf: (dir) => (posix(dir).startsWith('/work/web') ? 'acme/web' : posix(dir).startsWith('/work/other') ? 'acme/other' : undefined),
+  remotesOf: (dir) => (posix(dir).startsWith('/work/web') ? ['acme/web'] : posix(dir).startsWith('/work/other') ? ['acme/other'] : []),
   platform: 'linux',
   command: 'teamrig',
 };
@@ -46,8 +46,8 @@ describe('ghGuardOutput: the table from each gh shape to its teamrig command', (
     ['gh issue comment 12 -R acme/web --body "on it"', '`teamrig issue comment acme/web#12 --body "on it"`'],
     ['gh pr comment https://github.com/acme/web/pull/9 -b done', '`teamrig issue comment acme/web#9 --body done`'],
     ['gh issue close 12 -R acme/web -r "not planned" -c dup', '`teamrig issue close acme/web#12 --comment dup --reason not-planned`'],
-    ['gh issue view 12 -R acme/web', '`teamrig issue sync --repo acme/web`'],
-    ['gh issue list -R acme/web --state open', '`teamrig issue sync --repo acme/web`'],
+    ['gh issue close 12 -R acme/web --duplicate-of 9', '`teamrig issue close acme/web#12 --reason duplicate --duplicate-of acme/web#9`'],
+    ['gh issue close 12 -R acme/web -r completed --duplicate-of https://github.com/acme/api/issues/4', '`teamrig issue close acme/web#12 --reason duplicate --duplicate-of acme/api#4`'],
     ['gh issue create -R acme/web -t x -b y', '`teamrig add ... --issue "<public title>" --issue-body "<public text>" --issue-repo acme/web`'],
     ['gh api repos/acme/web/issues -f title=x', '`teamrig add ... --issue "<public title>" --issue-body "<public text>" --issue-repo acme/web`'],
     ['gh api repos/acme/web/issues/12/sub_issues -X POST -F sub_issue_id=5', '`teamrig issue links --repo acme/web`'],
@@ -55,7 +55,6 @@ describe('ghGuardOutput: the table from each gh shape to its teamrig command', (
     ['gh api /repos/acme/web/issues/12/comments -f body=hi', '`teamrig issue comment acme/web#12 --body <text>`'],
     ['gh api repos/acme/web/issues/12/labels -X POST -f "labels[]=p1"', '`teamrig issue label acme/web#12 --add <label,...> --remove <label,...>`'],
     ['gh api -X PATCH repos/acme/web/issues/12 -f state=closed', '`teamrig issue close acme/web#12`'],
-    ['gh api repos/acme/web/issues?state=open', '`teamrig issue sync --repo acme/web`'],
   ];
   for (const [line, command] of rows) {
     it(`${line} -> ${command}`, () => {
@@ -75,10 +74,6 @@ describe('ghGuardOutput: the table from each gh shape to its teamrig command', (
     }
   });
 
-  it('sends an issue read on to the task the sync makes', () => {
-    assert.match(reason('gh issue view 12 -R acme/web') ?? '', /issue sync --repo acme\/web` instead, then read the issue in the task it holds\./);
-  });
-
   it('names the step as the line writes it', () => {
     assert.match(reason('gh api repos/acme/web/issues/12/sub_issues -X POST') ?? '', /gh api POST repos\/acme\/web\/issues\/12\/sub_issues: run/);
     assert.match(reason('gh pr merge 7 -R acme/web') ?? '', /gh pr merge: no teamrig/);
@@ -86,10 +81,18 @@ describe('ghGuardOutput: the table from each gh shape to its teamrig command', (
 });
 
 describe('ghGuardOutput: which repository a call acts on', () => {
-  it('takes the folder origin when the call names none', () => {
+  it("takes the folder's remote when the call names none", () => {
     assert.match(reason('gh issue comment 12 --body hi') ?? '', /teamrig issue comment acme\/web#12/);
     assert.match(reason('gh pr merge 3') ?? '', /gh pr merge: no teamrig command/);
     assert.equal(reason('gh issue comment 12 --body hi', ENV, '/work/other'), undefined);
+  });
+
+  it("counts a fork's clone whose upstream, or any remote gh may pick, names a team repository", () => {
+    // origin is the fork, upstream (or the remote `gh repo set-default` chose) the team's: gh acts on the team's.
+    const fork: GhGuardEnv = { ...ENV, remotesOf: () => ['me/web', 'acme/web'] };
+    assert.match(reason('gh issue close 3', fork, '/work/fork') ?? '', /teamrig issue close acme\/web#3/);
+    assert.match(reason('gh api repos/{owner}/{repo}/issues/3/comments -f body=x', fork, '/work/fork') ?? '', /issue comment acme\/web#3/);
+    assert.equal(reason('gh issue close 3', { ...ENV, remotesOf: () => ['me/web', 'acme/other'] }, '/work/fork'), undefined);
   });
 
   it('follows a cd in the line to the folder it starts gh in', () => {
@@ -129,6 +132,13 @@ describe('ghGuardOutput: option spellings', () => {
     assert.match(reason('gh api -X PUT repos/acme/web/pulls/3/merge') ?? '', /no teamrig command takes this step yet/);
   });
 
+  it("never reads another option's value as -R, so a body, title or comment starting with -R names no repository", () => {
+    assert.match(reason('gh issue comment 12 --body "-Rebased on main"') ?? '', /teamrig issue comment acme\/web#12 --body "-Rebased on main"/);
+    assert.match(reason('gh issue create --title "-Racme/other x" -b y') ?? '', /--issue-repo acme\/web/);
+    assert.match(reason('gh issue close 12 --comment -Racme/other') ?? '', /teamrig issue close acme\/web#12 --comment -Racme\/other/);
+    assert.match(reason('gh issue close 12 -c "-R acme/other"') ?? '', /teamrig issue close acme\/web#12/);
+  });
+
   it('stops reading options at --, and passes what it cannot tie to a repository', () => {
     assert.equal(reason('gh issue close 3 -- -R acme/web', ENV, '/elsewhere'), undefined);
     for (const line of ['gh issue', 'gh run list -R "$R"', 'gh api "$P"', 'gh api repos/{owner}/{repo}/issues -X GET']) {
@@ -138,8 +148,14 @@ describe('ghGuardOutput: option spellings', () => {
 });
 
 describe('ghGuardOutput: reads no teamrig command takes, and opening a pull request', () => {
-  it('passes each read of a pull request, a run, a release and the repository', () => {
+  it('passes each read of an issue, a pull request, a run, a release and the repository', () => {
     const lines = [
+      'gh issue view 12 -R acme/web --comments',
+      'gh issue list -R acme/web --state open',
+      'gh issue status',
+      'gh api repos/acme/web/issues/12/comments',
+      'gh api repos/acme/web/issues?state=open',
+      'gh api -X GET repos/acme/web/issues/12',
       'gh pr view 12 --json state',
       'gh pr checks 12',
       'gh pr diff 12',

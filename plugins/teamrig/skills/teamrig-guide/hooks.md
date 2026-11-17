@@ -19,7 +19,7 @@ they all stay silent, but `hook restore-track` and `hook tool-end` still record 
 | `PreToolUse` on `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` | `hook pass-record-guard` | Refuses a session's own write of a tree's pass record, the proof that lets a push or a merge skip the checks the tree passed ([the pass-record guard](#before-a-write-or-a-shell-command-the-pass-record-guard)) |
 | `PreToolUse` on `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` | `hook service-role-guard` | Refuses a session's `teamrig roles grant` or `revoke` (the owner runs it from their own terminal), and refuses a session's own write of `serviceRoles` in the team config ([the service-role guard](#before-a-write-or-a-shell-command-the-service-role-guard)) |
 | `PreToolUse` on `Bash` and `PowerShell` | `hook readonly-allow` | With `readonlyShell.enabled`, lets a line whose every command provably only reads run without a permission prompt ([the read-only allow](#before-a-shell-command-the-read-only-allow)) |
-| `PreToolUse` on `Bash` and `PowerShell` | `hook gh-guard` | Refuses a raw `gh` call that writes (or reads an issue) on a repository under `github.repos`, naming the teamrig command that takes the step ([the gh guard](#before-a-shell-command-the-gh-guard)) |
+| `PreToolUse` on `Bash` and `PowerShell` | `hook gh-guard` | Refuses a raw `gh` call that writes on a repository under `github.repos`, naming the teamrig command that takes the step ([the gh guard](#before-a-shell-command-the-gh-guard)) |
 | `PreToolUse` on `Bash` | `hook route-allow` | With `prompts.hookAsks: refuse` (the default) and `prompts.routeAllow` on, lets a line that runs one of the session's own jobs (`teamrig merge`, `deploy`, `exec request`, `worktree remove`, a `git commit` with its hooks) run with no permission check, once every teamrig guard passed it ([No teamrig hook asks a person](#no-teamrig-hook-asks-a-person)); with `prompts.routeAllow` on, whatever asks say, lets a service role's holder run the role's `teamrig issue close` or `issue comment` from its own tab, up to a daily cap, or a queued ship or merge of its own task branch with the team's ship tool ([the service-role allow](#before-a-shell-command-the-service-role-allow)) |
 | `PreToolUse` on `AskUserQuestion` and `Bash` | `hook picker-guard` | With `pickerGuard.enabled` (on unless a team sets it false), refuses the question picker to every session and helper, to the lead in and outside the owner's daily meeting, to a sub-team's lead, and to a session in its own meeting with the owner, with the reason to decide it if it is the session's own, else record it on its task and go on, and a session's Bash `cd` compound Claude Code would hold on a permission prompt, quoting its form to rerun, or saying to drop the `cd` when it has none ([the picker guard](#before-a-question-the-picker-guard)) |
 | `PermissionRequest` | `hook prompt-refuse` | With `prompts.hookAsks: refuse` (the default), answers each permission prompt Claude Code is about to raise but the question picker's and plan mode's exit, per case: a line that runs a sanctioned route or provably only reads runs, a line with a rerun form is refused quoting it, anything else is refused with the reason to record the step for the owner and go on ([No teamrig hook asks a person](#no-teamrig-hook-asks-a-person)) |
@@ -895,10 +895,12 @@ A team that lists repositories under `github.repos` takes its GitHub steps there
 run on the key teamrig saves for the repository's owner, and they check what they post (the secret scan, the
 private-data check, the stale-write check). A raw `gh` call runs on the person's own `gh` login instead, which may
 not reach the repository, and checks nothing. So before Claude runs a Bash or PowerShell call, `hook gh-guard`
-refuses a line that runs `gh` to write on one of those repositories, or to read an issue there, named by
+refuses a line that runs `gh` to write on one of those repositories, named by
 `-R`/`--repo` (before or after gh's command, as `owner/name`, `github.com/owner/name` or a URL), by an issue or pull
 request URL, by a `gh api repos/<owner>/<name>/...` path or full URL, by `gh repo <command> <owner/name>`, or taken
-from the folder's `origin` (a `cd` in the line counts, and so do gh api's `{owner}/{repo}` placeholders). A gh api
+from the folder's remotes: any remote naming one counts, as gh may take `upstream` or the remote `gh repo
+set-default` chose over `origin`, as in a fork's clone (a `cd` in the line counts, and so do gh api's `{owner}/{repo}`
+placeholders). Another option's value is never read as `-R` (`--body "-Rebased on main"` names no repository). A gh api
 write to `repositories/<id>/...` is refused too, asking for the `repos/<owner>/<name>` form the guard can match. Its
 reason names the teamrig command for each step:
 
@@ -907,17 +909,17 @@ reason names the teamrig command for each step:
 | `gh issue comment`, `gh pr comment`, `gh api .../issues/<n>/comments` POST | `teamrig issue comment <owner/name#n> --body <text>` |
 | `gh issue edit`, `gh pr edit` with `--add-label`/`--remove-label`; `gh api .../issues/<n>/labels` | `teamrig issue label <owner/name#n> --add <labels> --remove <labels>` |
 | `gh issue edit`, `gh pr edit` with `--body`/`--body-file` | `teamrig issue edit <owner/name#n> --body-file <path>` |
-| `gh issue close`, `gh pr close`; `gh api .../issues/<n>` PATCH with `state` | `teamrig issue close <owner/name#n>` |
-| `gh issue view`, `gh issue list`, `gh issue status`; `gh api .../issues...` GET | `teamrig issue sync --repo <owner/name>`, then read the issue in the task it holds |
+| `gh issue close`, `gh pr close`; `gh api .../issues/<n>` PATCH with `state` | `teamrig issue close <owner/name#n>`; with `--duplicate-of <n>`, `--reason duplicate --duplicate-of <owner/name#n>` |
 | `gh issue create`; `gh api .../issues` POST | `teamrig add ... --issue "<public title>" --issue-body "<public text>" --issue-repo <owner/name>` |
 | `gh api .../issues/<n>/sub_issues` or `.../dependencies/blocked_by`, any write | `teamrig issue links --repo <owner/name>` |
 
 Any other write on those repositories (a merge, a review, an assignee, a run's rerun, a release) is refused with a line
 saying no teamrig command takes it yet (`teamrig merge` lands a local branch, not a pull request, so `gh pr merge` is
-one): report the gap to your leader rather than run it another way. Reads no teamrig
-command takes run as before (a pull request's `view`, `diff`, `checks` or `list`, a run's `view` or `list`, a
-`gh api` GET outside `/issues`, `gh repo view` or `clone`), and so does `gh pr create`, a session's way to open a pull
-request. `gh` on a repository not
+one): report the gap to your leader rather than run it another way. Every read runs as before (an issue's `view`,
+`list` or `status` with its comments, a pull request's `view`, `diff`, `checks` or `list`, a run's `view` or `list`, a
+`gh api` GET, `gh repo view` or `clone`): `teamrig issue sync` imports only the open issues the trust rule takes,
+bodies cut to 2,000 characters and no comments, so no teamrig command takes them yet. So does `gh pr create`, a
+session's way to open a pull request. `gh` on a repository not
 listed, `gh` that names no repository (`gh auth status`, `gh api user`, `gh search`), a repository known only when the
 line runs (`-R "$REPO"`), and a team with no repositories listed run as before; so do teamrig's own `gh` calls, which
 it starts itself, never through the Bash tool. It has no setting of its own: `github.repos` is the switch.
