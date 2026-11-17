@@ -5,10 +5,10 @@ import { TimeZone } from '../core/zone.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { MemoryFiles } from '../testing/memory-files.ts';
 import { JERUSALEM } from '../testing/zone.ts';
-import type { InboxDeps } from './inbox.ts';
+import { inboxStatus, readInbox, type InboxDeps, type MarkLog } from './inbox.ts';
 import { fitLines, injectFor, injectionOf, type InjectionInput } from './inject.ts';
 import { lineHash } from './line-hash.ts';
-import type { InboxMark } from './marks.ts';
+import type { InboxMark, MarkLogRead } from './marks.ts';
 import { cutWhenShown, INJECT_CAPS, newestShownOf, unshownOf } from './shown.ts';
 import { InboxDir, JsonlMarkLog } from './store.ts';
 
@@ -72,10 +72,11 @@ describe('injectionOf', () => {
   it('shows every new line with a header, and marks them shown through the last', () => {
     const injection = injectionOf(input());
     assert.deepEqual(injection?.text.split('\n'), [
-      `INBOX alpha, new in ${DIR}/alpha.md (each line is shown once; reading marks them read):`,
+      `INBOX alpha, new in ${DIR}/alpha.md (each line is shown once, and marked read when shown whole):`,
       ...SHOWN_LINES.slice(0, 3),
     ]);
     assert.deepEqual(injection?.shown, markAt(LINES, 3, TAB));
+    assert.deepEqual(injection?.read, markAt(LINES, 3, null), 'read through the last, binding no tab');
   });
 
   it('shows five lines at most and says how many wait', () => {
@@ -85,8 +86,10 @@ describe('injectionOf', () => {
       '+2 more at your next prompt, or all now with: teamrig inbox read --session alpha',
     ]);
     assert.deepEqual(injection?.shown, markAt(LINES, 6, TAB));
+    assert.deepEqual(injection?.read, markAt(LINES, 6, null), 'the lines past the cap stay unread');
     const next = injectionOf(input({ lines: LINES, read: markAt(LINES, 1, null), shown: injection?.shown ?? null }));
     assert.deepEqual(next?.text.split('\n').slice(1), SHOWN_LINES.slice(6));
+    assert.deepEqual(next?.read, markAt(LINES, 8, null), 'the lines shown at the earlier prompt are read too');
     assert.equal(injectionOf(input({ lines: LINES, read: markAt(LINES, 1, null), shown: next?.shown ?? null })), undefined);
   });
 
@@ -98,6 +101,23 @@ describe('injectionOf', () => {
       `The line above was cut at ${INJECT_CAPS.maxChars} characters; \`teamrig inbox read --session alpha\` prints it whole.`,
       '+1 more at your next prompt, or all now with: teamrig inbox read --session alpha',
     ]);
+    assert.equal(injectionOf(input({ lines: [long, LINES[0] ?? ''] }))?.read, null, 'a cut line stays unread');
+  });
+
+  it('keeps unread every line after a line cut at an earlier prompt', () => {
+    const long = `- 2030-01-07 09:00 lead: ${'x'.repeat(INJECT_CAPS.maxChars)}`;
+    const lines = [long, ...LINES.slice(0, 2)];
+    const first = injectionOf(input({ lines }));
+    assert.equal(first?.read, null);
+    const later = injectionOf(input({ lines, shown: first?.shown ?? null }));
+    assert.deepEqual(later?.text.split('\n').slice(1), SHOWN_LINES.slice(0, 2));
+    assert.equal(later?.read, null, 'shown whole, but after the cut line');
+  });
+
+  it("measures a line's cut on the team's clock, as it was shown", () => {
+    const edge = `- 2030-01-07 09:00 lead: ${'x'.repeat(INJECT_CAPS.maxChars - 26)}`;
+    assert.equal(cutWhenShown(edge), false);
+    assert.equal(injectionOf(input({ lines: [edge] }))?.read, null, 'its zone pushed it over the cap');
   });
 
   it("shows each line's time on the team's clock", () => {
@@ -120,15 +140,54 @@ describe('injectFor', () => {
   }
   const request = { area: 'alpha', claudeSession: TAB, now: NOW, zone: TimeZone.UTC, command: 'teamrig' };
 
-  it('shows each line once per Claude Code session, and never marks it read', async () => {
+  it('shows each line once, and marks read the lines it showed whole (#1401)', async () => {
     const files = new MemoryFiles({ [`${DIR}/alpha.md`]: LINES.slice(0, 2).join('\n') });
     assert.match((await injectFor(deps(files), request)) ?? '', /item 1\n.*item 2$/);
     assert.equal(await injectFor(deps(files), request), undefined);
-    assert.match((await injectFor(deps(files), { ...request, claudeSession: OTHER_TAB })) ?? '', /item 1/);
-    assert.equal(files.get(MARKS), undefined);
-    assert.equal(files.get(SHOWN)?.trim().split('\n').length, 2);
+    assert.equal(await injectFor(deps(files), { ...request, claudeSession: OTHER_TAB }), undefined, 'read, so no tab is shown it again');
+    assert.deepEqual(files.get(MARKS)?.trim().split('\n').map((line) => JSON.parse(line) as unknown), [{ ...markAt(LINES, 2, null) }]);
+    assert.deepEqual((await inboxStatus(deps(files), 'alpha')).map((status) => status.unread.lines.length), [0]);
     await deps(files).inboxes.append('alpha', LINES[2] ?? '');
     assert.equal((await injectFor(deps(files), request))?.split('\n').slice(1).join('\n'), SHOWN_LINES[2]);
+  });
+
+  it('leaves a cut line unread, and `inbox read` prints it whole', async () => {
+    const long = `- 2030-01-07 09:00 lead: ${'x'.repeat(INJECT_CAPS.maxChars)}`;
+    const files = new MemoryFiles({ [`${DIR}/alpha.md`]: [long, LINES[0] ?? ''].join('\n') });
+    assert.match((await injectFor(deps(files), request)) ?? '', /was cut at/);
+    assert.equal(files.get(MARKS), undefined);
+    assert.deepEqual((await inboxStatus(deps(files), 'alpha')).map((status) => status.unread.lines.length), [2]);
+    assert.deepEqual((await readInbox(deps(files), { area: 'alpha', claudeSession: TAB, now: NOW })).lines, [long, LINES[0]]);
+  });
+
+  it('still shows the lines when their read mark cannot be written, saying they stay unread', async () => {
+    const memory = new MemoryFiles({ [`${DIR}/alpha.md`]: LINES[0] ?? '' });
+    const files = new FaultyFiles(memory).fail('append', MARKS, systemError('EACCES'));
+    assert.deepEqual((await injectFor(deps(files), request))?.split('\n').slice(1), [
+      SHOWN_LINES[0],
+      'These lines stay unread: their read mark could not be written (EACCES: simulated); `teamrig inbox read --session alpha` marks them read.',
+    ]);
+    assert.equal(await injectFor(deps(files), request), undefined, 'still recorded as shown');
+  });
+
+  it('never moves the read mark back behind a read made while the prompt was read', async () => {
+    const files = new MemoryFiles({ [`${DIR}/alpha.md`]: LINES.slice(0, 4).join('\n') });
+    const real = new JsonlMarkLog(new PlainLogFile(files, MARKS));
+    let reads = 0;
+    // The second read is the hook's check before it writes: an `inbox read` through every line landed in between.
+    const racing: MarkLog = {
+      read: async (): Promise<MarkLogRead> => {
+        reads += 1;
+        if (reads === 2) {
+          await real.append(markAt(LINES, 4, TAB));
+        }
+        return real.read();
+      },
+      append: (mark) => real.append(mark),
+    };
+    const shown = await injectFor({ ...deps(files), marks: racing }, request);
+    assert.match(shown ?? '', /item 4$/);
+    assert.deepEqual((await real.read()).marks, [markAt(LINES, 4, TAB)]);
   });
 
   it('shows nothing for an area with no inbox', async () => {

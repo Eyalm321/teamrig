@@ -1697,8 +1697,9 @@ UNFOLLOWED gh:acme/web#7
 
 ### teamrig inbox read
 
-Prints your unread inbox lines and marks them read. Lines the prompt hook already showed this Claude Code session
-are marked read too, without being printed again (a line the hook cut is printed whole). It also ties this Claude
+Prints your unread inbox lines and marks them read. Lines the prompt hook showed whole are read already; any other
+line it showed this Claude Code session is marked read too, without being printed again (a line the hook cut is
+printed whole). It also ties this Claude
 Code session to the area, so the hooks know you: run it at the start of every work block and after every `/clear`.
 A tab keeps the session it was first bound to: from a tool call, a script or a hook (wherever Claude Code set
 `$CLAUDECODE`), a read as another session of the team is REFUSED (exit 2) and writes nothing, as the guards take who
@@ -6678,7 +6679,7 @@ teamrig hook inbox-reminder < prompt.json
 Output, when lines are new:
 
 ```text
-INBOX web, new in /home/you/.teamrig/teams/shop/state/inbox/web.md (each line is shown once; reading marks them read):
+INBOX web, new in /home/you/.teamrig/teams/shop/state/inbox/web.md (each line is shown once, and marked read when shown whole):
 - 2026-10-15 08:58 lead: api error codes are in docs/errors.md
 ```
 
