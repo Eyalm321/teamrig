@@ -30,8 +30,8 @@ export function repoThreads(issues, tasks, rules, ours) {
 }
 /**
  * The open pull requests of one repository read as `pull` threads, each once, answered by whom its news goes to: the
- * owner of the task one of our own branches names, else `watcher` (github/pull-news.ts pullRecipient). The first read
- * of a pull request counts, so the open read goes first: the changed read carries no posts (github/queries.ts).
+ * owner of the task one of our own branches names, else `watcher` (github/pull-news.ts pullRecipient). Give it the
+ * open read's pull requests: only that read carries their posts (github/queries.ts).
  */
 export function pullThreads(pulls, recipientOf, ours) {
     const seen = new Set();

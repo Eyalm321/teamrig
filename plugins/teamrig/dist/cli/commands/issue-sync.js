@@ -175,7 +175,7 @@ export async function issueSync(args, runtime) {
         if (write) {
             // Only once both reads are in: a repository whose pull requests could not be read keeps every clock it had.
             const ownerOf = (id) => tasks.find((held) => held.id === id)?.owner;
-            threads.push(...issueThreads, ...pullThreads(watch.pulls, (pull) => pullRecipient(pull, ours, ownerOf, watcher), ours));
+            threads.push(...issueThreads, ...pullThreads(watch.open, (pull) => pullRecipient(pull, ours, ownerOf, watcher), ours));
             clocked.add(repo);
         }
         if (auto) {
@@ -270,7 +270,7 @@ async function readPulls(host, repo, before) {
         return { kind: 'failed', reason, lines: [`FAILED ${repo} ${reason}; what was last read of them stays`] };
     }
     const step = pullEvents(before, read.open, read.changed);
-    return { kind: 'read', after: step.after, events: step.events, pulls: [...read.open, ...read.changed], lines: read.notes.map((note) => `NOTE ${repo}: ${note}`) };
+    return { kind: 'read', after: step.after, events: step.events, pulls: [...read.open, ...read.changed], open: read.open, lines: read.notes.map((note) => `NOTE ${repo}: ${note}`) };
 }
 /**
  * Reads `repo`'s posts changed since `before`, the watch the last `--auto` run kept, and routes their new mentions
