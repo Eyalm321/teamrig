@@ -48,7 +48,8 @@ async function runLogged(runtime, command, log) {
     }
 }
 /**
- * `teamrig test -- <command ...>`: runs a test command in the shell, writes all it printed to a
+ * `teamrig test -- <command ...>`: runs a test command (one word as a shell line, several each quoted: see
+ * `commandLine`), writes all it printed to a
  * numbered log (the session's newest 20 are kept) and prints one PASS or FAIL line, then each failing
  * test within `tests.maxFailureChars`, so a long test run costs the model a few lines. Exit 0 when the
  * command passed, 1 otherwise.
