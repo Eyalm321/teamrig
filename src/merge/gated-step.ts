@@ -1,7 +1,7 @@
 import type { LeadTree } from '../config/lead-tree.ts';
 import type { RolesConfig } from '../config/types.ts';
 import type { Clock } from '../core/lock.ts';
-import { renamedPath, type CommitStat } from '../push-guard/commit-size.ts';
+import { listedCommits, renamedPath, type CommitRange, type CommitStat } from '../push-guard/commit-size.ts';
 import type { PassRecord } from '../push-guard/pass-record.ts';
 import { holdApproved, reviewRoute } from '../push-guard/review-gate.ts';
 import type { Task } from '../register/fold.ts';
@@ -35,8 +35,8 @@ export interface GatedPorts {
   taskOf(id: string): Promise<GatedTask | undefined>;
   /** The tree a commit makes; undefined when git cannot read it. */
   treeOf(head: string): string | undefined;
-  /** The commits `base..head` with their files; undefined when git cannot read them. */
-  commitsOf(base: string, head: string): readonly CommitStat[] | undefined;
+  /** The commits `base..head` with their files, a no answer from git, or undefined when git cannot read them. */
+  commitsOf(base: string, head: string): CommitRange;
   /** The pass record of a tree; undefined when none proves it. */
   passOf(tree: string): Promise<PassRecord | undefined>;
   say(text: string): void;
@@ -129,7 +129,11 @@ export async function gatedVerdict(setup: GatedSetup, ports: GatedPorts, change:
   if (tree === undefined) {
     return { kind: 'held', reason: `could not read the tree ${short(head)} makes, so the self-merge gates cannot read its pass record` };
   }
-  const commits = ports.commitsOf(base, head);
+  const read = ports.commitsOf(base, head);
+  const commits = listedCommits(read);
+  if (read !== undefined && 'unanswered' in read) {
+    return { kind: 'held', reason: `git gave no answer reading the commits of ${branch} against ${short(base)} (${read.unanswered}), so the self-merge gates cannot weigh them; merge again once git answers` };
+  }
   if (commits === undefined) {
     return { kind: 'held', reason: `could not read the commits of ${branch} against ${short(base)}, so the self-merge gates cannot weigh them` };
   }

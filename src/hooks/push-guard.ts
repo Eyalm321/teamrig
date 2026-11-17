@@ -3,7 +3,7 @@ import type { ConfigLoad } from '../config/load.ts';
 import type { CommitsConfig, PushToProtected, SkipHooks } from '../config/types.ts';
 import { toolCommandReadings } from '../core/bash-tool-readings.ts';
 import { isRecord, recordField, stringField } from '../core/guards.ts';
-import { describeLargeCommits, largeCommits, type CommitLog, type CommitStat, type LargeCommit } from '../push-guard/commit-size.ts';
+import { describeLargeCommits, largeCommits, listedCommits, type CommitLog, type CommitStat, type LargeCommit } from '../push-guard/commit-size.ts';
 import { hookSkips, type HookSkip } from '../push-guard/hook-skips.ts';
 import { findGitInvocations } from '../push-guard/invocations.ts';
 import {
@@ -88,14 +88,14 @@ export function skipHooksReason(skips: readonly HookSkip[]): string {
   );
 }
 
-/** The large commits the updates would send, each once. A range git cannot list adds none, so a broken log never blocks a push. */
+/** The large commits the updates would send, each once. A range git cannot list or gave no answer for adds none, so a broken or slow log never blocks a push. */
 function largeCommitsIn(updates: readonly ProtectedUpdate[], env: PushGuardEnv): LargeCommit[] {
   if (env.commits.gate === 'off') {
     return [];
   }
   const commits = new Map<string, CommitStat>();
   for (const update of updates) {
-    for (const commit of env.commitLog.between(update.dir, update.base, update.source) ?? []) {
+    for (const commit of listedCommits(env.commitLog.between(update.dir, update.base, update.source)) ?? []) {
       commits.set(commit.sha, commit);
     }
   }
