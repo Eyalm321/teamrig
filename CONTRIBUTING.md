@@ -174,7 +174,13 @@ matrix.
 - Each commit is one logical change. The `size rule` (`tools/ci/size-rule-cli.ts`, run by the local gate, CI
   and `npm run check`) fails a commit over 400 changed non-test lines or 15 non-test files whose message has
   no `Large-commit: <reason>` line: the push guard's rule at its defaults, so a pull request meets it too.
-- Nothing is pushed to `main` directly, and release tags are set only by the maintainer.
+- Nothing is pushed to `main` directly, and release tags are set only by the release workflow, which the maintainer
+  runs.
+- The `release` workflow (`.github/workflows/release.yml`, run by hand for now) keeps one release pull request open
+  through release-please (`release-please-config.json`): it raises the version in the plugin's `plugin.json` and
+  `src/core/version.ts` and writes the notes, and a person reviews and merges it. Once it merged, the next run tags
+  main `teamrig-v<version>` with the notes, builds the dist with a read-only token, and pushes main's commit with
+  the dist on top to the `release` branch, tagged `v<version>` (`tools/release/publish.ts`).
 
 ## Issues
 Each issue becomes a task teamrig tracks, so an issue carries the task's fields. Open one through a form: a blank issue
@@ -229,11 +235,16 @@ join; agents follow [`dev-design-issue`](.claude/skills/dev-design-issue/SKILL.m
   new push dismisses an approval given before it. A change to the git hooks, CI, the scrub or teamrig's guards
   (`.githooks/`, `.github/`, `tools/scrub/`, `tools/ci/`, `src/hooks/`, `src/push-guard/`, `src/secret-guard/`,
   `src/package-guard/`, `src/permissions/`) also gets a security review.
-- **Rules on `main`**: `.github/rulesets/` holds the repository's two rulesets for `main`, imported under Settings,
-  Rules, Rulesets. `main` lets no one push, force-push or delete it and takes a change only through a pull request,
+- **Rules on `main`**: `.github/rulesets/` holds the repository's rulesets, the two for `main` and the three for
+  releases, imported under Settings, Rules, Rulesets. `main` lets no one push, force-push or delete it and takes a change only through a pull request,
   rebase-merged once its `every check passed` check passed on the newest `main`; `main review` asks a code owner
   to approve the last push, which only the maintainer's own pull requests skip. `tools/ci/rulesets.test.ts` holds
   them to `ci.yml` and `.github/CODEOWNERS`.
+- **Rules on releases**: the `release` branch, which every install reads, and a `v<version>` tag, which an install
+  can pin, only the release workflow's publish job may create or push (`release`, `release tags`): it pushes with a
+  deploy key, the rulesets' one bypass actor, whose private half is a secret of the `release` environment, which only
+  `main` may use. No one moves or deletes a `v<version>` tag, nor the `teamrig-v<version>` tag release-please puts
+  on `main` (`release-please tags`).
 
 ## Scrub checks
 Two checks keep private data out of the history:

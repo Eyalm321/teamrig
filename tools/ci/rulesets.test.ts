@@ -78,3 +78,35 @@ describe('rulesets for main', () => {
     assert.deepEqual(owners, [`* @${slug.split('/')[0] ?? ''}`]);
   });
 });
+
+describe('rulesets for releases', () => {
+  const branch = readRecord('.github/rulesets/release.json');
+  const tags = readRecord('.github/rulesets/release-tags.json');
+  const markers = readRecord('.github/rulesets/release-please-tags.json');
+  const deployKey = [{ actor_id: null, actor_type: 'DeployKey', bypass_mode: 'always' }];
+
+  it('are on; only the deploy key the publish job pushes with gets past the branch and the v* tags', () => {
+    for (const ruleset of [branch, tags, markers]) assert.equal(ruleset['enforcement'], 'active');
+    assert.deepEqual(branch['bypass_actors'], deployKey);
+    assert.deepEqual(tags['bypass_actors'], deployKey);
+    assert.deepEqual(markers['bypass_actors'], []);
+  });
+
+  it('the release branch, which every install reads, only the publish job can create, push, rewrite or delete', () => {
+    assert.equal(branch['target'], 'branch');
+    assert.deepEqual(recordField(branch, 'conditions'), { ref_name: { include: ['refs/heads/release'], exclude: [] } });
+    assert.deepEqual([...rulesOf(branch).keys()].sort(), ['creation', 'deletion', 'non_fast_forward', 'update']);
+  });
+
+  it("a build's v<version> tag, which an install can pin, only the publish job creates, and no one moves or deletes", () => {
+    assert.equal(tags['target'], 'tag');
+    assert.deepEqual(recordField(tags, 'conditions'), { ref_name: { include: ['refs/tags/v*'], exclude: [] } });
+    assert.deepEqual([...rulesOf(tags).keys()].sort(), ['creation', 'deletion', 'non_fast_forward', 'update']);
+  });
+
+  it("main's teamrig-v<version> marker, which release-please makes with the job's token, no one moves or deletes", () => {
+    assert.equal(markers['target'], 'tag');
+    assert.deepEqual(recordField(markers, 'conditions'), { ref_name: { include: ['refs/tags/teamrig-v*'], exclude: [] } });
+    assert.deepEqual([...rulesOf(markers).keys()].sort(), ['deletion', 'non_fast_forward', 'update']);
+  });
+});
