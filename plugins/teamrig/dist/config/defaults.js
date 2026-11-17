@@ -232,7 +232,7 @@ export const DEFAULT_TESTS = { maxFailureChars: 4000 };
  * per further hundred open, or recently changed closed, issues). An outsider's issue waits for the `teamrig` label,
  * named after the tool so it does not clash with a repository's own triage labels.
  */
-export const DEFAULT_GITHUB = { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35 };
+export const DEFAULT_GITHUB = { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35, activity: true, followMax: 20 };
 /**
  * Claude Code compacts a 200k window at about 167k, so 120k refreshes before that; every 3 tasks catches a
  * session that grows slowly, from 80k up. Measured over 8 days of 12 sessions: about 9 refreshes a day in all.
@@ -349,6 +349,8 @@ export const DEFAULT_QUEUE = {
 export const DEFAULT_DELIVERY_WAIT = { pollSeconds: 30, maxMinutes: 60 };
 /** A deploy's check answers within 20 seconds, else the deploy waits. */
 export const DEFAULT_CHECK_TIMEOUT_SECONDS = 20;
+/** No credential variable reaches a program teamrig starts until the owner names it. */
+export const DEFAULT_PASS_ENV = [];
 /** A deploy freeze lasts at most two hours. */
 export const DEFAULT_FREEZES = { maxMinutes: 120 };
 /** A target measures cleanly 30 minutes after a deploy; a deploy the ledger knows only by its ledger.md line ran for 20 minutes; a stable period under 15 minutes is left out. */

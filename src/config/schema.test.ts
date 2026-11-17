@@ -186,6 +186,7 @@ const LIMIT_PATHS: { readonly [Name in keyof typeof CONFIG_LIMITS]: string } = {
   closedDays: 'github.closedDays',
   githubProbeSeconds: 'github.probeSeconds',
   similarThreshold: 'github.similarThreshold',
+  githubFollowMax: 'github.followMax',
   budgetTargetPct: 'budget.targetPct',
   budgetReservePct: 'budget.reservePct',
   weeklyLimitW: 'budget.weeklyLimitW',
@@ -244,6 +245,7 @@ const LIMIT_PATHS: { readonly [Name in keyof typeof CONFIG_LIMITS]: string } = {
   stablePeriodMinMinutes: 'delivery.stablePeriods.minMinutes',
   resetBlackoutHours: 'delivery.schedule.resetBlackoutHours',
   execPath: 'exec.path',
+  passEnv: 'delivery.passEnv',
   spotlightDim: 'meeting.spotlight.dim',
   spotlightBreakthroughSeconds: 'meeting.spotlight.breakthroughSeconds',
 };

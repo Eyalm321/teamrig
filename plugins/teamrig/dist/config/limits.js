@@ -68,6 +68,7 @@ export const CONFIG_LIMITS = {
     closedDays: { min: 1, max: 365 },
     githubProbeSeconds: { min: 0, max: 3600 },
     similarThreshold: { min: 0, max: 1 },
+    githubFollowMax: { min: 0, max: 100 },
     budgetTargetPct: { min: 1, max: 100 },
     budgetReservePct: { min: 0, max: 50 },
     /** 0 turns the floor off; past 50 one team's floor would leave a second less than its own (T2215). */
@@ -123,6 +124,7 @@ export const CONFIG_LIMITS = {
     deliveryPollSeconds: { min: 1, max: 600 },
     deliveryWaitMaxMinutes: { min: 0, max: 1440 },
     checkTimeoutSeconds: { min: 1, max: 600 },
+    passEnv: { maxItems: 32 },
     freezeMaxMinutes: { min: 1, max: 1440 },
     branchSlugMax: { min: 8, max: 100 },
     settleMinutes: { min: 0, max: 1440 },

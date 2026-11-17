@@ -24,6 +24,7 @@ import {
   DEFAULT_DECISIONS,
   DEFAULT_DELIVERY_WAIT,
   DEFAULT_CHECK_TIMEOUT_SECONDS,
+  DEFAULT_PASS_ENV,
   DEFAULT_GITHUB,
   DEFAULT_QUEUE,
   DEFAULT_HIRING,
@@ -754,6 +755,8 @@ function parseGithub(read: ConfigReader, raw: JsonRecord, sessions: readonly str
     statusPush: read.boolean(raw, 'statusPush', 'github', DEFAULT_GITHUB.statusPush),
     acceptLabel: read.string(raw, 'acceptLabel', 'github', DEFAULT_GITHUB.acceptLabel, shortLine(GITHUB_LABEL_MAX_LENGTH)),
     similarThreshold: read.number(raw, 'similarThreshold', 'github', DEFAULT_GITHUB.similarThreshold, CONFIG_LIMITS.similarThreshold),
+    activity: read.boolean(raw, 'activity', 'github', DEFAULT_GITHUB.activity),
+    followMax: read.integer(raw, 'followMax', 'github', DEFAULT_GITHUB.followMax, CONFIG_LIMITS.githubFollowMax),
     ...readGithubWatcher(read, raw, sessions),
     ...(issueAtAdd === undefined ? {} : { issueAtAdd }),
   };
@@ -789,7 +792,7 @@ function readProbeSeconds(read: ConfigReader, raw: JsonRecord): number {
   return seconds;
 }
 
-/** `github.watcher`: one of the sessions, else left unset (the lead) with the wrong one reported. */
+/** `github.watcher`: one of the sessions, else left unset (githubWatcher then picks the GitHub answerer, else the lead) with the wrong one reported. */
 function readGithubWatcher(read: ConfigReader, raw: JsonRecord, sessions: readonly string[]): { watcher?: string } {
   const watcher = read.optionalString(raw, 'watcher', 'github', isSessionName);
   if (watcher === undefined) {
@@ -1030,6 +1033,7 @@ function parseDelivery(read: ConfigReader, raw: JsonRecord): DeliveryConfig {
       maxMinutes: read.integer(wait, 'maxMinutes', `${path}.wait`, DEFAULT_DELIVERY_WAIT.maxMinutes, CONFIG_LIMITS.deliveryWaitMaxMinutes),
     },
     checkTimeoutSeconds: read.integer(raw, 'checkTimeoutSeconds', path, DEFAULT_CHECK_TIMEOUT_SECONDS, CONFIG_LIMITS.checkTimeoutSeconds),
+    passEnv: read.stringList(raw, 'passEnv', path, DEFAULT_PASS_ENV, ENV_VARIABLE, CONFIG_LIMITS.passEnv.maxItems),
     freezes: { maxMinutes: read.integer(freezes, 'maxMinutes', `${path}.freezes`, DEFAULT_FREEZES.maxMinutes, CONFIG_LIMITS.freezeMaxMinutes) },
     stablePeriods: parseStablePeriods(read, read.section(raw, 'stablePeriods', path), deployTargetsOf(repos)),
     branches: parseBranches(read, read.section(raw, 'branches', path)),
