@@ -21,11 +21,17 @@ interface CommandSpec {
   readonly rest?: boolean;
   /** What running it does: `/teamrig` runs a `read` at once, a `write` only when the person typed it, never an `internal` one (src/cli/commands/slash.ts). */
   readonly effect: CommandEffect;
+  /**
+   * The command binds the tab to the session it names and keeps its own bind-once rule (T3081): a tool call cannot move
+   * a bound tab, the person can. The tab-session gate (T3082) leaves it to that rule rather than refusing the person.
+   */
+  readonly bindsTab?: boolean;
   /** Commands load on first use, so a hook that runs on every tool call loads only its own code. */
   readonly load: () => Promise<Command>;
 }
 
 const registerCommands = () => import('./commands/register.ts');
+const tabSessionCommands = () => import('./commands/tab-session.ts');
 const statsCommands = () => import('./commands/stats.ts');
 const reportCommands = () => import('./commands/report.ts');
 const goalCommands = () => import('./commands/goal.ts');
@@ -155,7 +161,7 @@ const COMMANDS: Readonly<Record<string, CommandSpec>> = {
   'goal list': { effect: 'read', flags: ['session'], load: async () => (await goalCommands()).goalList },
   'goal show': { effect: 'read', flags: ['session'], load: async () => (await goalCommands()).goalShow },
   files: { effect: 'write', flags: ['session'], switches: ['notes'], load: async () => (await filesCommands()).files },
-  'inbox read': { effect: 'write', flags: ['session'], load: async () => (await inboxCommands()).read },
+  'inbox read': { effect: 'write', bindsTab: true, flags: ['session'], load: async () => (await inboxCommands()).read },
   'inbox status': { effect: 'read', flags: ['session'], load: async () => (await inboxCommands()).status },
   'inbox add': { effect: 'write', flags: ['session', 'to', 'text', 'wake', 'wake-by'], load: async () => (await inboxCommands()).add },
   'exec request': { effect: 'write', flags: ['session', 'file'], load: async () => (await execCommands()).request },
@@ -1118,6 +1124,10 @@ export async function runCli(given: readonly string[], runtime: CliRuntime): Pro
       throw new UsageError(`unknown command "${args.command}"`);
     }
     refuseSettingsWrite(args.command, args.switches, runtime);
+    if (spec.effect === 'write' && spec.bindsTab !== true) {
+      // A write runs only as the tab's own session, whatever --session says (T3082); a tab's binding has its own rule.
+      await (await tabSessionCommands()).refuseAnotherTabSession(args, runtime);
+    }
     const command = await spec.load();
     return await command(args, runtime);
   } catch (error) {
