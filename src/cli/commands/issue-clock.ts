@@ -39,7 +39,8 @@ export function repoThreads(issues: readonly HostIssue[], tasks: readonly Task[]
 
 /**
  * The open pull requests of one repository read as `pull` threads, each once, answered by whom its news goes to: the
- * owner of the task one of our own branches names, else `watcher` (github/pull-news.ts pullRecipient).
+ * owner of the task one of our own branches names, else `watcher` (github/pull-news.ts pullRecipient). The first read
+ * of a pull request counts, so the open read goes first: the changed read carries no posts (github/queries.ts).
  */
 export function pullThreads(pulls: readonly HostPull[], recipientOf: (pull: HostPull) => string, ours: OurLogins): Thread[] {
   const seen = new Set<string>();

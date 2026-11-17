@@ -78,17 +78,20 @@ describe('the shipped queries', () => {
     assert.deepEqual(pullPageArgs({ ...PAGE, after: 'Y3Vyc29y' }, 'changed'), ['api', 'graphql', '-f', `query=${PULL_REQUESTS_QUERY}`, '-f', 'owner=acme', '-f', 'name=web', '-f', 'after=Y3Vyc29y']);
   });
 
-  it("ask for each pull request comment's and review's time and author, never its text (#1351)", () => {
-    for (const query of [PULL_REQUESTS_QUERY, OPEN_PULLS_QUERY]) {
-      assert.ok(query.includes(`comments(last: ${COMMENTS_READ}) { nodes { createdAt authorAssociation author { __typename login } } }`), query);
-      assert.ok(query.includes(`reviews(last: ${COMMENTS_READ}) { nodes { submittedAt authorAssociation author { __typename login } } }`), query);
-    }
+  it("ask, in the open read only, for each pull request comment's and review's time and author, never its text (#1351, #1366)", () => {
+    const comments = `comments(last: ${COMMENTS_READ}) { nodes { createdAt authorAssociation author { __typename login } } }`;
+    const reviews = `reviews(last: ${COMMENTS_READ}) { nodes { submittedAt authorAssociation author { __typename login } } }`;
+    assert.ok(OPEN_PULLS_QUERY.includes(comments), OPEN_PULLS_QUERY);
+    assert.ok(OPEN_PULLS_QUERY.includes(reviews), OPEN_PULLS_QUERY);
+    // The changed read also pages merged and closed ones, which never become threads: their posts would only cost nodes.
+    assert.doesNotMatch(PULL_REQUESTS_QUERY, /comments\(|reviews\(/);
   });
 
-  it('read the open pull requests alone, with the same fields', () => {
+  it('read the open pull requests alone, with the same fields and their posts', () => {
     assert.ok(OPEN_PULLS_QUERY.includes('states: [OPEN]'));
     assert.doesNotMatch(OPEN_PULLS_QUERY, /mutation|body/i);
-    assert.equal(OPEN_PULLS_QUERY.replace('states: [OPEN], ', ''), PULL_REQUESTS_QUERY);
+    const withoutPosts = OPEN_PULLS_QUERY.replace('states: [OPEN], ', '').replace(/\n\s*comments\(last: [^\n]*\n\s*reviews\(last: [^\n]*/, '');
+    assert.equal(withoutPosts, PULL_REQUESTS_QUERY);
     assert.deepEqual(pullPageArgs(PAGE, 'open'), ['api', 'graphql', '-f', `query=${OPEN_PULLS_QUERY}`, '-f', 'owner=acme', '-f', 'name=web']);
   });
 
