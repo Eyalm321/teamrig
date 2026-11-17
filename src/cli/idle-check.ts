@@ -297,6 +297,11 @@ export async function idleVerdictOf(runtime: CliRuntime, config: KitConfig, rost
     if (now < closesAt) {
       return keep(`${work}, woken for it at ${zone.clock(new Date(woken.at))}: it closes at ${zone.clock(new Date(closesAt))} if still quiet`);
     }
+    // A wake whose line never went out (one marked in dry-run, or a failed post) closes nobody: it is tried again, once
+    // per closeIdleMinutes.
+    if (!woken.posted && config.open.idle.mode === 'on') {
+      return { kind: 'wake', ids, why: `${label} ${work}; its wake at ${zone.clock(new Date(woken.at))} posted no line, so the idle pass wakes it again rather than close it` };
+    }
   }
   const resume = resumeVerdict({ claudeSession: record.claudeSession, changedAt: last.changedAt, tokens: last.tokens }, config.hiring, now);
   // A ready refresh reopens fresh on its handover (open.ts, T2354), so the size of the old context no longer matters.

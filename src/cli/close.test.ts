@@ -533,7 +533,7 @@ describe('work it can start never keeps a quiet session for good (T1247, upstrea
   });
 
   it('closes a session quiet past the threshold, woken for its startable task and still quiet', async () => {
-    const alpha = await quietWithWork({ at: NOW - 61 * MINUTE_MS, ids: ['T1'] });
+    const alpha = await quietWithWork({ at: NOW - 61 * MINUTE_MS, ids: ['T1'], posted: true });
     const closed = await idleClose(alpha);
     assert.equal(closed.code, 0, closed.stderr.join('\n'));
     assert.deepEqual(closed.stdout, ['CLOSED app-alpha (session alpha): quiet 75 min, its Claude Code holds 1300 MB, now free']);
@@ -541,16 +541,29 @@ describe('work it can start never keeps a quiet session for good (T1247, upstrea
   });
 
   it('keeps a session woken under the threshold ago, and wakes it again for new work or after it worked on past its wake', async () => {
-    const fresh = await quietWithWork({ at: NOW - 30 * MINUTE_MS, ids: ['T1'] });
+    const fresh = await quietWithWork({ at: NOW - 30 * MINUTE_MS, ids: ['T1'], posted: true });
     assert.deepEqual((await idleClose(fresh)).stdout, ['KEPT app-alpha (session alpha) has work it can start (T1), woken for it at 09:30 UTC: it closes at 10:30 UTC if still quiet']);
 
-    const handed = await quietWithWork({ at: NOW - 61 * MINUTE_MS, ids: ['T1'] });
+    const handed = await quietWithWork({ at: NOW - 61 * MINUTE_MS, ids: ['T1'], posted: true });
     ok(await handed.kit.run(['add', '--title', 'Fix the outage', '--description', 'what and why', '--priority', 'p1', '--owner', 'alpha', '--session', 'lead']));
     assert.match((await idleClose(handed)).stdout.join('\n'), /^KEPT app-alpha \(session alpha\) has work it can start \(T1, T2\) and has been quiet 75 min: the idle pass wakes it/);
 
-    const workedOn = await quietWithWork({ at: NOW - 200 * MINUTE_MS, ids: ['T1'] });
+    const workedOn = await quietWithWork({ at: NOW - 200 * MINUTE_MS, ids: ['T1'], posted: true });
     assert.match((await idleClose(workedOn)).stdout.join('\n'), /^KEPT app-alpha \(session alpha\) has work it can start \(T1\) and has been quiet 75 min: the idle pass wakes it/);
     for (const kept of [fresh, handed, workedOn]) {
+      assert.deepEqual(kept.processes.ends, []);
+    }
+  });
+
+  it('wakes again, in mode on, a session whose wake posted no line (a dry-run mark, a failed post) once it is the threshold old, never closing it', async () => {
+    const fresh = await quietWithWork({ at: NOW - 30 * MINUTE_MS, ids: ['T1'], posted: false });
+    assert.deepEqual((await idleClose(fresh)).stdout, ['KEPT app-alpha (session alpha) has work it can start (T1), woken for it at 09:30 UTC: it closes at 10:30 UTC if still quiet']);
+
+    const unposted = await quietWithWork({ at: NOW - 61 * MINUTE_MS, ids: ['T1'], posted: false });
+    assert.deepEqual((await idleClose(unposted)).stdout, [
+      'KEPT app-alpha (session alpha) has work it can start (T1); its wake at 08:59 UTC posted no line, so the idle pass wakes it again rather than close it',
+    ]);
+    for (const kept of [fresh, unposted]) {
       assert.deepEqual(kept.processes.ends, []);
     }
   });
@@ -571,7 +584,7 @@ describe('work it can start never keeps a quiet session for good (T1247, upstrea
 
   it('keeps a session woken and still quiet whose turn has not ended', async () => {
     const call = { type: 'assistant', isSidechain: false, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }] } };
-    const alpha = await quietWithWork({ at: NOW - 61 * MINUTE_MS, ids: ['T1'] }, `${reply(40_000, 75)}${JSON.stringify(call)}\n`);
+    const alpha = await quietWithWork({ at: NOW - 61 * MINUTE_MS, ids: ['T1'], posted: true }, `${reply(40_000, 75)}${JSON.stringify(call)}\n`);
     assert.match((await idleClose(alpha)).stdout.join('\n'), /^KEPT app-alpha \(session alpha\) is at a tool call/);
     assert.deepEqual(alpha.processes.ends, []);
   });

@@ -97,19 +97,25 @@ export function idleWakeLine(ids: readonly string[], closesAt: string): string {
  * Wakes each session the pass found quiet with work it can start (T1247): in mode `on` with an urgent line from
  * teamrig to the session (src/cli/urgent-line.ts), which its next wake check takes, and in both modes as a log
  * record, with why the line was not posted. Each is marked woken all the same (`wokenAfter`), so a refusing inbox
- * gets no line a minute and the session still closes once the wake is `open.headroom.closeIdleMinutes` old.
+ * gets no line a minute; a mark whose line did not go out is woken again, not closed, once it is
+ * `open.headroom.closeIdleMinutes` old (`wokenFor`). The sessions whose line went out.
  */
-async function wakeQuiet(runtime: CliRuntime, kit: Kit, config: KitConfig, steps: readonly PassStep[], now: number): Promise<void> {
+async function wakeQuiet(runtime: CliRuntime, kit: Kit, config: KitConfig, steps: readonly PassStep[], now: number): Promise<ReadonlySet<string>> {
   const { mode } = config.open.idle;
   const closesAt = teamZone(config, runtime).clock(new Date(now + config.open.headroom.closeIdleMinutes * MS_PER_MINUTE));
+  const posted = new Set<string>();
   for (const step of steps) {
     if (step.kind !== 'wake') {
       continue;
     }
     const line = idleWakeLine(step.ids, closesAt);
     const problem = mode === 'on' ? await postUrgentLine(runtime, kit, config, { to: step.id, from: KIT_NAME, text: line }) : undefined;
+    if (mode === 'on' && problem === undefined) {
+      posted.add(step.id);
+    }
     await runtime.files.append(kit.paths.idlePassLog, formatIdlePassRecord({ kind: 'wake', at: now, mode, id: step.id, line, problem }));
   }
+  return posted;
 }
 
 /** The internal command that makes each act (idle-act.ts). */
@@ -175,9 +181,9 @@ async function passOnce(runtime: CliRuntime, kit: Kit, config: KitConfig, roster
   }
   const held = heldActs(previous?.pending, run.steps, now);
   const started = mode === 'on' ? await startActs(runtime, kit, roster, actsToStart(run.steps, held), now) : {};
-  await wakeQuiet(runtime, kit, config, run.steps, now);
+  const posted = await wakeQuiet(runtime, kit, config, run.steps, now);
   const told = await tellHookless(runtime, kit, config, roster, run.hookless, previous, now);
-  return passedState(now, run.steps, { ...held, ...started }, told, toLog.length > 0 ? now : previous?.logged, wokenAfter(previous?.woken, run.steps, now));
+  return passedState(now, run.steps, { ...held, ...started }, told, toLog.length > 0 ? now : previous?.logged, wokenAfter(previous?.woken, run.steps, now, posted));
 }
 
 /**
