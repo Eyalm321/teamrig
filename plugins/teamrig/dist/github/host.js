@@ -1,6 +1,6 @@
 import { targetText, } from "../issues/host.js";
 import { exitText } from "../open/processes.js";
-import { assigneeReadArgs, blockedByAddArgs, commentsReadArgs, issueAssignArgs, issueUnassignArgs, issueBodyArgs, issueCloseArgs, issueCommentArgs, issueCreateArgs, issueLabelAddArgs, issueLabelRemoveArgs, issueReadArgs, jobLogArgs, labelReadArgs, isLogin, labelCreateArgs, subIssueAddArgs, WATCH_PATHS, watchProbeArgs, userReadArgs, } from "./gh.js";
+import { assigneeReadArgs, blockedByAddArgs, commentsReadArgs, issueAssignArgs, issueAssigneeReadArgs, issueUnassignArgs, issueBodyArgs, issueCloseArgs, issueCommentArgs, issueCreateArgs, issueLabelAddArgs, issueLabelRemoveArgs, issueReadArgs, jobLogArgs, labelReadArgs, isLogin, labelCreateArgs, subIssueAddArgs, WATCH_PATHS, watchProbeArgs, userReadArgs, } from "./gh.js";
 import { probeAnswerOf } from "./probe.js";
 import { ghFailureKind, ISSUE_LIMIT, listIssues, plainLine, readCommentsIn, runRead, startFailureText } from "./issues.js";
 import { failedLogExcerpt } from "./job-log.js";
@@ -212,6 +212,47 @@ export class GitHubIssueHost {
      * failed with gh's own line.
      */
     async assigneeExists(repo, login) {
+        const user = await this.spelledLogin(repo, login);
+        if (user.kind !== 'found') {
+            return user;
+        }
+        const read = await this.read(repo, assigneeReadArgs(repo, user.login), `whether ${user.login} may be assigned in ${repo}`);
+        return read.kind === 'found' ? user : read;
+    }
+    /**
+     * Reads whether the login may be assigned to the one issue or pull request, as GitHub spells it (as assigneeExists
+     * does): GitHub takes one with access to the repository, and also one who took part in the item. Found with that
+     * login when gh ends well; missing when GitHub answers Not Found; else failed with gh's own line.
+     */
+    async assignableOn(target, login) {
+        const user = await this.spelledLogin(target.repo, login);
+        if (user.kind !== 'found') {
+            return user;
+        }
+        const read = await this.read(target.repo, issueAssigneeReadArgs(target, user.login), `whether ${user.login} may be assigned to ${targetText(target)}`);
+        return read.kind === 'found' ? user : read;
+    }
+    /**
+     * Reads the one issue or pull request for the names of its labels: read with them, missing when GitHub answers Not
+     * Found, else failed with gh's own line, or when the answer holds no label list.
+     */
+    async issueLabels(target) {
+        const shown = targetText(target);
+        const read = await this.read(target.repo, issueReadArgs(target), `the labels of ${shown}`);
+        if (read.kind !== 'found') {
+            return read;
+        }
+        const labels = labelNamesIn(read.stdout);
+        return labels === undefined ? { kind: 'failed', reason: `gh printed no label list for ${shown}` } : { kind: 'read', labels };
+    }
+    /**
+     * The user `login` names, with the login as GitHub keeps its case: GitHub's assignee checks match that case only,
+     * while teamrig keeps logins in lowercase. Missing when GitHub has no such user.
+     */
+    async spelledLogin(repo, login) {
+        if (!isLogin(login)) {
+            return { kind: 'failed', reason: `${JSON.stringify(login)} is no GitHub login` };
+        }
         const user = await this.read(repo, userReadArgs(login), `the GitHub user ${login}`);
         if (user.kind !== 'found') {
             return user;
@@ -220,8 +261,7 @@ export class GitHubIssueHost {
         if (spelled === undefined || spelled.toLowerCase() !== login.toLowerCase()) {
             return { kind: 'failed', reason: `gh printed no login ${login} for the GitHub user ${login}` };
         }
-        const read = await this.read(repo, assigneeReadArgs(repo, spelled), `whether ${spelled} may be assigned in ${repo}`);
-        return read.kind === 'found' ? { kind: 'found', login: spelled } : read;
+        return { kind: 'found', login: spelled };
     }
     /** One read of `what` in `repo`: found with what gh printed when it ends well, missing on Not Found, else failed with gh's own line. */
     async read(repo, args, what) {
@@ -413,4 +453,33 @@ export function issueIdIn(stdout) {
     }
     const { id } = parsed;
     return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+/**
+ * The names of the labels of an issue as GitHub's REST API prints it: its `labels` list, each an object with a
+ * `name` string. Undefined when the answer holds no such list.
+ */
+export function labelNamesIn(stdout) {
+    let parsed;
+    try {
+        parsed = JSON.parse(stdout);
+    }
+    catch {
+        return undefined;
+    }
+    if (typeof parsed !== 'object' || parsed === null || !('labels' in parsed)) {
+        return undefined;
+    }
+    const list = parsed.labels;
+    if (!Array.isArray(list)) {
+        return undefined;
+    }
+    const items = list;
+    const names = [];
+    for (const label of items) {
+        if (typeof label !== 'object' || label === null || !('name' in label) || typeof label.name !== 'string') {
+            return undefined;
+        }
+        names.push(label.name);
+    }
+    return names;
 }
