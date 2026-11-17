@@ -244,9 +244,8 @@ function requestFieldsOf(record: JsonRecord): Pick<QueuedStepRecord, 'kind' | 't
   };
 }
 
-/** The optional fields a record carries, each left out when it is missing or bad, since they only add to it. */
 /** A queued step's folder and tree (#708), each field kept only when it is a non-empty string or, `dirty`, a boolean. */
-function treeFieldsOf(record: JsonRecord): Pick<QueuedStepRecord, 'cwd' | 'gitTop' | 'head' | 'dirty'> {
+function parsedTreeFieldsOf(record: JsonRecord): Pick<QueuedStepRecord, 'cwd' | 'gitTop' | 'head' | 'dirty'> {
   const [cwd, gitTop, head] = [stringField(record, 'cwd'), stringField(record, 'gitTop'), stringField(record, 'head')];
   const dirty = record['dirty'];
   return {
@@ -257,6 +256,7 @@ function treeFieldsOf(record: JsonRecord): Pick<QueuedStepRecord, 'cwd' | 'gitTo
   };
 }
 
+/** The optional fields a record carries, each left out when it is missing or bad, since they only add to it. */
 function queuedStepExtrasOf(record: JsonRecord): Pick<QueuedStepRecord, 'kind' | 'task' | 'priority' | 'kit' | 'queuedAt' | 'waits' | 'shared' | 'cwd' | 'gitTop' | 'head' | 'dirty' | StepMemoryField> {
   const [kit, queuedAt, waits] = [stringField(record, 'kit'), timeField(record, 'queuedAt'), waitsField(record)];
   const memory: Partial<Record<StepMemoryField, number>> = {};
@@ -272,7 +272,7 @@ function queuedStepExtrasOf(record: JsonRecord): Pick<QueuedStepRecord, 'kind' |
     ...(queuedAt === undefined ? {} : { queuedAt }),
     ...(waits === undefined ? {} : { waits }),
     ...(record['shared'] === true ? { shared: true } : {}),
-    ...treeFieldsOf(record),
+    ...parsedTreeFieldsOf(record),
     ...memory,
   };
 }
