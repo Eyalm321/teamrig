@@ -1019,7 +1019,7 @@ function readServiceCommands(read: ConfigReader, entry: JsonRecord, path: string
   value.forEach((item: unknown, index) => {
     const itemAt = `${at}[${index}]`;
     if (typeof item === 'string' && !isServiceCommand(item) && COMMAND_NAME_SHAPE.test(item)) {
-      read.warn(itemAt, `${describe(item)} is no command this teamrig knows: a newer teamrig wrote it, so this tab does not grant it; reload to use it`);
+      read.warn(itemAt, `${describe(item)} is no command this teamrig knows: a newer teamrig wrote it or it is misspelt, so this tab does not grant it; reload, or fix the name`);
     } else if (typeof item !== 'string' || !isServiceCommand(item)) {
       read.report(itemAt, `${describe(item)} is no command a service role may hold; one of: ${SERVICE_COMMANDS.join(', ')}`);
     } else if (commands.includes(item)) {

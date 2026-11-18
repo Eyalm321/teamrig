@@ -465,7 +465,7 @@ describe('runCli: config', () => {
     assert.equal(result.code, EXIT.ok);
     assert.deepEqual(result.stdout, [
       `VALID ${CONFIG_PATH}, with 1 warning(s)`,
-      '  serviceRoles.github.commands[1]: "issue delete" is no command this teamrig knows: a newer teamrig wrote it, so this tab does not grant it; reload to use it',
+      '  serviceRoles.github.commands[1]: "issue delete" is no command this teamrig knows: a newer teamrig wrote it or it is misspelt, so this tab does not grant it; reload, or fix the name',
     ]);
     const added = await kit.run(['add', '--title', 'Still writes', '--description', 'what and why', '--priority', 'p2', '--session', 'alpha']);
     assert.equal(added.code, EXIT.ok);
