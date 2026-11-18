@@ -84,7 +84,14 @@ export async function judgeSession(runtime, kit, config, roster, facts, id, fold
             return { kind: 'keep', id, why: `${roster.nameOf(id) ?? id} (session ${id}): ${folder.why}` };
         }
         const verdict = await runningVerdictOf(runtime, kit, config, roster, facts, id, folder.project);
-        return verdict.kind === 'close' ? { kind: 'close', id, closable: verdict.closable, project: folder.project } : { kind: 'keep', id, why: verdict.why };
+        switch (verdict.kind) {
+            case 'close':
+                return { kind: 'close', id, closable: verdict.closable, project: folder.project };
+            case 'wake':
+                return { kind: 'wake', id, ids: verdict.ids, why: verdict.why };
+            case 'keep':
+                return { kind: 'keep', id, why: verdict.why };
+        }
     }
     const awake = { rest: AWAKE, maxPriority: config.wake.priority };
     const closed = closedOf(closes, id);
@@ -119,7 +126,7 @@ async function wishOf(folderOf, id, reopening, top) {
 }
 /**
  * What one pass over the team's sessions does, in the roster's order, changing nothing (T1100): each running session
- * closes when `idleVerdictOf` finds it idle, else stays; each one teamrig closed reopens when the wake check would wake
+ * closes when `idleVerdictOf` finds it idle, is woken when it finds it quiet with work it can start, else stays; each one teamrig closed reopens when the wake check would wake
  * it. One reopen a pass, urgent lines first, the oldest first, then the most urgent top task, and only on a settled
  * plugin install for its folder with room on the host, both read fresh (`reopenHoldOf`); the rest wait for the next
  * pass, so reopens never outrun what the host can hold. A running session's transcript is read in the folder
@@ -183,6 +190,8 @@ export function passLineOf(step, roster, zone) {
             return `CLOSE ${label}: ${closableText(step.closable)}`;
         case 'keep':
             return `KEEP ${step.why}`;
+        case 'wake':
+            return `WAKE ${step.why}`;
         case 'reopen':
             return `REOPEN ${label}: ${reopeningText(step.reopening, zone)}`;
         case 'later':
@@ -196,5 +205,5 @@ export function passLineOf(step, roster, zone) {
 /** The pass's total line. */
 export function passTotalOf(steps) {
     const count = (kind) => steps.filter((step) => step.kind === kind).length;
-    return `PASS ${steps.length} session(s): ${count('close')} to close, ${count('reopen')} to reopen, ${count('later')} to reopen later, ${count('keep')} kept open, ${count('closed')} closed, ${count('away')} away; nothing changed`;
+    return `PASS ${steps.length} session(s): ${count('close')} to close, ${count('wake')} to wake, ${count('reopen')} to reopen, ${count('later')} to reopen later, ${count('keep')} kept open, ${count('closed')} closed, ${count('away')} away; nothing changed`;
 }

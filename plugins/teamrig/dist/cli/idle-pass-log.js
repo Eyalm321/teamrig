@@ -7,17 +7,23 @@ import { MS_PER_HOUR, MS_PER_MINUTE } from "../core/time.js";
  * a day of quiet passes writes one record an hour and a log silent for longer means the pass stopped (T1158). The
  * state file keeps the last pass's time, each session's step kind then and when a pass last logged its steps; a
  * failed pass keeps the kinds and its error, logged once until the error changes. It also keeps the acts a pass started, so the next passes start none on their sessions while
- * they may still run, and the reopened tabs no hook started in that a pass told of, so it tells of each reopen once.
+ * they may still run, the reopened tabs no hook started in that a pass told of, so it tells of each reopen once, and
+ * the sessions a pass woke for work they could start and when, so a session still quiet after that wake closes.
  */
-/** The format of the pass's state file this code reads and writes; a file in another format reads as no pass yet. */
-export const IDLE_PASS_STATE_FORMAT = 1;
+/**
+ * The format of the pass's state file this code writes; it reads this one and format 1, from before the wakes
+ * (T1247); a file in another format reads as no pass yet.
+ */
+export const IDLE_PASS_STATE_FORMAT = 2;
+/** The state formats this code reads: format 1 holds no wake step and no woken sessions. */
+const READ_STATE_FORMATS = [1, IDLE_PASS_STATE_FORMAT];
 /** The format of the pass log's records. */
 export const IDLE_PASS_LOG_FORMAT = 1;
 /** How often the wake checks run the pass, across the team. */
 export const IDLE_PASS_EVERY_MS = MS_PER_MINUTE;
 /** How old the last pass record may grow before a pass that changed nothing logs every step again. */
 export const IDLE_PASS_LOG_EVERY_MS = MS_PER_HOUR;
-const PASS_KINDS = { close: true, keep: true, reopen: true, later: true, closed: true, away: true };
+const PASS_KINDS = { close: true, keep: true, wake: true, reopen: true, later: true, closed: true, away: true };
 function isPassKind(value) {
     return typeof value === 'string' && Object.hasOwn(PASS_KINDS, value);
 }
@@ -55,16 +61,36 @@ function toldOf(value) {
     const known = entries.filter((entry) => isTime(entry[1]));
     return known.length === entries.length ? Object.fromEntries(known) : undefined;
 }
+function isWokenMark(value) {
+    if (!isRecord(value)) {
+        return false;
+    }
+    const { at, ids, posted } = value;
+    return isTime(at) && Array.isArray(ids) && ids.every((id) => typeof id === 'string') && typeof posted === 'boolean';
+}
+/** The wakes in a state file: none when absent (as in a file from before them); undefined when one is damaged. */
+function wokenOf(value) {
+    if (value === undefined) {
+        return {};
+    }
+    if (!isRecord(value)) {
+        return undefined;
+    }
+    const entries = Object.entries(value);
+    const known = entries.filter((entry) => isWokenMark(entry[1]));
+    return known.length === entries.length ? Object.fromEntries(known.map(([id, { at, ids, posted }]) => [id, { at, ids: [...ids], posted }])) : undefined;
+}
 /** The state file's content; undefined when it is damaged or from another format, which reads as no pass yet. */
 export function parseIdlePassState(text) {
     const record = parseObject(text.trim());
-    if (record === undefined || record[VERSION_FIELD] !== IDLE_PASS_STATE_FORMAT) {
+    if (record === undefined || !READ_STATE_FORMATS.includes(record[VERSION_FIELD])) {
         return undefined;
     }
     const { at, kinds, failed, logged } = record;
     const pending = pendingOf(record['pending']);
     const told = toldOf(record['told']);
-    if (!isTime(at) || !isRecord(kinds) || (failed !== undefined && typeof failed !== 'string') || (logged !== undefined && !isTime(logged)) || pending === undefined || told === undefined) {
+    const woken = wokenOf(record['woken']);
+    if (!isTime(at) || !isRecord(kinds) || (failed !== undefined && typeof failed !== 'string') || (logged !== undefined && !isTime(logged)) || pending === undefined || told === undefined || woken === undefined) {
         return undefined;
     }
     const entries = Object.entries(kinds);
@@ -72,7 +98,7 @@ export function parseIdlePassState(text) {
     if (known.length !== entries.length) {
         return undefined;
     }
-    return { at, kinds: Object.fromEntries(known), ...(failed === undefined ? {} : { failed }), ...loggedField(logged), ...pendingField(pending), ...toldField(told) };
+    return { at, kinds: Object.fromEntries(known), ...(failed === undefined ? {} : { failed }), ...loggedField(logged), ...pendingField(pending), ...toldField(told), ...wokenField(woken) };
 }
 /** When a pass last logged its steps, as a state field: none before the first. */
 function loggedField(logged) {
@@ -86,10 +112,24 @@ function pendingField(pending) {
 function toldField(told) {
     return told === undefined || Object.keys(told).length === 0 ? {} : { told };
 }
+/** The wakes as a state field: none while no session is marked woken. */
+function wokenField(woken) {
+    return woken === undefined || Object.keys(woken).length === 0 ? {} : { woken };
+}
 export function formatIdlePassState(state) {
     const pending = Object.fromEntries(Object.entries(state.pending ?? {}).map(([id, { act, at }]) => [id, { act, at }]));
     const told = { ...state.told };
-    return toJsonlLine({ [VERSION_FIELD]: IDLE_PASS_STATE_FORMAT, at: state.at, kinds: { ...state.kinds }, ...(state.failed === undefined ? {} : { failed: state.failed }), ...loggedField(state.logged), ...pendingField(pending), ...toldField(told) });
+    const woken = Object.fromEntries(Object.entries(state.woken ?? {}).map(([id, { at, ids, posted }]) => [id, { at, ids: [...ids], posted }]));
+    return toJsonlLine({
+        [VERSION_FIELD]: IDLE_PASS_STATE_FORMAT,
+        at: state.at,
+        kinds: { ...state.kinds },
+        ...(state.failed === undefined ? {} : { failed: state.failed }),
+        ...loggedField(state.logged),
+        ...pendingField(pending),
+        ...toldField(told),
+        ...wokenField(woken),
+    });
 }
 /** Whether a wake check runs the pass now: `IDLE_PASS_EVERY_MS` passed since the last, or the clock went back past it. */
 export function isPassDue(state, now) {
@@ -147,11 +187,37 @@ export function stepsToLog(previous, steps, now) {
 }
 /**
  * The state after a pass that ran through, with the acts still pending after it, the hookless reopens it found, each
- * told of: a session's mark goes once its tab had a hook, so a later hookless reopen of it is told of again, and when
- * a pass last logged its steps.
+ * told of: a session's mark goes once its tab had a hook, so a later hookless reopen of it is told of again, when
+ * a pass last logged its steps, and the sessions marked woken (`wokenAfter`).
  */
-export function passedState(now, steps, pending = {}, told = {}, logged) {
-    return { at: now, kinds: Object.fromEntries(steps.map((step) => [step.id, step.kind])), ...loggedField(logged), ...pendingField(pending), ...toldField(told) };
+export function passedState(now, steps, pending = {}, told = {}, logged, woken = {}) {
+    return {
+        at: now,
+        kinds: Object.fromEntries(steps.map((step) => [step.id, step.kind])),
+        ...loggedField(logged),
+        ...pendingField(pending),
+        ...toldField(told),
+        ...wokenField(woken),
+    };
+}
+/**
+ * The wakes kept after a pass (T1247, upstream #1354): each wake step marks its session woken now for the tasks it
+ * names, and whether its line was `posted`; an earlier mark stays while its session's step is a keep, as it is while it answers the wake or stays quiet
+ * under `open.headroom.closeIdleMinutes`. A close, a reopen, a closed or away session and one gone from the roster let
+ * it go, so a session back from a close is woken again before it closes again.
+ */
+export function wokenAfter(previous, steps, now, posted) {
+    const woken = {};
+    for (const step of steps) {
+        const mark = previous?.[step.id];
+        if (step.kind === 'wake') {
+            woken[step.id] = { at: now, ids: [...step.ids], posted: posted.has(step.id) };
+        }
+        else if (step.kind === 'keep' && mark !== undefined) {
+            woken[step.id] = mark;
+        }
+    }
+    return woken;
 }
 /**
  * The state after a failed pass: the kinds of the last pass that ran through, so the next one logs its changes since,
@@ -159,7 +225,7 @@ export function passedState(now, steps, pending = {}, told = {}, logged) {
  * reopens it told of.
  */
 export function failedState(previous, now, error) {
-    return { at: now, kinds: previous?.kinds ?? {}, failed: error, ...loggedField(previous?.logged), ...pendingField(previous?.pending), ...toldField(previous?.told) };
+    return { at: now, kinds: previous?.kinds ?? {}, failed: error, ...loggedField(previous?.logged), ...pendingField(previous?.pending), ...toldField(previous?.told), ...wokenField(previous?.woken) };
 }
 /** How long a started act holds its session: past any close's or reopen's run, so one that died is started again. */
 export const IDLE_ACT_HOLD_MS = 5 * MS_PER_MINUTE;
@@ -200,6 +266,7 @@ export function formatIdlePassRecord(record) {
         case 'act':
             return toJsonlLine({ ...base, act: record.act, id: record.id, outcome: record.outcome, line: record.line, ...commitField('before', record.before), ...commitField('after', record.after) });
         case 'hookless':
+        case 'wake':
             return toJsonlLine({ ...base, id: record.id, line: record.line, ...(record.problem === undefined ? {} : { problem: record.problem }) });
         case 'pass':
             return toJsonlLine({ ...base, ...commitField('commit', record.commit), steps: record.steps.map((step) => ({ kind: step.kind, id: step.id, line: step.line })) });
