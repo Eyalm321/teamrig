@@ -60,6 +60,37 @@ describe('credentialReadFindings', () => {
     }
   });
 
+  it('lets a git grep of the repository search for a teamrig credential name, which reads no store (#1469)', () => {
+    for (const line of [
+      'git grep -n teamrig-gh- -- src',
+      'git -C C:/w grep -n -i TEAMRIG-SHIP-GH',
+      'git grep -l teamrig-gh- && git grep -c teamrig-ship-gh',
+      'git --no-pager grep --untracked -e teamrig-gh-',
+    ]) {
+      assert.deepEqual(reads(line), [], line);
+    }
+  });
+
+  it('still names the credential name when anything but a plain git grep of the repository runs on the line', () => {
+    const cases: readonly (readonly [string, readonly string[]])[] = [
+      ['git grep -n teamrig-gh- | head', ['teamrig-gh-<owner>']],
+      ['git grep teamrig-gh-; cmdkey /generic:teamrig-gh-acme /user:x /pass', ['teamrig-gh-<owner>']],
+      ['git grep --no-index teamrig-gh- C:/u', ['teamrig-gh-<owner>']],
+      ['git grep -O teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep -nOcat teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --open-files-in-pager=cat teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git -c core.pager=cat grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git --config-env=core.pager=P grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git log --grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['grep -rn teamrig-ship-gh .', ['teamrig-ship-gh']],
+      ['git grep "$(gh auth token)" teamrig-gh-', ['gh auth token', 'teamrig-gh-<owner>']],
+      ['git grep keytar', ['keytar']],
+    ];
+    for (const [line, via] of cases) {
+      assert.deepEqual(reads(line), via, line);
+    }
+  });
+
   it('names each read once, the commands before the texts', () => {
     assert.deepEqual(reads('gh auth token; cmdkey /list; gh auth token; node x.mjs teamrig-ship-gh'), ['gh auth token', 'cmdkey /list', 'teamrig-ship-gh']);
   });
