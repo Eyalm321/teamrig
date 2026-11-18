@@ -590,7 +590,7 @@ program word must be a bare `git`, and options on both sides of `grep` are allow
 unique prefix of a long option): before it only `--no-pager` and `-P` (no `-C <dir>`: run it from the checkout); after
 it read-only matching and output options (`-n -i -w -v -l -c -e -A -B -C --count --name-only --cached --max-depth` and
 the like). Anything else (`--no-index`, `--untracked`, `-O`, `--textconv` or an abbreviation of one), a word the shell
-expands (`$X`, `"${X}"`), arguments fed from stdin (`xargs`), an
+expands (`$X`, `"${X}"`, an unquoted glob or `~`: quote a pattern as `-e 'name*'`), arguments fed from stdin (`xargs`), an
 environment set for git (`NAME=value git`, `env`), or any other command on the line keeps it refused. `secretGuard.secretReads` settles it; no `!pattern` lets one through. The
 reason: "teamrig secret guard: this call reads a saved credential out of the host's credential store (gh auth token),
 printed or not. A session never reads the store: each tool's key stays with the tool that reads it (teamrig's own
