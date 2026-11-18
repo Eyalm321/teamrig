@@ -109,8 +109,9 @@ export interface SignalSource {
  * The real shell: Node's `spawn` with `shell: true`, stdin closed, stdout and stderr read as they come. A command that
  * prints nothing for its `idleMs` is killed with every process it started, a busy host stretching the limit as in the
  * coverage gate. On POSIX it runs as its own process group so that kill ends the whole tree; a group the terminal no
- * longer signals is killed here when this process is ended (Ctrl-C, a kill, its terminal closing), so a run never
- * outlives the shell that started it.
+ * longer signals is killed here when this process gets SIGINT, SIGTERM or SIGHUP (Ctrl-C, a kill, its terminal
+ * closing). A SIGKILL to this process cannot be caught: it leaves the group running with no watch to stop it, as it
+ * leaves a queue step's.
  */
 export function nodeShellRunner(
   platform: NodeJS.Platform = process.platform,
