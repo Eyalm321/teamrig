@@ -121,6 +121,13 @@ describe('stepClocks', () => {
     assert.deepEqual(step.clocks.get('acme/app#1'), { repo: 'acme/app', ref: 'acme/app#1', kind: 'bug', owner: 'alpha', since: T0 + 21 * HOUR, remindedAt: undefined, toldAt: undefined });
   });
 
+  it('tells a new owner who takes the thread over mid-wait afresh, as the old owner was the one told', () => {
+    const before: ReadonlyMap<string, Clock> = new Map([['acme/app#1', { repo: 'acme/app', ref: 'acme/app#1', kind: 'bug', owner: 'bravo', since: T0, remindedAt: T0 + 18 * HOUR, toldAt: T0 + 24 * HOUR }]]);
+    const step = stepClocks(before, read, [thread(1, [outside(0)])], T0 + 30 * HOUR, ALPHA_FIRST);
+    assert.deepEqual(step.tell.map((clock) => [clock.owner, clock.toldAt]), [['alpha', T0 + 30 * HOUR]]);
+    assert.equal(step.clocks.get('acme/app#1')?.since, T0);
+  });
+
   it('stops the clock of a thread answered, closed or gone from a repository read, and keeps those of one not read', () => {
     const clock = (ref: string): Clock => ({ repo: ref.slice(0, ref.indexOf('#')), ref, kind: 'bug', owner: 'alpha', since: T0, remindedAt: undefined, toldAt: undefined });
     const before = new Map([['acme/app#1', clock('acme/app#1')], ['acme/app#2', clock('acme/app#2')], ['acme/docs#3', clock('acme/docs#3')]]);

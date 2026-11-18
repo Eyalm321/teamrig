@@ -113,7 +113,7 @@ export interface ClockStep {
 
 /**
  * The clocks after a read of the repositories in `read`: each open thread waiting on us keeps its clock (and whether
- * its owner was reminded and told) while the wait it times is the same one, else starts a fresh one; a thread
+ * its owner was reminded and told) while the wait it times and its owner are the same, else starts a fresh one; a thread
  * answered, closed or gone stops its clock. A repository not read this time (it failed) keeps its clocks as they
  * were. A clock past its target whose owner is told first (`ownerFirst`) and was not told yet is told now, once,
  * with no reminder; else a clock past REMIND_SHARE of its target that was never reminded is reminded now, once.
@@ -127,7 +127,9 @@ export function stepClocks(before: ReadonlyMap<string, Clock>, read: ReadonlySet
     if (since === undefined) {
       continue;
     }
-    const kept = before.get(thread.ref)?.since === since ? before.get(thread.ref) : undefined;
+    // A reminder or GH-LATE went to the owner then: one who takes the thread over mid-wait was told nothing yet.
+    const last = before.get(thread.ref);
+    const kept = last?.since === since && last.owner === thread.owner ? last : undefined;
     let clock: Clock = { repo: thread.repo, ref: thread.ref, kind: thread.kind, owner: thread.owner, since, remindedAt: kept?.remindedAt, toldAt: kept?.toldAt };
     if (clock.toldAt === undefined && ownerFirst(clock.owner) && isLate(clock, now)) {
       clock = { ...clock, remindedAt: clock.remindedAt ?? now, toldAt: now };
