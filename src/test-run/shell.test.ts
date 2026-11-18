@@ -189,17 +189,22 @@ describe('nodeShellRunner idle stop (#1532)', () => {
     assert.deepEqual(await nodeShellRunner({ kill, cpu: calm }).run({ command, cwd: DIR, env: ENV, idleMs: 0 }), { end: { kind: 'exited', code: 4 }, output: '' });
   });
 
-  it('ends the command group when this process is ended, and stops listening once the run ends', { skip: process.platform === 'win32' && 'Windows has no process group to end' }, async () => {
+  it('ends the command group when this process is ended on POSIX, listens for nothing on Windows, and stops listening once the run ends', async () => {
     const signals = new EventEmitter();
+    const listening = (): number[] => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => signals.listenerCount(signal));
     const command = script('wait.mjs', "process.stdout.write('ready\\n');\nsetInterval(() => {}, 1000);\n");
-    const run = nodeShellRunner({ kill, cpu: calm, signals }).run({ command, cwd: DIR, env: ENV, idleMs: 0 });
-    for (let waited = 0; signals.listenerCount('SIGTERM') === 0 && waited < 5_000; waited += 10) {
-      await new Promise((done) => setTimeout(done, 10));
+    const grouped = process.platform !== 'win32';
+    // Windows runs the command in the console's own group, which Ctrl-C reaches with no help: the runner listens for
+    // nothing there, so the idle stop ends this run instead.
+    const run = nodeShellRunner({ kill, cpu: calm, signals }).run({ command, cwd: DIR, env: ENV, idleMs: grouped ? 0 : 3_000 });
+    // The listeners go on as the run starts, before its first wait.
+    assert.deepEqual(listening(), grouped ? [1, 1, 1] : [0, 0, 0]);
+    if (grouped) {
+      await new Promise((done) => setTimeout(done, 200));
+      signals.emit('SIGTERM');
     }
-    await new Promise((done) => setTimeout(done, 200));
-    signals.emit('SIGTERM');
     const { end } = await run;
-    assert.deepEqual(end, { kind: 'signal', signal: 'SIGKILL' });
-    assert.deepEqual(['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => signals.listenerCount(signal)), [0, 0, 0]);
+    assert.deepEqual(end, grouped ? { kind: 'signal', signal: 'SIGKILL' } : { kind: 'idle', silentMs: 3_000 });
+    assert.deepEqual(listening(), [0, 0, 0]);
   });
 });
