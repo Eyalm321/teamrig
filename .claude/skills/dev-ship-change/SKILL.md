@@ -41,6 +41,9 @@ description: Land a finished teamrig change through small signed commits, a dist
 - `tools/ship` run without `--merge`, for an approval, leaves the work alone on the head: it raises the version and
   builds the dist only to run the checks, then takes both back, the raise left uncommitted. The `--merge` run commits
   both once, on the base it lands on, and the approval still holds, as it reads the change apart from those files.
+- A line the change adds that names the version it ships in (a migration's `firstRelease`, a docs `since x.y.z` in a
+  Markdown file or the config schema) may move to main's next version after main moves, and the approval holds. If
+  you change any other word on that line, or a version on a line the change did not add, you need a new approval.
 - The local gate proves a committed tree, so it refuses uncommitted changes: commit or stash them first.
 - With `"mergeChecks": "changed"` on the repository in `tools/ship/repos.json`, the pre-push hook and the `--merge`
   run take the short checks (scrub, DCO, typecheck, the changed files' specs) and leave the whole suite to required
