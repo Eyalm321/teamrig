@@ -70,7 +70,7 @@
     "dist/cli/claude-code-env.js": "5220e289a9c8854b00d47cffc072b9a5ee74e7a604d05bf9f29b845841bf8d60",
     "dist/cli/claude-settings.js": "f6faa24de811ba8927bd520b47f686684699a0549f0f1ada2a335b03646acd10",
     "dist/cli/close-session.js": "596949ea1dcd06175794728a92faa58faea7aa96058884649d8593fb387047db",
-    "dist/cli/closed-wake.js": "8aaa7e9887037d6e66bf9a848460062fba50818ee6a52faf0aca632e4af908ce",
+    "dist/cli/closed-wake.js": "3729ce9a244679f7d36d55e40c977004125c7135be827bd7c35b2014a3821b91",
     "dist/cli/cmd-shim.js": "e775e358b75871b29194927c5b23991ef07a30e0e2195dec730e3161506bd6fd",
     "dist/cli/commands/add-issue.js": "61da5ff886db6e2892a3e9858b57dab70ed3cfa36a7668ac59c84cf7bfc2a07b",
     "dist/cli/commands/audit.js": "9abcae1938a095faf382fab61f80a650ef573762958ab8ac5f543c086f6f68a3",
