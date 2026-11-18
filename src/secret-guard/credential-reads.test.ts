@@ -68,6 +68,9 @@ describe('credentialReadFindings', () => {
       'git --no-pager grep --cached -e teamrig-gh-',
       'git -P grep -niw -A3 --max-depth=2 --threads 2 -e teamrig-gh- -- src docs',
       'git grep -c --heading teamrig-gh- --and -e -O',
+      // A quoted glob reaches git as written, so the guard reads the word git gets.
+      "git grep -e 'teamrig-gh-*'",
+      'git grep teamrig-gh- -- "*.ts"',
     ]) {
       assert.deepEqual(reads(line), [], line);
     }
@@ -121,6 +124,13 @@ describe('credentialReadFindings', () => {
       ['git grep ${X} teamrig-gh-', ['teamrig-gh-<owner>']],
       ['git grep teamrig-gh- -- $X', ['teamrig-gh-<owner>']],
       ['git $X grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      // An unquoted glob or `~` is rewritten by bash before git sees it, so it may expand to any option too.
+      ['git grep * teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep ?n teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep [-]n teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep teamrig-gh- -- *', ['teamrig-gh-<owner>']],
+      ['git grep teamrig-gh- -- ~', ['teamrig-gh-<owner>']],
+      ['git * grep teamrig-gh-', ['teamrig-gh-<owner>']],
     ];
     for (const [line, via] of cases) {
       assert.deepEqual(reads(line), via, line);
