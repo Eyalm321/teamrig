@@ -44,7 +44,7 @@ export interface WatchedChild extends HeldProcess {
 export type OnOutput = (stream: 'out' | 'err', chunk: Buffer) => void;
 
 /**
- * Hands on the run's output and kills it with every process it started once it prints nothing for `idleMs`; settles
+ * Hands on the run's output and kills it with every process it started once it prints nothing for `idleMs` (0: never); settles
  * when the run has closed and any kill is done, so a hung run never holds the host past its silence limit. When the
  * limit passes on a busy host (`cpu` finds no room), the run gets another `idleMs`, up to `BUSY_STRETCH` limits in
  * all; output while the host is read starts the limit again.
@@ -85,13 +85,15 @@ export function watchSilence(child: WatchedChild, idleMs: number, kill: TreeKill
         },
       );
     };
-    let timer = setTimeout(onIdle, idleMs);
+    // An `idleMs` of 0 never stops the run: no timer is set, so only its own close ends the watch.
+    const arm = (): NodeJS.Timeout | undefined => (idleMs > 0 ? setTimeout(onIdle, idleMs) : undefined);
+    let timer = arm();
     const heard = (): void => {
       if (killed === undefined) {
         heardCount += 1;
         silentMs = 0;
         clearTimeout(timer);
-        timer = setTimeout(onIdle, idleMs);
+        timer = arm();
       }
     };
     child.stdout.on('data', (chunk: Buffer) => {

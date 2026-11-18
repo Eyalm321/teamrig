@@ -20,6 +20,8 @@ interface LogPlace {
   /** The session the log is named after, null for none. */
   readonly session: string | null;
   readonly maxFailureChars: number;
+  /** The team's `tests.idleStopSeconds`: how long the run may print nothing before it is stopped; 0 never. */
+  readonly idleStopSeconds: number;
   /** The team's `delivery.passEnv`: the credential variables the command still gets; none outside a team. */
   readonly passEnv: readonly string[];
   /** Whether the run goes through the host queue: in a team whose config loads, which the queue reads. */
@@ -44,15 +46,15 @@ function givenSession(args: ParsedArgs, runtime: CliRuntime): string | null {
 async function logPlace(runtime: CliRuntime, session: string | null): Promise<LogPlace> {
   const found = await resolveTeam(runtime.files, runtime.env, teamFolders(runtime, [runtime.cwd]));
   if (found.kind !== 'team') {
-    return { dir: join(resolveKitHome(runtime.env, runtime.userHome), 'logs'), session, maxFailureChars: DEFAULT_TESTS.maxFailureChars, passEnv: DEFAULT_PASS_ENV, queued: false };
+    return { dir: join(resolveKitHome(runtime.env, runtime.userHome), 'logs'), session, maxFailureChars: DEFAULT_TESTS.maxFailureChars, idleStopSeconds: DEFAULT_TESTS.idleStopSeconds, passEnv: DEFAULT_PASS_ENV, queued: false };
   }
   const kit = await openKit(runtime, found.team);
   if (kit.load.status !== 'loaded') {
-    return { dir: kit.paths.logs, session, maxFailureChars: DEFAULT_TESTS.maxFailureChars, passEnv: DEFAULT_PASS_ENV, queued: false };
+    return { dir: kit.paths.logs, session, maxFailureChars: DEFAULT_TESTS.maxFailureChars, idleStopSeconds: DEFAULT_TESTS.idleStopSeconds, passEnv: DEFAULT_PASS_ENV, queued: false };
   }
   const { config } = kit.load;
   const known = session === null ? undefined : (await rosterOf(runtime, kit, config)).lookup(session);
-  return { dir: kit.paths.logs, session: known?.ok === true ? known.id : session, maxFailureChars: config.tests.maxFailureChars, passEnv: config.delivery.passEnv, queued: true };
+  return { dir: kit.paths.logs, session: known?.ok === true ? known.id : session, maxFailureChars: config.tests.maxFailureChars, idleStopSeconds: config.tests.idleStopSeconds, passEnv: config.delivery.passEnv, queued: true };
 }
 
 /** A spec file's name, and the characters of a glob, which may match many. */
@@ -95,8 +97,9 @@ async function runLogged(runtime: CliRuntime, request: ShellRequest, log: string
 /**
  * `teamrig test -- <command ...>`: runs a test command in the shell (in a team through the host queue, `queuedWords`), writes all it printed to a
  * numbered log (the session's newest 20 are kept) and prints one PASS or FAIL line, then each failing
- * test within `tests.maxFailureChars`, so a long test run costs the model a few lines. Exit 0 when the
- * command passed, 1 otherwise.
+ * test within `tests.maxFailureChars`, so a long test run costs the model a few lines. A run that prints
+ * nothing for `tests.idleStopSeconds` is stopped with every process it started and fails (#1532). Exit 0 when
+ * the command passed, 1 otherwise.
  */
 export async function test(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const words = shellWordsOf(args, runtime.platform);
@@ -107,7 +110,7 @@ export async function test(args: ParsedArgs, runtime: CliRuntime): Promise<ExitC
   const run = place.queued ? commandLine(queuedWords(runtime.self, words, place.session), runtime.platform) : command;
   const started = runtime.clock.now();
   const live = new LiveLog(runtime.files, log);
-  const result = await runLogged(runtime, { command: run, cwd: runtime.cwd, env: withoutCredentials(runtime.env, place.passEnv) }, log, live);
+  const result = await runLogged(runtime, { command: run, cwd: runtime.cwd, env: withoutCredentials(runtime.env, place.passEnv), idleMs: place.idleStopSeconds * 1000 }, log, live);
   const tookMs = runtime.clock.now() - started;
   const output = cleanOutput(result.output);
   await live.end(result.end, result.heldOpen === true);
