@@ -227,7 +227,7 @@ describe('labelIssue', () => {
     assert.deepEqual(host.labelFileReads, ['acme/web']);
   });
 
-  it('makes a missing label github.areaOwners names as an area label, in its spelling, before the label file (#1499)', async () => {
+  it('makes a missing label github.areaOwners names as an area label, in lowercase, before the label file (#1499)', async () => {
     const host = new FakeIssueHost().hasLabels('p2');
     assert.deepEqual(await label(host, { add: ['Area:CLI', 'p2'], remove: [], areaLabels: ['area:cli', 'area:docs'] }), {
       done: true,

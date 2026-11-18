@@ -1629,7 +1629,7 @@ Adds labels to and takes labels off one issue or pull request of the team's repo
 Each label to add must already be one of the repository's, read before any change, so a typo never makes a new
 label: make it on the host first. Three kinds are made where the repository lacks them, each with a `MADE` line:
 `design`, the label of a design issue (talk about how something should work, not work to take until agreed), an
-area label `github.areaOwners` names (in the config's spelling, one area colour and description), and a
+area label `github.areaOwners` names (in lowercase as the config keeps it, one area colour and description), and a
 label the repository's own `.github/labels.json` defines, made with that file's colour and description (the file is
 read from the default branch, once, only when such a label is missing). Labels to add go in one call, then each label to remove comes off in turn; the
 first failure stops it, and a `FAILED` line after a change says what it already did. Exit 1 when it failed, 2 when
