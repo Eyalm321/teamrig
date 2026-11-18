@@ -29,6 +29,8 @@ export interface ProgramRun {
   readonly stdin: ShellWord | undefined;
   /** True when the command that starts it reads the output of the command before it through a pipe. */
   readonly piped: boolean;
+  /** True when a wrapper such as `xargs` adds arguments read from stdin, so its argument list is not all on the line. */
+  readonly stdinArgs: boolean;
   /** True when `teamrig queue` or `teamrig test` starts it, at any depth, so it runs under the host lock. */
   readonly runner: boolean;
   /**
@@ -278,6 +280,7 @@ function visitCommand(
       redirections: command.redirections,
       stdin: inlet.text,
       piped: inlet.fromPipe,
+      stdinArgs: launched.stdinArgs,
       runner: scope.runner || launched.runner,
       packageRunner: scope.packageRunner,
       pipe: outlet.pipe,

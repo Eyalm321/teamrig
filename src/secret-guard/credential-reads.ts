@@ -56,33 +56,68 @@ const STORE_TEXTS: readonly CredentialRead[] = [
   { label: SHIP_TOKEN, pattern: new RegExp(`\\b${literally(SHIP_TOKEN)}\\b`, 'i'), name: true },
 ];
 
-/** The git options allowed before `grep` that take the next word as their value; every other option refuses. */
-const GIT_VALUE_OPTIONS = new Set(['-C', '--git-dir', '--work-tree']);
+/** An allow-list of options, spelled exactly: git takes any unique prefix of a long option, so a deny-list misses. */
+interface Options {
+  /** Options that take no value. */
+  readonly plain: ReadonlySet<string>;
+  /** Options that take the next word as their value, or a value joined to them (`-A3`, `--max-depth=2`). */
+  readonly valued: ReadonlySet<string>;
+}
 
-/** The git options allowed before `grep` that take no value, or their value after `=`. */
-const GIT_PLAIN_OPTION = /^(?:--no-pager|-P|--git-dir=.*|--work-tree=.*)$/;
+/** The git options allowed before `grep`: `-C <dir>` searches another checkout; the pager stays off. */
+const GIT_OPTIONS: Options = { plain: new Set(['--no-pager', '-P']), valued: new Set(['-C']) };
 
 /**
- * True when `run` is a `git grep` that searches only the repository and starts nothing else (#1469). Before the
- * subcommand only the options above may stand (an allow-list: any other, such as one that turns the pager on or sets
- * config, refuses). After it: no `--no-index`, which searches any folder, no `-O`/`--open-files-in-pager`, which
- * starts a program on the files it finds (a short-option bundle holding `O` counts too), and no `--textconv`, which
- * starts the repository's configured converters.
+ * The `git grep` options allowed after the subcommand: read-only matching and output options. Left out on purpose:
+ * `--no-index` and `--untracked` (with a moved work tree) search folders outside the repository, `-O`/
+ * `--open-files-in-pager` starts a program on the files found, and `--textconv` starts the configured converters.
  */
-function repoSearch(run: ProgramRun): boolean {
-  if (run.name !== 'git') return false;
-  const args = run.args.map((arg) => arg.text);
-  let at = 0;
+const GREP_OPTIONS: Options = {
+  plain: new Set([
+    ...['-n', '-i', '-w', '-v', '-l', '-L', '-c', '-h', '-H', '-I', '-o', '-q', '-z', '-E', '-F', '-G', '-P', '-W', '--'],
+    ...['--line-number', '--ignore-case', '--word-regexp', '--invert-match', '--files-with-matches'],
+    ...['--files-without-match', '--count', '--name-only', '--only-matching', '--quiet', '--null'],
+    ...['--extended-regexp', '--fixed-strings', '--basic-regexp', '--perl-regexp', '--function-context'],
+    ...['--heading', '--break', '--column', '--full-name', '--and', '--or', '--not', '--all-match', '--cached'],
+  ]),
+  valued: new Set(['-e', '-f', '-A', '-B', '-C', '-m', '--max-depth', '--max-count', '--threads', '--context']),
+};
+
+/**
+ * Where the words from `at` stop being allowed options: the index of the first word that is not an option (or the
+ * end), or -1 when an option is not on the list. A short-option bundle (`-niw`) passes when each of its letters is a
+ * plain option; a valued option takes its value joined (`-A3`, `--threads=2`) or as the next word, whatever it holds.
+ */
+function optionsEnd(args: readonly string[], at: number, options: Options, untilEnd: boolean): number {
   for (; at < args.length; at += 1) {
     const arg = args[at] ?? '';
-    if (GIT_VALUE_OPTIONS.has(arg)) at += 1;
-    else if (!arg.startsWith('-')) break;
-    else if (!GIT_PLAIN_OPTION.test(arg)) return false;
+    if (!arg.startsWith('-') || arg === '-') {
+      if (untilEnd) continue;
+      return at;
+    }
+    if (options.plain.has(arg)) continue;
+    if (options.valued.has(arg)) {
+      at += 1;
+      continue;
+    }
+    const joined = arg.startsWith('--') ? (arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg) : arg.slice(0, 2);
+    if (joined !== arg && options.valued.has(joined)) continue;
+    const bundle = /^-[A-Za-z]{2,}$/.test(arg) && [...arg.slice(1)].every((letter) => options.plain.has(`-${letter}`));
+    if (!bundle) return -1;
   }
-  if (args[at] !== 'grep') return false;
-  return args
-    .slice(at + 1)
-    .every((arg) => arg !== '--no-index' && arg !== '--textconv' && !arg.startsWith('--open-files-in-pager') && !/^-[^-]*O/.test(arg));
+  return at;
+}
+
+/**
+ * True when `run` is a `git grep` that searches only the repository and starts nothing else (#1469): the program
+ * word is a bare `git` (a PATH lookup, not a file named git that would get the name as an argument), no wrapper
+ * feeds it arguments from stdin, and every option on either side of the subcommand is on its allow-list above.
+ */
+function repoSearch(run: ProgramRun): boolean {
+  if (run.program.text !== 'git' || run.stdinArgs) return false;
+  const args = run.args.map((arg) => arg.text);
+  const at = optionsEnd(args, 0, GIT_OPTIONS, false);
+  return at >= 0 && args[at] === 'grep' && optionsEnd(args, at + 1, GREP_OPTIONS, true) >= 0;
 }
 
 /**

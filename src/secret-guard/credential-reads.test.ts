@@ -99,7 +99,9 @@ describe('credentialReadFindings', () => {
       'git grep -n teamrig-gh- -- src',
       'git -C C:/w grep -n -i TEAMRIG-SHIP-GH',
       'git grep -l teamrig-gh- && git grep -c teamrig-ship-gh',
-      'git --no-pager grep --untracked -e teamrig-gh-',
+      'git --no-pager grep --cached -e teamrig-gh-',
+      'git -P grep -niw -A3 --max-depth=2 --threads 2 -e teamrig-gh- -- src docs',
+      'git grep -c --heading teamrig-gh- --and -e -O',
     ]) {
       assert.deepEqual(reads(line), [], line);
     }
@@ -128,6 +130,22 @@ describe('credentialReadFindings', () => {
       ['git --paginate grep teamrig-gh-', ['teamrig-gh-<owner>']],
       ['git --namespace x grep teamrig-gh-', ['teamrig-gh-<owner>']],
       ['git grep --textconv teamrig-gh-', ['teamrig-gh-<owner>']],
+      // git takes any unique prefix of a long option, so each abbreviation of a refused option refuses too.
+      ['git grep --open=cat teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --open-files=cat teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --open-files-in-pa=cat teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --textc teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --textco teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --no-ind teamrig-gh- C:/u', ['teamrig-gh-<owner>']],
+      ['git grep --no-inde teamrig-gh- C:/u', ['teamrig-gh-<owner>']],
+      ['git grep --max-depthX teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep -nO teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --untracked teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git --git-dir=.git --work-tree=/ grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git --work-tree / grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['./git grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['/tmp/git grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['xargs git grep teamrig-gh- < f', ['teamrig-gh-<owner>']],
     ];
     for (const [line, via] of cases) {
       assert.deepEqual(reads(line), via, line);
