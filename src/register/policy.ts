@@ -22,7 +22,7 @@ import { waitsOnOwner } from './owner-waits.ts';
 import { asksReview, missedTaskIds, reviewGap, reviewGapText, reviewProblem, reviewTexts, type ProblemReview } from './review.ts';
 import { loopFix, needPath, NO_TASKS_ELSEWHERE, pathText, type TasksElsewhere } from './tree.ts';
 import { dueStartHolds, dueVerifyHold, heldStart, startHolds, WATCH_USAGE } from './verify.ts';
-import { isPeerWait, isReady, sameWait, sameWaits, unfinishedAfter, waitContext, waitSpelling, type PersonWait, type PersonWaitKind, type WaitReason } from './waits.ts';
+import { isPeerWait, isReady, sameWait, sameWaits, unfinishedAfter, waitContext, waitSpelling, weekdayText, type PersonWait, type PersonWaitKind, type WaitReason } from './waits.ts';
 import { wipHold } from './wip.ts';
 import { MIGRATE_COMMAND } from '../permissions/service-commands.ts';
 import { roleHolding } from '../permissions/service-roles.ts';
@@ -228,6 +228,21 @@ export interface DecideChange extends DeferChange {
 /** An owner's action from the pane (T1298): an update written as `by`, the team's register.ownerSource. */
 export interface OwnerChange extends UpdateChange {
   readonly by: string;
+}
+
+/** The owner's answer to a card from the pane (#1517): one of the card's options, numbered from 1, or an approval's yes or no. */
+export type OwnerAnswer = { readonly kind: 'option'; readonly option: number } | { readonly kind: 'approve' } | { readonly kind: 'decline' };
+
+/** `answer` in the words its Decided note and the session's line give it: `option 2: <its text>`, `approved` or `declined`. */
+export function ownerAnswerWords(answer: OwnerAnswer, card: Pick<DecisionCard, 'options'> | null): string {
+  switch (answer.kind) {
+    case 'option':
+      return `option ${answer.option}: ${card?.options[answer.option - 1] ?? ''}`;
+    case 'approve':
+      return 'approved';
+    case 'decline':
+      return 'declined';
+  }
 }
 
 /**
@@ -1065,6 +1080,43 @@ export class RegisterPolicy {
     }
     const verdictProblem = this.checkText('verdict', verdict);
     return verdictProblem === undefined ? ok({ changes: {}, note: text, securityVerdict: { text: verdict, read: verdictReadOf(task.card) } }) : refuse(verdictProblem);
+  }
+
+  /**
+   * The owner's answer from the pane (#1517): a Decided ({@link decideFrom}) written as the owner, its note saying what
+   * was chosen (`<owner> decided: option 2: <its text>`, `approved`, `declined`) and then the owner's own words, if any.
+   * Only on a task waiting on the owner; an option the card has, or an approval's answer on a task waiting on the
+   * owner's approval.
+   */
+  ownerDecide(task: Task, answer: OwnerAnswer, note: string | undefined): Verdict<DecideChange & OwnerChange> {
+    const by = this.config.register.ownerSource;
+    if (!waitsOnOwner(task, by)) {
+      return refuse(`${task.id} waits on no decision or approval of ${by}: only such a card is decided`);
+    }
+    if (answer.kind === 'option') {
+      const count = task.card?.options.length ?? 0;
+      if (!Number.isInteger(answer.option) || answer.option < 1 || answer.option > count) {
+        return refuse(count === 0 ? `${task.id} has no card with options: answer an approval with --approve or --decline` : `--option takes 1 to ${count}: ${task.id}'s card has ${count} options`);
+      }
+    } else if (!task.waits.some((reason) => reason.kind === 'approval' && reason.who === by)) {
+      return refuse(`${task.id} waits on no approval of ${by}: --${answer.kind} answers an approval; choose an option with --option <n>`);
+    }
+    const own = blankToNull(note);
+    const words = ownerAnswerWords(answer, task.card);
+    const change = this.decideFrom(task, `${by} decided: ${own === null ? words : `${words}; ${own}`}`);
+    return change.ok ? ok({ ...change.value, by }) : change;
+  }
+
+  /**
+   * The owner's Later from the pane (#1517): a Later ({@link deferFrom}) to time `until` (stored form) written as the
+   * owner, its note saying until when and then the owner's own words, if any.
+   */
+  ownerDefer(task: Task, until: string, note: string | undefined, context: Pick<StatusContext, 'now' | 'zone'>): Verdict<DeferChange & OwnerChange> {
+    const by = this.config.register.ownerSource;
+    const own = blankToNull(note);
+    const words = `${by} put the card off until ${weekdayText(until, context.zone)}`;
+    const change = this.deferFrom(task, until, own === null ? words : `${words}; ${own}`, context);
+    return change.ok ? ok({ ...change.value, by }) : change;
   }
 
   /**
