@@ -4,7 +4,6 @@ import type { DetachedRunRecord } from '../delivery/detached-runs.ts';
 import type { LedgerRecord } from '../delivery/ledger.ts';
 import { taskOfLabel } from '../delivery/process-request.ts';
 import type { Task } from '../register/fold.ts';
-import { unfinishedAfter, type WaitContext } from '../register/waits.ts';
 import { costText, type WakeCost } from './decide.ts';
 
 /**
@@ -42,17 +41,6 @@ export type PokeVerdict =
  */
 function isWorkLeft(task: Task): boolean {
   return task.status === 'open' || task.status === 'in-progress';
-}
-
-/**
- * The tasks a poke may name: `startable` less any planned after a task not finished yet (#1516). The start gate lets
- * a task planned after another go in progress, and `canGoOn` treats a started task as past its plan, so without this
- * the poke named it every idle span though it could not move and `--after` is refused on a started task. Once the
- * task it is planned after finishes it is poked for again, and that counts as a change (`changedSincePoke`), since
- * the poke's mark keeps this list.
- */
-export function pokeableTasks(startable: readonly Task[], context: WaitContext): readonly Task[] {
-  return startable.filter((task) => unfinishedAfter(task.after, context).length === 0);
 }
 
 /** The task a poke names: the most urgent one tagged with the rush's goal, else the most urgent. */
@@ -167,12 +155,22 @@ function minutesText(ms: number): string {
   return `${Math.round(ms / 60_000)} min`;
 }
 
-/** The prompt a poke submits: why the tab was woken, and the task to go on with. */
-export function rushPokePrompt(session: string, rush: Rush, task: Task, idleMs: number, cost: WakeCost): string {
+/**
+ * The prompt a poke submits: why the tab was woken, and the task to go on with. `plannedAfter` is the first unfinished
+ * task the named one is planned after (#1516): a started task is past its plan by design (`canGoOn`), so the poke
+ * names it, and when it really cannot move until that task finishes the prompt hands the exact wait that clears by
+ * itself once that task is done, so the session acts on the first poke.
+ */
+export function rushPokePrompt(session: string, rush: Rush, task: Task, idleMs: number, cost: WakeCost, plannedAfter?: string): string {
+  const waits = plannedAfter === undefined ? '<reason>' : `task:${plannedAfter}`;
+  const why =
+    plannedAfter === undefined
+      ? 'If nothing can move, set it waiting with its reason'
+      : `It is planned after ${plannedAfter}, not finished yet: if it cannot move until then, set it waiting on that task`;
   return [
     `Rush on ${rush.goal}: this tab sat idle ${minutesText(idleMs)} with work left and no queued step of its own running.`,
     `Start or continue ${task.id} (${task.title}) now, or your top task if another comes first; a run still waiting in the queue is no reason to wait.`,
-    `If nothing can move, set it waiting with its reason (\`${KIT_NAME} set ${task.id} --session ${session} --status waiting --waits <reason> --note "..."\`): no poke comes again until something changes for you. This poke costs ${costText(cost)}.`,
+    `${why} (\`${KIT_NAME} set ${task.id} --session ${session} --status waiting --waits ${waits} --note "..."\`): no poke comes again until something changes for you. This poke costs ${costText(cost)}.`,
   ].join(' ');
 }
 

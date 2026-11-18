@@ -3,11 +3,8 @@ import { describe, it } from 'node:test';
 import type { Rush } from '../budget/burst.ts';
 import { RUN_RECORD_FORMAT, type DetachedRunRecord } from '../delivery/detached-runs.ts';
 import type { LedgerRecord } from '../delivery/ledger.ts';
-import { TimeZone } from '../core/zone.ts';
-import type { Task } from '../register/fold.ts';
-import { waitContext, type WaitContext } from '../register/waits.ts';
 import { testTask } from '../testing/task.ts';
-import { changedSincePoke, decideRushPoke, pokeableTasks, pokeMarkOf, queuedTasksOf, rushPokePrompt, rushPokeToast, stepRunningFor, type PokeInput, type PokeNow } from './rush-poke.ts';
+import { changedSincePoke, decideRushPoke, pokeMarkOf, queuedTasksOf, rushPokePrompt, rushPokeToast, stepRunningFor, type PokeInput, type PokeNow } from './rush-poke.ts';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -56,14 +53,6 @@ describe('decideRushPoke', () => {
     assert.deepEqual(decideRushPoke(input({ startable: [waiting, verifying] })), { kind: 'none' });
     assert.deepEqual(decideRushPoke(input({ startable: [] })), { kind: 'none' });
     assert.deepEqual(decideRushPoke(input({ startable: [waiting, OPEN] })), { kind: 'poke', task: OPEN, idleMs: IDLE_MS });
-  });
-
-  it('may name no task planned after one not finished yet, and names it once that one finished (#1516)', () => {
-    const planned = testTask({ id: 'T5', status: 'in-progress', after: ['T6'] });
-    const context = (tasks: readonly Task[]): WaitContext => waitContext(new Map(tasks.map((task) => [task.id, task])), new Date(NOW), TimeZone.UTC);
-    assert.deepEqual(pokeableTasks([planned, OPEN], context([testTask({ id: 'T6' })])), [OPEN]);
-    assert.deepEqual(pokeableTasks([planned, OPEN], context([testTask({ id: 'T6', status: 'done' })])), [planned, OPEN]);
-    assert.deepEqual(pokeableTasks([planned], context([])), [planned], 'a task the register no longer holds counts as finished, as for every plan');
   });
 
   it("names the rush goal's task ahead of a more urgent one off the goal", () => {
@@ -164,5 +153,12 @@ describe('poke text', () => {
     assert.match(prompt, /teamrig set T2 --session alpha --status waiting --waits <reason>/);
     assert.match(prompt, /no poke comes again until something changes for you/);
     assert.match(rushPokeToast(RUSH, ON_GOAL, 12 * MINUTE, COST), /^teamrig poked this tab \(rush on PROD, idle 12 min\): T2 \(/);
+  });
+
+  it('hands the exact wait on the task the named one is planned after, when that one is not finished (#1516)', () => {
+    const prompt = rushPokePrompt('alpha', RUSH, ON_GOAL, 12 * MINUTE, COST, 'T6');
+    assert.match(prompt, /It is planned after T6, not finished yet/);
+    assert.ok(prompt.includes('`teamrig set T2 --session alpha --status waiting --waits task:T6 --note "..."`'), prompt);
+    assert.doesNotMatch(prompt, /<reason>/);
   });
 });
