@@ -3765,6 +3765,60 @@ PREVIEW owner next T14: goes to the top of web's list (the earlier pin on T9 mov
 NEXT T14 open, p2, pinned, owner web, from lead | Saved carts survive a logout
 ```
 
+### teamrig owner decide
+
+The owner answers a decision card from the pane's Decisions tab (`teamrig owner decide <[team/]T<id>> --option
+<n>|--approve|--decline [--note ".."]`). It is recorded as the owner's Decided, as `update --decided` records an
+answer given at a meeting: the task's wait on the owner goes and the task reads decided, its note naming the option
+chosen (`option 2: <its text>`), `approved` or `declined`, then the owner's `--note`. The session gets an inbox line
+that wakes it to go on as decided. It refuses a task not waiting on the owner, an option number the card lacks, and
+`--approve` or `--decline` on a task with no approval wait of the owner's. It writes as the owner, so the exec guard
+refuses it from an agent's tool call, and it refuses itself under `$CLAUDECODE`, as `owner note` does.
+
+Flags:
+
+- `--option <n>`: the card option the owner chose, numbered from 1 as the card prints them.
+- `--approve`: the owner's yes to an approval wait of the owner's.
+- `--decline`: the owner's no to an approval wait of the owner's.
+- `--note "<text>"`: the owner's own words, kept after the answer.
+
+Example:
+
+```sh
+teamrig owner decide T14 --option 2 --note "launch with the bigger plan"
+```
+
+Output:
+
+```text
+DECIDED T14 waiting, p2, owner web, from lead | Saved carts survive a logout
+```
+
+### teamrig owner later
+
+The owner puts a card off from the pane's Decisions tab (`teamrig owner later <[team/]T<id>> --until <time> [--note
+".."]`). It is recorded as the owner's Later, as `update --later` records one: a time wait beside the wait on the
+owner, so the card comes back to the owner then. The session gets an inbox line without a wake, as it has nothing to
+do until then. It refuses a task not waiting on the owner and a time gone by, and, as `owner note` is, from an
+agent's tool call and under `$CLAUDECODE`.
+
+Flags:
+
+- `--until <time>`: when the card comes back, in the team's time zone.
+- `--note "<text>"`: the owner's own words, kept after the time.
+
+Example:
+
+```sh
+teamrig owner later T14 --until "2030-01-10 09:00"
+```
+
+Output:
+
+```text
+LATER T14 waiting, p2, owner web, from lead | Saved carts survive a logout
+```
+
 ### teamrig owner wake
 
 The owner wakes one session by hand (`teamrig owner wake <[team/]id|name>`), the pane's Wake on a session row. A
