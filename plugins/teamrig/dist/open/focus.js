@@ -67,6 +67,7 @@ export function focusRequest(terminal, title, env, cwd) {
         case 'tmux':
             // `=` takes the window named exactly so: a title's brackets are no pattern.
             return { command: 'tmux', args: ['select-window', '-t', `=${title}`], cwd, env };
+        case 'windows-console':
         case 'macos-terminal':
         case 'gnome-terminal':
         case 'konsole':

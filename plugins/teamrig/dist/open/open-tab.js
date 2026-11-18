@@ -40,7 +40,8 @@ export async function openTab(deps, choice, tab) {
             case 'started':
                 return { kind: 'opened', terminal, end: outcome.end };
             case 'missing':
-                reasons.push(`${terminal} is not installed`);
+                // A console window starts the launch program itself, so what is missing is that program.
+                reasons.push(terminal === 'windows-console' ? `windows-console found no ${planned.request.command} to start` : `${terminal} is not installed`);
                 break;
             case 'failed':
                 reasons.push(`${terminal} failed: ${outcome.error}`);

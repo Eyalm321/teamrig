@@ -34,6 +34,7 @@ import { sessionProjectOf } from "./setup.js";
 export const TERMINAL_LABELS = {
     tmux: 'tmux window',
     'windows-terminal': 'Windows Terminal tab',
+    'windows-console': 'console window',
     'macos-terminal': 'Terminal window',
     'gnome-terminal': 'GNOME Terminal tab',
     konsole: 'Konsole tab',

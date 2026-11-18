@@ -140,7 +140,7 @@ export function isBurstPolicy(value) {
  * Where `teamrig open` opens a session's tab: `auto` picks tmux inside tmux, else the platform's
  * terminal; `print` opens nothing and prints the command to run.
  */
-export const TERMINALS = ['auto', 'tmux', 'windows-terminal', 'macos-terminal', 'gnome-terminal', 'konsole', 'x-terminal-emulator', 'print'];
+export const TERMINALS = ['auto', 'tmux', 'windows-terminal', 'windows-console', 'macos-terminal', 'gnome-terminal', 'konsole', 'x-terminal-emulator', 'print'];
 export function isTerminalChoice(value) {
     return TERMINALS.some((terminal) => terminal === value);
 }
