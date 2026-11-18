@@ -11,6 +11,7 @@ import { DIST, leaveForReview, parseNumstat, SHIP_ATTEMPTS, shipCommits, weighDi
 import type { MergeChecks } from './repos.ts';
 import type { Chunk, ShipArgs } from './ship-plan.ts';
 import type { SyncResult } from './sync.ts';
+import { KIT_VERSION } from '../../src/core/version.ts';
 
 const ARGS: ShipArgs = { repo: 'C:/repo', plan: 'plan.json', base: 'origin/main', merge: false, noteFile: null, approved: null };
 const CHUNKS: readonly Chunk[] = [
@@ -18,7 +19,7 @@ const CHUNKS: readonly Chunk[] = [
   { files: ['src/b.ts', 'src/b.test.ts'], subject: 'release: 0.134.0', body: 'raises 0.134.0' },
 ];
 const PASS: GateVerdict = { passed: true, tree: 'tree000', record: 'C:/records/tree000.json', reused: false };
-const TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>';
+const TRAILER = `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nMade-with: teamrig ${KIT_VERSION}`;
 
 interface FakeOptions {
   readonly sync?: SyncResult;
@@ -212,6 +213,22 @@ test('without --merge, the review head holds the work alone: the raise and the d
     'git log --oneline origin/main..HEAD',
   ]);
   assert.ok(logs.some((line) => line.includes('left for review: the work commits')));
+});
+
+test('without --merge, a raise that also stamps a migration\'s firstRelease is committed last and taken back whole (T4171)', async () => {
+  const stamped: Chunk = { files: [...RAISE.files, 'src/config/migrate.ts'], subject: 'plugin: version 0.134.0, a migration', body: 'raises 0.134.0' };
+  const { deps, events, takenBack } = fake({ numstat: DIST_STAT });
+  assert.equal(await shipCommits(ARGS, [stamped, WORK], deps), 0);
+  assert.deepEqual(takenBack, [['core: a', 'plugin: version 0.134.0, a migration']]);
+  assert.deepEqual(events.filter((event) => event.startsWith('git commit')), [
+    committed('core: a', 'why a, since 0.134.0'),
+    committed('plugin: version 0.134.0, a migration', 'raises 0.134.0'),
+    committed('build: rebuild the plugin dist', 'Compiled from the commits above by npm run build.'),
+  ]);
+  assert.deepEqual(
+    events.filter((event) => event.startsWith('git reset') || event.startsWith('git restore')),
+    ['git reset -q --soft HEAD~2', `git restore --staged -- ${VERSION_FILES} src/config/migrate.ts`, `git restore --source=HEAD --staged --worktree -- ${DIST}`],
+  );
 });
 
 test('without --merge and with no rebuilt dist, only the raise is taken back', async () => {
