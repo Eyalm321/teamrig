@@ -1,5 +1,6 @@
 import { SHIP_TOKEN, TOKEN_PREFIX } from '../issues/token-names.ts';
 import type { LineRuns, ProgramRun } from '../package-guard/programs.ts';
+import { isStaticWord, type ShellWord } from '../push-guard/tokenizer.ts';
 import type { SecretFinding } from './findings.ts';
 
 /** A way a shell line reads a saved credential, and how the refusal names it. */
@@ -114,11 +115,12 @@ function optionsEnd(args: readonly string[], at: number, options: Options, until
 /**
  * True when `run` is a `git grep` that searches only the repository and starts nothing else (#1469): the program
  * word is a bare `git` (a PATH lookup, not a file named git that would get the name as an argument), no wrapper
- * feeds it arguments from stdin, no word is expanded by the shell (`$X` may hold any option, so the allow-list could not
- * read it), and every option on either side of the subcommand is on its allow-list above.
+ * feeds it arguments from stdin, no word is expanded by the shell (`$X` or an unquoted `*` may become any option, so
+ * the allow-list could not read it), and every option on either side of the subcommand is on its allow-list above.
  */
 function repoSearch(run: ProgramRun): boolean {
-  if (run.program.text !== 'git' || run.stdinArgs || run.args.some((arg) => arg.dynamic)) return false;
+  const plain = run.dialect === 'bash' ? isStaticWord : (arg: ShellWord): boolean => !arg.dynamic;
+  if (run.program.text !== 'git' || run.stdinArgs || !run.args.every(plain)) return false;
   const args = run.args.map((arg) => arg.text);
   const at = optionsEnd(args, 0, GIT_OPTIONS, false);
   return at >= 0 && args[at] === 'grep' && optionsEnd(args, at + 1, GREP_OPTIONS, true) >= 0;
