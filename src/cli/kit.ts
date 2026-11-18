@@ -274,6 +274,10 @@ export function requireConfig(kit: Kit, runtime: CliRuntime, access: Access): Ki
   if (first !== undefined) {
     runtime.out.stderr(`WARN config: ${load.issues.length} problem(s), defaults used (first: ${issueText(first)}); run: teamrig config validate`);
   }
+  const [warning] = load.warnings;
+  if (warning !== undefined) {
+    runtime.out.stderr(`WARN config: ${load.warnings.length} warning(s) (first: ${issueText(warning)}); run: teamrig config validate`);
+  }
   return load.config;
 }
 
