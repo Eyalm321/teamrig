@@ -13,13 +13,21 @@ export function isStepKind(value) {
     return STEP_KINDS.some((kind) => kind === value);
 }
 /**
- * The kinds that move a main branch, which hold the host's one ship slot (T2727): two of them beside each other race to
- * main, and the later one's rebase or merge fails after its whole run. A `push` is not one, as most push a branch.
+ * The kinds that move a main branch, which hold their repository's ship slot (T2727): two of them beside each other
+ * race to main, and the later one's rebase or merge fails after its whole run. A `push` is not one, as most push a branch.
  */
 const SHIP_SLOT_KINDS = new Set(['ship', 'merge', 'deploy']);
 /** Whether a step of `kind` holds the ship slot; false for a step that names no kind (an older kit's). */
 export function takesShipSlot(kind) {
     return kind !== undefined && SHIP_SLOT_KINDS.has(kind);
+}
+/**
+ * Whether two ships, by the repositories they move (`LineRequest.repo`), hold the same slot (#1711): the race to main
+ * is per repository, so ships of two repositories run beside each other. One that names no repository (its folder is
+ * none, or an older kit queued it) shares the slot of every one, as the host's one slot did.
+ */
+export function sharesShipSlot(a, b) {
+    return a === undefined || b === undefined || a === b;
 }
 /** A request of `kind` for `task` at the task's `priority`, each left out when unset; a priority is kept only with its task. */
 export function processRequest(kind, task, priority) {
@@ -56,7 +64,7 @@ export function isLineRequest(value) {
     if (!isRecord(value)) {
         return false;
     }
-    const { kind, task, priority, class: workClass, classPct, frontAt } = value;
+    const { kind, task, priority, class: workClass, classPct, frontAt, repo } = value;
     return (isStepKind(kind) &&
         (task === undefined || typeof task === 'string') &&
         (priority === undefined || isNonNegativeInteger(priority)) &&
@@ -64,7 +72,8 @@ export function isLineRequest(value) {
         typeof classPct === 'number' &&
         Number.isFinite(classPct) &&
         classPct >= 0 &&
-        (frontAt === undefined || (typeof frontAt === 'string' && !Number.isNaN(Date.parse(frontAt)))));
+        (frontAt === undefined || (typeof frontAt === 'string' && !Number.isNaN(Date.parse(frontAt)))) &&
+        (repo === undefined || (typeof repo === 'string' && repo !== '')));
 }
 /** A command word's program: its last path part in lower case, without a launcher's or a script's extension. */
 function programOf(word) {

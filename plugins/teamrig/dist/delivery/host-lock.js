@@ -8,7 +8,7 @@ import { AdmitFile } from "./admit-file.js";
 import { admissionOrder, classOf, placeInLine } from "./admission.js";
 import { charge, DEFAULT_EXPECTED_MINUTES, EMPTY_TURNS, endedAtOf, endedText, isNewerTurns, parseTurns, settle, turnsFor, turnsText } from "./class-turns.js";
 import { shortText } from "./memory-gate.js";
-import { isLineRequest, takesShipSlot } from "./process-request.js";
+import { isLineRequest, sharesShipSlot, takesShipSlot } from "./process-request.js";
 import { WAIT_CAUSES } from "./wait-cause.js";
 import { causeOfLockWait } from "./wait-log.js";
 /**
@@ -481,8 +481,8 @@ class Patience {
  * `maxHeavyParallel` heavy shares run, else it waits in its place on them (`heavyCap`), and a small step shares it
  * while fewer than `maxSmallParallel` small shares run, else it waits on them (`smallCap`). An exclusive step (a merge, a
  * deploy) and every heavy step in `serial` mode take the lock file instead, which waits for every share to end.
- * A step that moves a main branch (`takesShipSlot`) shares the host only while no other such step does, else it waits
- * in its place on the one ship slot (`shipSlot`, T2727), which other steps pass.
+ * A step that moves a main branch (`takesShipSlot`) shares the host only while no other such step of its repository
+ * does, else it waits in its place on that repository's ship slot (`shipSlot`, T2727, #1711), which other steps pass.
  * With a memory gate in its ports, the first in line takes the lock or a share only once the gate finds the host's
  * memory has room for it, the MB held for the small steps sharing the host counted as taken; until then it waits in
  * its place, and a lone step is gated as much as one beside others. In arrival order a later step never passes a step
@@ -902,7 +902,7 @@ export class HostLock {
         const running = await this.running();
         const turns = await this.turnsLook(new Set(running.map(({ info }) => info.id)));
         const waiting = new Set(line.map(({ waiter }) => classOf(waiter, rules)));
-        const steps = running.map(({ info, small, shipSlot }) => ({ session: info.session, small, shipSlot }));
+        const steps = running.map(({ info, small, shipSlot, shipRepo }) => ({ session: info.session, small, shipSlot, ...(shipRepo === undefined ? {} : { shipRepo }) }));
         const now = this.ports.clock.now();
         const place = placeInLine(admissionOrder(line, now, rules, turnsFor(turns.state, waiting)), ticket.name, steps, rules, now);
         if (place === undefined) {
@@ -975,7 +975,12 @@ export class HostLock {
     async running() {
         const seen = await this.read();
         const holder = seen.kind === 'held' && !this.isStale(seen.info) ? [{ info: seen.info, small: false, shipSlot: false }] : [];
-        const shares = (await this.liveShares()).map((share) => ({ info: share, small: !isHeavyShare(share), shipSlot: takesShipSlot(share.request?.kind) }));
+        const shares = (await this.liveShares()).map((share) => ({
+            info: share,
+            small: !isHeavyShare(share),
+            shipSlot: takesShipSlot(share.request?.kind),
+            ...(share.request?.repo === undefined ? {} : { shipRepo: share.request.repo }),
+        }));
         return [...holder, ...shares];
     }
     /**
@@ -1120,7 +1125,7 @@ export class HostLock {
         const others = await this.liveShares();
         // Only shares need the check: a whole-lock holder (an exclusive merge or deploy) already keeps every step out.
         if (takesShipSlot(waiter.request?.kind)) {
-            const running = others.filter((share) => takesShipSlot(share.request?.kind));
+            const running = others.filter((share) => takesShipSlot(share.request?.kind) && sharesShipSlot(share.request?.repo, waiter.request?.repo));
             if (running.length > 0) {
                 return { kind: 'busy', holder: { kind: 'shipSlot', running } };
             }

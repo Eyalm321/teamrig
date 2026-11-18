@@ -1,5 +1,5 @@
 import { NOW_PRIORITY } from "../config/priorities.js";
-import { takesShipSlot } from "./process-request.js";
+import { sharesShipSlot, takesShipSlot } from "./process-request.js";
 /**
  * How the host lock's line is ordered (`delivery.queue.admission`): `pipeline` orders it by urgency, class turn, aged
  * priority and arrival, with a cap on each session's running steps (T2210); `serial` keeps the line in arrival order with
@@ -108,25 +108,31 @@ function passesOnRoom(waiter, idle, now, memoryPassMinutes) {
     return idle || now - Date.parse(wait.since) < memoryPassMinutes * MINUTE_MS;
 }
 /**
- * The places in `before` (the waiters ahead) that a later step that does (`mine`) or does not hold the ship slot passes
- * for that slot (T2727): none for a step that holds it, so ships take the slot in their order. Any other step passes
- * the first waiter its last look found waiting on the slot, for as long as the ship ahead runs, as the slot keeps the
- * waiter out whatever ends, and every slot-taking waiter after it, which waits behind that one whatever its own reason
- * (T3336: a second ship waits on the line, not the slot, yet starts no sooner, and held every build and test back).
- * While a running share holds the slot (`slotHeld`), every slot-taking waiter is passed, whatever its last look
- * recorded (T4333): the first one, finding the admit file held by a step passing it, recorded a wait in line, so the
- * steps behind it stopped passing it and the whole line flapped behind one ship.
+ * The places in `before` (the waiters ahead) that `mine`, a later waiter, passes for the ship slot (T2727). A ship
+ * waiter is held on the slot when its last look found it waiting there, or when a slot it shares (`sharesShipSlot`,
+ * one per repository, #1711) is taken: by a running share (T4333: the first one, finding the admit file held by a step
+ * passing it, recorded a wait in line, so the steps behind it stopped passing it and the whole line flapped behind one
+ * ship), or by a held waiter ahead of it (T3336: a second ship waits on the line, not the slot, yet starts no sooner,
+ * and held every build and test back). A step that holds no slot passes every held one, as the slot keeps it out
+ * whatever ends. A ship passes only a held one whose slot it does not share, held by no slot it shares, so ships of
+ * one repository, and ships waiting on the same one, take the slot in their order.
  */
-function passedOnShipSlot(before, mine, slotHeld) {
+function passedOnShipSlot(before, mine, running) {
     const passed = new Set();
-    if (mine) {
-        return passed;
-    }
-    let shut = slotHeld;
+    const ship = takesShipSlot(mine.request?.kind);
+    const shut = running.filter((step) => step.shipSlot).map((step) => step.shipRepo);
     before.forEach(({ waiter }, at) => {
         const onSlot = waiter.waitingOn?.reason === 'shipSlot';
-        shut ||= onSlot;
-        if (onSlot || (shut && takesShipSlot(waiter.request?.kind))) {
+        if (!onSlot && !takesShipSlot(waiter.request?.kind)) {
+            return;
+        }
+        const repo = waiter.request?.repo;
+        const holders = shut.filter((held) => sharesShipSlot(held, repo));
+        if (!onSlot && holders.length === 0) {
+            return;
+        }
+        shut.push(repo);
+        if (!ship || (!sharesShipSlot(mine.request?.repo, repo) && !holders.some((held) => sharesShipSlot(held, mine.request?.repo)))) {
             passed.add(at);
         }
     });
@@ -159,7 +165,7 @@ export function placeInLine(order, name, running, rules, now) {
     const capped = (session) => cap > 0 && runs(session) >= cap;
     // Idle means no queued step at all runs: a small step's end frees room too, so it counts here.
     const idle = running.length === 0;
-    const onSlot = passedOnShipSlot(before, takesShipSlot(mine.waiter.request?.kind), running.some((step) => step.shipSlot));
+    const onSlot = passedOnShipSlot(before, mine.waiter, running);
     const ahead = before.filter(({ waiter }, at) => !capped(waiter.session) && !passesOnRoom(waiter, idle, now, rules.memoryPassMinutes) && !onSlot.has(at));
     const own = runs(mine.waiter.session);
     return capped(mine.waiter.session) ? { kind: 'sessionCap', ahead, running: own, cap } : { kind: 'inLine', ahead };

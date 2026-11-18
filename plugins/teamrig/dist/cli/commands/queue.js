@@ -6,7 +6,7 @@ import { pipelineFrozenRefusal } from "../../delivery/pipeline-freezes.js";
 import { formatRunRecord, RUN_RECORD_FORMAT, runRecordPathOf } from "../../delivery/detached-runs.js";
 import { deliveryPlaces, detachedDirOf, detachedLogOf } from "../../delivery/places.js";
 import { passOf, PRE_PUSH_MAX_WAIT_MS, recordPass } from "../../delivery/push-pass.js";
-import { isStepKind, kindOfCommand, processRequest, STEP_KINDS, taskOfLabel } from "../../delivery/process-request.js";
+import { isStepKind, kindOfCommand, processRequest, STEP_KINDS, takesShipSlot, taskOfLabel } from "../../delivery/process-request.js";
 import { recordRefusal, runRecorded } from "../../delivery/recorded-step.js";
 import { stepNeedOf } from "../../delivery/step-need.js";
 import { causeOfLockWait, WaitLog } from "../../delivery/wait-log.js";
@@ -101,6 +101,15 @@ function requestOf(args, words, what) {
 function withShipTask(request, shipped) {
     const task = request.task ?? shipped();
     return task === request.task ? request : processRequest(request.kind, task);
+}
+/**
+ * `line`, for a step that holds the ship slot, with the repository it moves (#1711): the shared git folder of the
+ * folder it queued in, so a ship of another repository passes it. Left as it is for any other step, and for one queued
+ * outside a repository, which then holds the slot of every repository.
+ */
+function withRepo(line, git, cwd) {
+    const repo = takesShipSlot(line.kind) ? git.commonDir(cwd) : undefined;
+    return repo === undefined || repo === '' ? line : { ...line, repo };
 }
 /** Why the step may not start now (the queue cutoff, a pipeline freeze on its kind, a moved ship tool), or undefined when it may. */
 async function startRefusal(runtime, gate) {
@@ -536,7 +545,7 @@ export async function queue(args, runtime) {
         await refuseUnstartable(runtime, gate);
         // The register and the front are read only for a step that queues: a nested step or one refused at once records nothing.
         const shipped = withShipTask(request, () => shipTaskOfWords(runtime.mergeGit, kit, config, words, runtime.cwd));
-        const line = await requests.current(shipped);
+        const line = withRepo(await requests.current(shipped), runtime.mergeGit, runtime.cwd);
         // Only the ticket carries the class for now: the ledger's start and refusal records keep the fields their readers take.
         const owner = { session, ...processRequest(line.kind, line.task, line.priority) };
         const waits = new WaitLog(runtime.clock, runtime.memory.freeMb());
