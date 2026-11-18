@@ -760,7 +760,7 @@ describe('hook wake-check rush poke (T2865)', () => {
     assert.match((await check(kit, idle)).stdout[0] ?? '', /"toast":"teamrig poked this tab \(rush on PROD, idle 30 min\): T1 /);
   });
 
-  it('pokes not for a started task planned after an unfinished one, and pokes once that task is done (#1516)', async () => {
+  it('hands the wait on the unfinished task a started one is planned after in the poke (#1516)', async () => {
     const kit = await rushingAlpha();
     const ran = async (args: readonly string[]): Promise<void> => {
       const result = await kit.run(args);
@@ -770,10 +770,9 @@ describe('hook wake-check rush poke (T2865)', () => {
     await ran(['update', 'T1', '--after', 'T2', '--session', 'lead']);
     await ran(['set', 'T1', '--session', 'alpha', '--status', 'in-progress']);
     const idle = turnAt(kit.clock.now() - 30 * MINUTE);
-    assert.deepEqual(answerOf(await check(kit, idle)), waitTill(null), 'its only task is planned after an open one');
-    assert.deepEqual(await logLines(kit), []);
-    await ran(['set', 'T2', '--session', 'bravo', '--status', 'done', '--note', 'route open', '--evidence', 'route answers 200', '--skill', 'none', '--followups', 'none']);
-    assert.match((await check(kit, idle)).stdout[0] ?? '', /"toast":"teamrig poked this tab \(rush on PROD, idle 30 min\): T1 /);
+    const planned = (await check(kit, idle)).stdout[0] ?? '';
+    assert.match(planned, /"toast":"teamrig poked this tab \(rush on PROD, idle 30 min\): T1 /);
+    assert.ok(planned.includes('set T1 --session alpha --status waiting --waits task:T2 --note'), planned);
   });
 
   it('starts a session whose restart waits for work fresh in place of the poke (T1383)', async () => {
