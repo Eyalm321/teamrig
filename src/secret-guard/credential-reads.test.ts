@@ -97,7 +97,7 @@ describe('credentialReadFindings', () => {
   it('lets a git grep of the repository search for a teamrig credential name, which reads no store (#1469)', () => {
     for (const line of [
       'git grep -n teamrig-gh- -- src',
-      'git -C C:/w grep -n -i TEAMRIG-SHIP-GH',
+      'git grep -n -i TEAMRIG-SHIP-GH',
       'git grep -l teamrig-gh- && git grep -c teamrig-ship-gh',
       'git --no-pager grep --cached -e teamrig-gh-',
       'git -P grep -niw -A3 --max-depth=2 --threads 2 -e teamrig-gh- -- src docs',
@@ -146,6 +146,15 @@ describe('credentialReadFindings', () => {
       ['./git grep teamrig-gh-', ['teamrig-gh-<owner>']],
       ['/tmp/git grep teamrig-gh-', ['teamrig-gh-<owner>']],
       ['xargs git grep teamrig-gh- < f', ['teamrig-gh-<owner>']],
+      // `-C <dir>` may name a folder that is no repository, which git searches whole under `grep.fallbackToNoIndex`.
+      ['git -C C:/w grep -n teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git -CC:/w grep -n teamrig-gh-', ['teamrig-gh-<owner>']],
+      // A word the shell expands may hold any option, so the allow-list cannot read it.
+      ['git grep $X teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep "$X" teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep ${X} teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep teamrig-gh- -- $X', ['teamrig-gh-<owner>']],
+      ['git $X grep teamrig-gh-', ['teamrig-gh-<owner>']],
     ];
     for (const [line, via] of cases) {
       assert.deepEqual(reads(line), via, line);
