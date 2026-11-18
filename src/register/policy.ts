@@ -233,16 +233,25 @@ export interface OwnerChange extends UpdateChange {
 /** The owner's answer to a card from the pane (#1517): one of the card's options, numbered from 1, or an approval's yes or no. */
 export type OwnerAnswer = { readonly kind: 'option'; readonly option: number } | { readonly kind: 'approve' } | { readonly kind: 'decline' };
 
-/** `answer` in the words its Decided note and the session's line give it: `option 2: <its text>`, `approved` or `declined`. */
-export function ownerAnswerWords(answer: OwnerAnswer, card: Pick<DecisionCard, 'options'> | null): string {
+/**
+ * `answer` as its Decided note stores it: `option 2`, `approved` or `declined`. The option's text stays on the card, so
+ * it takes none of the room register.maxText leaves the owner's own words.
+ */
+export function ownerAnswerTag(answer: OwnerAnswer): string {
   switch (answer.kind) {
     case 'option':
-      return `option ${answer.option}: ${card?.options[answer.option - 1] ?? ''}`;
+      return `option ${answer.option}`;
     case 'approve':
       return 'approved';
     case 'decline':
       return 'declined';
   }
+}
+
+/** `answer` in the words the session's line gives it: `option 2: <its text>`, `approved` or `declined`. */
+export function ownerAnswerWords(answer: OwnerAnswer, card: Pick<DecisionCard, 'options'> | null): string {
+  const tag = ownerAnswerTag(answer);
+  return answer.kind === 'option' ? `${tag}: ${card?.options[answer.option - 1] ?? ''}` : tag;
 }
 
 /**
@@ -1084,7 +1093,7 @@ export class RegisterPolicy {
 
   /**
    * The owner's answer from the pane (#1517): a Decided ({@link decideFrom}) written as the owner, its note saying what
-   * was chosen (`<owner> decided: option 2: <its text>`, `approved`, `declined`) and then the owner's own words, if any.
+   * was chosen (`<owner> decided: option 2`, `approved`, `declined`) and then the owner's own words, if any.
    * Only on a task waiting on the owner; an option the card has, or an approval's answer on a task waiting on the
    * owner's approval.
    */
@@ -1101,9 +1110,11 @@ export class RegisterPolicy {
     } else if (!task.waits.some((reason) => reason.kind === 'approval' && reason.who === by)) {
       return refuse(`${task.id} waits on no approval of ${by}: --${answer.kind} answers an approval; choose an option with --option <n>`);
     }
-    const own = blankToNull(note);
-    const words = ownerAnswerWords(answer, task.card);
-    const change = this.decideFrom(task, `${by} decided: ${own === null ? words : `${words}; ${own}`}`);
+    const text = this.ownerNoteText(`${by} decided: ${ownerAnswerTag(answer)}`, note);
+    if (!text.ok) {
+      return text;
+    }
+    const change = this.decideFrom(task, text.value);
     return change.ok ? ok({ ...change.value, by }) : change;
   }
 
@@ -1113,10 +1124,28 @@ export class RegisterPolicy {
    */
   ownerDefer(task: Task, until: string, note: string | undefined, context: Pick<StatusContext, 'now' | 'zone'>): Verdict<DeferChange & OwnerChange> {
     const by = this.config.register.ownerSource;
-    const own = blankToNull(note);
-    const words = `${by} put the card off until ${weekdayText(until, context.zone)}`;
-    const change = this.deferFrom(task, until, own === null ? words : `${words}; ${own}`, context);
+    const text = this.ownerNoteText(`${by} put the card off until ${weekdayText(until, context.zone)}`, note);
+    if (!text.ok) {
+      return text;
+    }
+    const change = this.deferFrom(task, until, text.value, context);
     return change.ok ? ok({ ...change.value, by }) : change;
+  }
+
+  /**
+   * The note of an owner's Decide or Later: `prefix`, then `; ` and the owner's own words, if any. Their words are judged
+   * against the room register.maxText leaves after the prefix, so a refusal names a count the owner can act on, not
+   * one that holds characters they never typed (#1751 review).
+   */
+  private ownerNoteText(prefix: string, note: string | undefined): Verdict<string> {
+    const own = blankToNull(note);
+    if (own === null) {
+      return ok(prefix);
+    }
+    const lead = `${prefix}; `;
+    const { maxText } = this.config.register;
+    const room = Math.max(0, maxText - lead.length);
+    return own.length > room ? refuse(`--note takes at most ${room} characters here: the note starts "${lead}" and the limit is ${maxText}`) : ok(`${lead}${own}`);
   }
 
   /**

@@ -3770,9 +3770,11 @@ NEXT T14 open, p2, pinned, owner web, from lead | Saved carts survive a logout
 The owner answers a decision card from the pane's Decisions tab (`teamrig owner decide <[team/]T<id>> --option
 <n>|--approve|--decline [--note ".."]`). It is recorded as the owner's Decided, as `update --decided` records an
 answer given at a meeting: the task's wait on the owner goes and the task reads decided, its note naming the option
-chosen (`option 2: <its text>`), `approved` or `declined`, then the owner's `--note`. The session gets an inbox line
-that wakes it to go on as decided. It refuses a task not waiting on the owner, an option number the card lacks, and
-`--approve` or `--decline` on a task with no approval wait of the owner's. It writes as the owner, so the exec guard
+chosen by number (`option 2`: the card keeps its text), `approved` or `declined`, then the owner's `--note`. The
+session gets an inbox line, quoting the option's text, that wakes it to go on as decided. It refuses a task not waiting
+on the owner, an option number the card lacks, `--approve` or `--decline` on a task with no approval wait of the
+owner's, and a `--note` longer than the room `register.maxText` leaves after that start (the refusal names the room;
+`owner later` judges its note the same way). It writes as the owner, so the exec guard
 refuses it from an agent's tool call, and it refuses itself under `$CLAUDECODE`, as `owner note` does.
 
 Flags:

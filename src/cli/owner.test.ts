@@ -211,13 +211,27 @@ describe('teamrig owner decide (#1517)', () => {
     const kit = await asking();
     const result = ok(await kit.run(['owner', 'decide', 'T1', '--option', '2', '--note', 'launch with the bigger plan']));
     assert.match(result.stdout[0] ?? '', /^DECIDED T1 waiting, p2, owner alpha, /);
-    const words = `option 2: ${TEST_CARD.options[1]}; launch with the bigger plan`;
-    assert.deepEqual(lastEventOf(kit), ['owner', 'update', `owner decided: ${words}`]);
-    const line = ownerDecideLine('owner', 'T1', words);
+    // The stored note names the option by number (the card keeps its text); the session's line quotes the text too.
+    assert.deepEqual(lastEventOf(kit), ['owner', 'update', 'owner decided: option 2; launch with the bigger plan']);
+    const line = ownerDecideLine('owner', 'T1', `option 2: ${TEST_CARD.options[1]}; launch with the bigger plan`);
     assert.deepEqual(result.stderr, [`NOTE alpha has an inbox line that wakes its idle tab: ${line}`]);
     assert.deepEqual(await asksOf(kit, 'alpha'), [['owner', line]]);
     const shown = ok(await kit.run(['show', 'T1', '--session', 'lead'])).stdout[0] ?? '';
     assert.match(shown, /\(waiting: owner decided, by owner; /, 'the wait on the owner is gone: the task reads decided');
+  });
+
+  it("judges the owner's own words against the room the note leaves them, never the card's option text (#1751 review)", async () => {
+    const kit = await team();
+    const long = `Pro at 29 dollars a month ${'with the yearly plan '.repeat(7)}`.trim();
+    ok(await kit.run(['set', 'T1', '--status', 'waiting', '--waits', 'decision:owner', '--note', 'the owner picks', ...TEST_CARD_FLAGS.slice(0, 2), '--options', `${TEST_CARD.options[0]} | ${long}`, ...TEST_CARD_FLAGS.slice(4), '--gate', 'budget', '--session', 'alpha']));
+    const before = kit.files.get(EVENTS_PATH);
+    // `owner decided: option 2; ` takes 25 of the 300 characters register.maxText allows.
+    assertRefused(await kit.run(['owner', 'decide', 'T1', '--option', '2', '--note', 'x'.repeat(276)]), /^REFUSED --note takes at most 275 characters here: the note starts "owner decided: option 2; " and the limit is 300$/);
+    assert.equal(kit.files.get(EVENTS_PATH), before);
+    const words = 'w'.repeat(140);
+    ok(await kit.run(['owner', 'decide', 'T1', '--option', '2', '--note', words]));
+    assert.deepEqual(lastEventOf(kit), ['owner', 'update', `owner decided: option 2; ${words}`]);
+    assert.deepEqual(await asksOf(kit, 'alpha'), [['owner', ownerDecideLine('owner', 'T1', `option 2: ${long}; ${words}`)]]);
   });
 
   it('answers an approval with --approve or --decline, each with or without a note', async () => {
@@ -260,6 +274,17 @@ describe('teamrig owner later (#1517)', () => {
     assert.match(ok(await kit.run(['show', 'T1', '--session', 'lead'])).stdout[0] ?? '', /\(waiting: decision owner · until Thu 01-10 09:00 UTC/, 'the wait on the owner stays, with the Later beside it');
   });
 
+  it("judges the owner's own words against the room the note leaves them (#1751 review)", async () => {
+    const kit = await asking();
+    const before = kit.files.get(EVENTS_PATH);
+    const until = ['--until', '2030-01-10 09:00'];
+    // `owner put the card off until Thu 01-10 09:00 UTC; ` takes 50 of the 300 characters.
+    assertRefused(await kit.run(['owner', 'later', 'T1', ...until, '--note', 'x'.repeat(251)]), /^REFUSED --note takes at most 250 characters here: the note starts "owner put the card off until Thu 01-10 09:00 UTC; " and the limit is 300$/);
+    assert.equal(kit.files.get(EVENTS_PATH), before);
+    ok(await kit.run(['owner', 'later', 'T1', ...until, '--note', 'y'.repeat(250)]));
+    assert.deepEqual(lastEventOf(kit), ['owner', 'update', `owner put the card off until Thu 01-10 09:00 UTC; ${'y'.repeat(250)}`]);
+  });
+
   it('refuses a task not waiting on the owner, a time gone by and a missing --until, writing nothing', async () => {
     const kit = await asking();
     const before = kit.files.get(EVENTS_PATH);
@@ -279,6 +304,6 @@ describe('teamrig owner decide and later where Claude Code runs them (#1517)', (
     assertRefused(await kit.run(['owner', 'later', 'T1', '--until', '2030-01-10 09:00'], UNDER_CLAUDE_CODE), /^REFUSED teamrig owner later acts as the owner, .*; the owner presses Later in the pane or types \/teamrig owner later in a tab$/);
     assert.equal(kit.files.get(EVENTS_PATH), before);
     assert.match(ok(await typed(kit, 'owner decide T1 --option 1')).stdout.join('\n'), /^DECIDED T1 /);
-    assert.deepEqual(lastEventOf(kit), ['owner', 'update', `owner decided: option 1: ${TEST_CARD.options[0]}`]);
+    assert.deepEqual(lastEventOf(kit), ['owner', 'update', 'owner decided: option 1']);
   });
 });
