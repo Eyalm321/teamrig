@@ -20,7 +20,8 @@ description: Land a finished teamrig change through small signed commits, a dist
 5. A change under `plugins/teamrig/` raises the version: `plugins/teamrig/.claude-plugin/plugin.json` and
    `src/core/version.ts` (a test holds them equal), in their own commit, `plugin: version X.Y.Z, <why>`. While the
    version is 0.x, the minor for a feature or a change that breaks how people use it, else the patch. Installs move
-   only when this version rises. Check it with `node tools/ci/plugin-version-cli.ts`.
+   only when this version rises. Check it with `node tools/ci/plugin-version-cli.ts`: a local run judges the raise
+   against the version where the branch left main, so main raising past it later does not fail it.
 6. `npm run check`: every gate CI runs, on your tree.
 7. `git push -u origin <branch>`: the pre-push hook runs the local gate (`tools/ci/local.ts`, its checks listed in
    `tools/ci/local-checks.ts`) on the committed tree. Never `--no-verify`.

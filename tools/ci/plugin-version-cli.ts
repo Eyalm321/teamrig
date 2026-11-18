@@ -30,7 +30,8 @@ async function main(): Promise<number> {
     console.log('plugin-version: no base commit to compare with (a new branch), nothing to check');
     return EXIT_CLEAN;
   }
-  return checkPluginVersions({ base: ends.base, head: ends.head }, { git: createGit(process.cwd()), out: (line) => console.log(line) });
+  // A local run (npm run check, the pre-push gate) judges the raise from the fork point; CI keeps the pull request's base.
+  return checkPluginVersions({ base: ends.base, head: ends.head, fromForkPoint: event === null }, { git: createGit(process.cwd()), out: (line) => console.log(line) });
 }
 
 process.exitCode = await runMain('plugin-version', main, (line) => console.error(line));

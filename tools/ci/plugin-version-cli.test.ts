@@ -42,6 +42,42 @@ describe('plugin-version cli', () => {
     assert.equal(raised.stdout, 'plugin-version: demo 0.1.0 -> 0.1.1: 2 file(s) under plugins/demo/ changed\n');
   });
 
+  it("judges a local run's raise against the branch's fork point, so main raising past it later does not fail it (#1634)", () => {
+    repo.write('plugins/demo/hooks/a.ts', 'export const a = 2;\n');
+    repo.write(MANIFEST, JSON.stringify({ name: 'demo', version: '0.1.1' }));
+    commit('change a, release 0.1.1');
+    repo.git('checkout', '-q', 'main');
+    repo.write('plugins/demo/hooks/b.ts', 'export const b = 1;\n');
+    repo.write(MANIFEST, JSON.stringify({ name: 'demo', version: '0.1.2' }));
+    commit('add b, release 0.1.2');
+    repo.git('checkout', '-q', 'change');
+    const raised = repo.run(CLI, ['--base', 'main']);
+    assert.equal(raised.status, 0, raised.stderr);
+    assert.equal(raised.stdout, 'plugin-version: demo 0.1.0 -> 0.1.1: 2 file(s) under plugins/demo/ changed\n');
+    repo.write(MANIFEST, JSON.stringify({ name: 'demo', version: '0.1.0' }));
+    commit('take the raise back');
+    assert.deepEqual(repo.run(CLI, ['--base', 'main']), { status: 1, stdout: UNRAISED, stderr: '' });
+  });
+
+  it("keeps comparing a pull request's version with its base's under --github, a base that raised past it included (#1634)", () => {
+    repo.write('plugins/demo/hooks/a.ts', 'export const a = 2;\n');
+    repo.write(MANIFEST, JSON.stringify({ name: 'demo', version: '0.1.1' }));
+    const head = commit('change a, release 0.1.1');
+    repo.git('checkout', '-q', 'main');
+    repo.write('plugins/demo/hooks/b.ts', 'export const b = 1;\n');
+    repo.write(MANIFEST, JSON.stringify({ name: 'demo', version: '0.1.2' }));
+    const base = commit('add b, release 0.1.2');
+    repo.git('checkout', '-q', 'change');
+    const event = join(repo.outside, 'event.json');
+    writeFileSync(event, JSON.stringify({ pull_request: { base: { sha: base, repo: { full_name: 'owner/demo' } }, head: { sha: head, repo: { full_name: 'owner/demo' } } } }));
+    const env = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: event, GITHUB_SHA: head };
+    assert.deepEqual(repo.run(CLI, ['--github'], env), {
+      status: 1,
+      stdout: `plugin-version: demo: 2 file(s) under plugins/demo/ changed, but ${MANIFEST} still gives 0.1.1 (the base: 0.1.2); raise it, or installed copies never receive the change\n`,
+      stderr: '',
+    });
+  });
+
   it('compares with origin/main by default', () => {
     repo.git('update-ref', 'refs/remotes/origin/main', mainSha);
     repo.write('README.md', 'docs only\n');

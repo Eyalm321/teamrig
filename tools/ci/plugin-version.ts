@@ -48,6 +48,12 @@ export function readCatalog(text: string): Catalog {
 export interface Comparison {
   readonly base: string;
   readonly head: string;
+  /**
+   * Judge the raise against the version where `head` left `base` (their merge base), not `base`'s own (#1634): a local
+   * run's base is main's tip, which may have raised its version after the branch was cut, and the merge step re-sets
+   * the branch's raise on top of it. Stopgap until releases raise the version after merge.
+   */
+  readonly fromForkPoint?: boolean;
 }
 
 export interface PluginVersionDeps {
@@ -72,10 +78,11 @@ function versionField(manifest: string): string | undefined {
   return isRecord(parsed) ? stringField(parsed, 'version') : undefined;
 }
 
-async function checkPlugin(plugin: ShippedPlugin, ends: Comparison, changed: readonly string[], git: Git): Promise<Verdict> {
+/** `versionBase`: the revision whose plugin.json version the head's must rise above. */
+async function checkPlugin(plugin: ShippedPlugin, head: string, versionBase: string, changed: readonly string[], git: Git): Promise<Verdict> {
   const prefix = plugin.folder === '' ? '' : `${plugin.folder}/`;
   const manifest = `${prefix}.claude-plugin/plugin.json`;
-  const headText = await readAt(git, ends.head, manifest);
+  const headText = await readAt(git, head, manifest);
   if (headText === undefined) {
     return { ok: false, line: `${plugin.name}: ${manifest} is missing` };
   }
@@ -89,7 +96,7 @@ async function checkPlugin(plugin: ShippedPlugin, ends: Comparison, changed: rea
   if (touched === 0) {
     return { ok: true, line: `${plugin.name} ${headRaw}: nothing under ${where} changed` };
   }
-  const baseText = await readAt(git, ends.base, manifest);
+  const baseText = await readAt(git, versionBase, manifest);
   const baseRaw = baseText === undefined ? undefined : versionField(baseText);
   const baseVersion = baseRaw === undefined ? undefined : parseVersion(baseRaw);
   if (baseRaw === undefined || baseVersion === undefined) {
@@ -128,7 +135,7 @@ export async function checkPluginVersions(ends: Comparison, deps: PluginVersionD
     deps.out(`plugin-version: ${problem}`);
   }
   for (const plugin of catalog.plugins) {
-    const verdict = await checkPlugin(plugin, ends, changed, deps.git);
+    const verdict = await checkPlugin(plugin, ends.head, ends.fromForkPoint === true ? mergeBase : ends.base, changed, deps.git);
     deps.out(`plugin-version: ${verdict.line}`);
     failures += verdict.ok ? 0 : 1;
   }

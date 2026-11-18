@@ -20,6 +20,8 @@ interface Change {
   /** plugin.json at the head and at the base; `undefined` when that end has none. */
   readonly head: string | undefined;
   readonly base: string | undefined;
+  /** plugin.json at the merge base, read only by a run from the fork point. */
+  readonly fork?: string;
   readonly catalog?: string | undefined;
   readonly manifest?: string;
 }
@@ -35,7 +37,11 @@ function gitFor(change: Change): FakeGit {
   if (change.catalog !== undefined) {
     responses[`show head:${MARKETPLACE}`] = change.catalog;
   }
-  for (const [end, text] of [['head', change.head], ['base', change.base]] as const) {
+  const ends: (readonly [string, string | undefined])[] = [['head', change.head], ['base', change.base]];
+  if (change.fork !== undefined) {
+    ends.push(['fork', change.fork]);
+  }
+  for (const [end, text] of ends) {
     responses[`ls-tree --name-only ${end} -- ${manifest}`] = text === undefined ? '' : `${manifest}\n`;
     if (text !== undefined) {
       responses[`show ${end}:${manifest}`] = text;
@@ -44,9 +50,9 @@ function gitFor(change: Change): FakeGit {
   return new FakeGit(responses);
 }
 
-async function run(change: Change): Promise<{ readonly code: number; readonly lines: readonly string[] }> {
+async function run(change: Change, fromForkPoint?: boolean): Promise<{ readonly code: number; readonly lines: readonly string[] }> {
   const lines: string[] = [];
-  const code = await checkPluginVersions(ENDS, { git: gitFor({ catalog: catalogText(), ...change }), out: (line) => lines.push(line) });
+  const code = await checkPluginVersions(fromForkPoint === undefined ? ENDS : { ...ENDS, fromForkPoint }, { git: gitFor({ catalog: catalogText(), ...change }), out: (line) => lines.push(line) });
   return { code, lines };
 }
 
@@ -98,6 +104,13 @@ describe('checkPluginVersions', () => {
           'raise it, or installed copies never receive the change',
       ],
     });
+  });
+
+  it('judges the raise from the merge base when asked, and from the base otherwise, once the base raised past the head (#1634)', async () => {
+    const change = { changed: [MANIFEST, 'plugins/demo/hooks/a.ts'], head: manifestText('0.1.1'), base: manifestText('0.1.2'), fork: manifestText('0.1.0') };
+    assert.deepEqual(await run(change, true), { code: EXIT_CLEAN, lines: ['plugin-version: demo 0.1.0 -> 0.1.1: 2 file(s) under plugins/demo/ changed'] });
+    assert.equal((await run(change, false)).code, EXIT_FINDINGS);
+    assert.match((await run({ ...change, head: manifestText('0.1.0') }, true)).lines.join('\n'), /still gives 0\.1\.0 \(the base: 0\.1\.0\)/);
   });
 
   it('fails a change that lowers the version', async () => {
