@@ -611,7 +611,7 @@ describe('parseConfig', () => {
     const { config, issues, warnings } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close', 'issue delete'] } } });
     assert.deepEqual(issues, []);
     assert.deepEqual(paths(warnings), ['serviceRoles.github.commands[1]']);
-    assert.match(warnings[0]?.message ?? '', /"issue delete" is no command this teamrig knows: a newer teamrig wrote it, so this tab does not grant it; reload to use it/);
+    assert.match(warnings[0]?.message ?? '', /"issue delete" is no command this teamrig knows: a newer teamrig wrote it or it is misspelt, so this tab does not grant it; reload, or fix the name/);
     assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close'] } });
   });
 
