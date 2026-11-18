@@ -2,7 +2,7 @@ import { activeBurst, activeRush, type Rush } from '../../budget/burst.ts';
 import { parseLedger } from '../../delivery/ledger.ts';
 import { liveRunsOf } from '../../delivery/detached-runs.ts';
 import { deliveryPlaces, detachedDirOf } from '../../delivery/places.ts';
-import { changedSincePoke, decideRushPoke, pokeMarkOf, queuedTasksOf, rushPokePrompt, rushPokeToast, stepRunningFor, type PokeInput, type PokeMark, type PokeNow } from '../../wake/rush-poke.ts';
+import { changedSincePoke, decideRushPoke, pokeableTasks, pokeMarkOf, queuedTasksOf, rushPokePrompt, rushPokeToast, stepRunningFor, type PokeInput, type PokeMark, type PokeNow } from '../../wake/rush-poke.ts';
 import { BurstLog } from '../../budget/burst-log.ts';
 import { claudeProjectsDir, lastWriteOf } from '../../budget/discover.ts';
 import { autoRestartOf } from '../../config/refresh.ts';
@@ -21,6 +21,7 @@ import { LoginStore } from '../../restore/login-store.ts';
 import { apiRetryLine, claimApiRetry } from '../../restore/api-error.ts';
 import { RestoreRegistry, restoreLogPath, restoreSessionsDir } from '../../restore/registry.ts';
 import type { Task } from '../../register/fold.ts';
+import { waitContext } from '../../register/waits.ts';
 import { parkRulesOf } from '../../register/park.ts';
 import type { TasksElsewhere } from '../../register/tree.ts';
 import { askVerdictOf, asksFolderOf, asksNowOf, handedPrompt, handedToast, WakeAsks, type WakeAsk } from '../../wake/asks.ts';
@@ -251,7 +252,8 @@ async function pokeOf(
   if (rush === undefined || !rush.sessions.includes(id)) {
     return { kind: 'none' };
   }
-  const startable = startableTasks(tasks, elsewhere, id, now, teamZone(config, runtime), parkRulesOf(config));
+  const zone = teamZone(config, runtime);
+  const startable = pokeableTasks(startableTasks(tasks, elsewhere, id, now, zone, parkRulesOf(config)), waitContext(tasks, new Date(now), zone, elsewhere));
   const lastTurnAt = await lastWriteOf(runtime.transcripts, claudeProjectsDir(runtime.env, runtime.userHome), [tab]);
   const idleMs = config.rush.pokeAfterMinutes * MINUTE_MS;
   const pokeInput: PokeInput = { rush, startable, lastTurnAt, now, idleMs, lastPokeAt: state.settled.poke, queued: new Set() };

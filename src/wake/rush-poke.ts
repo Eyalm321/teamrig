@@ -4,6 +4,7 @@ import type { DetachedRunRecord } from '../delivery/detached-runs.ts';
 import type { LedgerRecord } from '../delivery/ledger.ts';
 import { taskOfLabel } from '../delivery/process-request.ts';
 import type { Task } from '../register/fold.ts';
+import { unfinishedAfter, type WaitContext } from '../register/waits.ts';
 import { costText, type WakeCost } from './decide.ts';
 
 /**
@@ -41,6 +42,17 @@ export type PokeVerdict =
  */
 function isWorkLeft(task: Task): boolean {
   return task.status === 'open' || task.status === 'in-progress';
+}
+
+/**
+ * The tasks a poke may name: `startable` less any planned after a task not finished yet (#1516). The start gate lets
+ * a task planned after another go in progress, and `canGoOn` treats a started task as past its plan, so without this
+ * the poke named it every idle span though it could not move and `--after` is refused on a started task. Once the
+ * task it is planned after finishes it is poked for again, and that counts as a change (`changedSincePoke`), since
+ * the poke's mark keeps this list.
+ */
+export function pokeableTasks(startable: readonly Task[], context: WaitContext): readonly Task[] {
+  return startable.filter((task) => unfinishedAfter(task.after, context).length === 0);
 }
 
 /** The task a poke names: the most urgent one tagged with the rush's goal, else the most urgent. */
