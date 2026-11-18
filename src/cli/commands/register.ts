@@ -59,6 +59,7 @@ import { checkLines, listLines, SHORT_TITLE_CHARS, waitingOnLines, type CheckRep
 import { fiveHourWarnings } from '../five-hour-check.ts';
 import { logSizeWarnings } from '../log-size-check.ts';
 import { githubLateWarnings } from '../github-late-check.ts';
+import { teamOwnerFirst } from './issue-clock.ts';
 import { promptHoldWarnings } from '../prompt-hold-page.ts';
 import { restartStalledWarnings } from '../restart-stalled-check.ts';
 import { resetExpiryWarnings } from '../reset-expiry-check.ts';
@@ -1175,7 +1176,7 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
   const off = await secretGuardOffWarnings(runtime.files, own.config.secretGuard, settings);
   const fiveHour = await fiveHourWarnings(runtime.files, snapshotDirOf(own.config.budget, own.paths), own.config.budget, zone, now.getTime());
   const resets = resetExpiryWarnings(own.config.budget, zone, now.getTime());
-  const late = await githubLateWarnings(runtime.files, { clocks: own.paths.githubClocks, notices: own.paths.unownedNotices }, zone, now.getTime());
+  const late = await githubLateWarnings(runtime.files, { clocks: own.paths.githubClocks, notices: own.paths.unownedNotices }, zone, now.getTime(), teamOwnerFirst(own.config));
   const restore = await restoreLauncherWarnings(runtime.files, resolveKitHome(runtime.env, runtime.userHome));
   const holds = await promptHoldWarnings(runtime, own.paths, zone, new SecretScanner(own.config.register.secretPatterns), now.getTime());
   const logs = await logSizeWarnings(runtime.files, own.paths);
