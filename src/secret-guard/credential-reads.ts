@@ -60,8 +60,11 @@ interface Options {
   readonly valued: ReadonlySet<string>;
 }
 
-/** The git options allowed before `grep`: `-C <dir>` searches another checkout; the pager stays off. */
-const GIT_OPTIONS: Options = { plain: new Set(['--no-pager', '-P']), valued: new Set(['-C']) };
+/**
+ * The git options allowed before `grep`: the pager stays off. `-C <dir>` is left out: with `grep.fallbackToNoIndex`
+ * set, git searches a folder that is no repository as `--no-index` would, and the session's own checkout needs no `-C`.
+ */
+const GIT_OPTIONS: Options = { plain: new Set(['--no-pager', '-P']), valued: new Set() };
 
 /**
  * The `git grep` options allowed after the subcommand: read-only matching and output options. Left out on purpose:
@@ -107,10 +110,11 @@ function optionsEnd(args: readonly string[], at: number, options: Options, until
 /**
  * True when `run` is a `git grep` that searches only the repository and starts nothing else (#1469): the program
  * word is a bare `git` (a PATH lookup, not a file named git that would get the name as an argument), no wrapper
- * feeds it arguments from stdin, and every option on either side of the subcommand is on its allow-list above.
+ * feeds it arguments from stdin, no word is expanded by the shell (`$X` may hold any option, so the allow-list could not
+ * read it), and every option on either side of the subcommand is on its allow-list above.
  */
 function repoSearch(run: ProgramRun): boolean {
-  if (run.program.text !== 'git' || run.stdinArgs) return false;
+  if (run.program.text !== 'git' || run.stdinArgs || run.args.some((arg) => arg.dynamic)) return false;
   const args = run.args.map((arg) => arg.text);
   const at = optionsEnd(args, 0, GIT_OPTIONS, false);
   return at >= 0 && args[at] === 'grep' && optionsEnd(args, at + 1, GREP_OPTIONS, true) >= 0;
