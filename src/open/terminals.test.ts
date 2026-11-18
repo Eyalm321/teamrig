@@ -107,15 +107,29 @@ describe('tabCommand', () => {
   });
 
   it('leaves the Windows Terminal launch and the Linux terminals as they are: the focus is kept around them or not at all', () => {
-    for (const terminal of ['windows-terminal', 'gnome-terminal', 'konsole', 'x-terminal-emulator'] as const) {
+    for (const terminal of ['windows-terminal', 'windows-console', 'gnome-terminal', 'konsole', 'x-terminal-emulator'] as const) {
       assert.deepEqual(tabCommand(terminal, { ...TAB, focus: 'keep' }), tabCommand(terminal, TAB), terminal);
     }
+  });
+
+  it('starts the launch argv itself in a console window of its own, in the folder, with no shell (#1473)', () => {
+    // A path Windows Terminal would misread is no problem here: nothing re-reads the arguments.
+    const folder = 'C:\\w\\a;b';
+    assert.deepEqual(tabCommand('windows-console', { ...TAB, folder }), {
+      kind: 'command',
+      request: { command: ARGV[0], args: ARGV.slice(1), cwd: folder, mode: 'spawn' },
+    });
+  });
+
+  it('has no console window to start for an empty launch argv', () => {
+    assert.equal(tabCommand('windows-console', { ...TAB, argv: [] }).kind, 'unusable');
   });
 });
 
 describe('autoTerminals', () => {
   it('tries tmux first inside tmux, then the platform terminal', () => {
-    assert.deepEqual(autoTerminals({}, 'win32'), ['windows-terminal']);
+    // Windows without Windows Terminal (Windows 10, or removed) still opens a console window (#1473).
+    assert.deepEqual(autoTerminals({}, 'win32'), ['windows-terminal', 'windows-console']);
     assert.deepEqual(autoTerminals({ TMUX: '' }, 'darwin'), ['macos-terminal']);
     assert.deepEqual(autoTerminals({ TMUX: '/tmp/tmux-1/default,1,0' }, 'darwin'), ['tmux', 'macos-terminal']);
     assert.deepEqual(autoTerminals({}, 'linux'), ['gnome-terminal', 'konsole', 'x-terminal-emulator']);

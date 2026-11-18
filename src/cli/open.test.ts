@@ -256,7 +256,10 @@ describe('teamrig open', () => {
     const result = await openAlpha(processes, { platform: 'win32' });
     assert.deepEqual(result, {
       code: EXIT.printed,
-      stdout: ['MANUAL no terminal opened (windows-terminal is not installed); open a new terminal and run this in PowerShell:', shellCommand('win32', APP, launchArgv())],
+      stdout: [
+        `MANUAL no terminal opened (windows-terminal is not installed; windows-console found no ${NODE} to start); open a new terminal and run this in PowerShell:`,
+        shellCommand('win32', APP, launchArgv()),
+      ],
       stderr: [],
     });
     const linux = await openAlpha(new FakeProcesses(), {}, ['--terminal', 'print']);
@@ -283,10 +286,16 @@ describe('teamrig open', () => {
     assert.deepEqual(processes.started[0]?.args, ['--tab', `--working-directory=${folder}`, '--', ...argv]);
     assert.equal(decodePrompt(argv.at(-1) ?? ''), prompt);
     const windows = new FakeProcesses().onStart('wt.exe', { kind: 'started', end: 'exited' });
-    const refused = await openAlpha(windows, { probe, platform: 'win32' }, ['--project', folder, '--prompt', prompt]);
+    const refused = await openAlpha(windows, { probe, platform: 'win32' }, ['--project', folder, '--prompt', prompt, '--terminal', 'windows-terminal']);
     assert.equal(refused.code, EXIT.printed);
     assert.deepEqual(windows.started, []);
     assert.equal(refused.stdout[1], shellCommand('win32', folder, argv));
+    // Windows Terminal would misread them, so auto goes on to a console window, which starts the launch with them as
+    // arguments, with no shell or terminal reading them again (#1473).
+    const consoleWindow = new FakeProcesses().onStart(NODE, { kind: 'started', end: 'spawned' });
+    const opened = await openAlpha(consoleWindow, { probe, platform: 'win32' }, ['--project', folder, '--prompt', prompt]);
+    assert.equal(opened.code, EXIT.ok, opened.stdout.join('\n'));
+    assert.deepEqual(consoleWindow.started, [{ command: NODE, args: argv.slice(1), cwd: folder, mode: 'spawn' }]);
   });
 
   it('opens in the folder Claude Code started in when the team comes from $TEAMRIG_TEAM, and passes no kit home it was not given', async () => {

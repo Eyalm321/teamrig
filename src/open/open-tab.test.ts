@@ -23,8 +23,22 @@ describe('openTab', () => {
     const outcome = await openTab({ processes, env: { TMUX: 'x' }, platform: 'win32' }, 'auto', { ...TAB, folder: 'C:\\a;b' });
     assert.deepEqual(outcome, {
       kind: 'none',
-      reasons: ['tmux failed: exited with code 1: no server running', 'Windows Terminal would misread "C:\\\\a;b" (it holds ; " % or a control character)'],
+      reasons: [
+        'tmux failed: exited with code 1: no server running',
+        'Windows Terminal would misread "C:\\\\a;b" (it holds ; " % or a control character)',
+        'windows-console found no /usr/bin/node to start',
+      ],
     });
+  });
+
+  it('opens a console window on Windows with no Windows Terminal: the launch argv itself, detached in the project folder (#1473)', async () => {
+    const processes = new FakeProcesses().onStart('/usr/bin/node', { kind: 'started', end: 'spawned' });
+    const outcome = await openTab({ processes, env: {}, platform: 'win32' }, 'auto', TAB);
+    assert.deepEqual(outcome, { kind: 'opened', terminal: 'windows-console', end: 'spawned' });
+    assert.deepEqual(processes.started, [
+      { command: 'wt.exe', args: ['-w', '0', 'new-tab', '--title', 'shop-api', '-d', '/w/shop', '--', ...TAB.argv], cwd: '/w/shop', mode: 'exit' },
+      { command: '/usr/bin/node', args: ['/kit/main.js', 'launch', 'api'], cwd: '/w/shop', mode: 'spawn' },
+    ]);
   });
 
   it('tries only the terminal asked for', async () => {

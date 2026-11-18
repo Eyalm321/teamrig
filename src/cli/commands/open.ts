@@ -38,6 +38,7 @@ import { sessionProjectOf } from './setup.ts';
 export const TERMINAL_LABELS: Readonly<Record<Terminal, string>> = {
   tmux: 'tmux window',
   'windows-terminal': 'Windows Terminal tab',
+  'windows-console': 'console window',
   'macos-terminal': 'Terminal window',
   'gnome-terminal': 'GNOME Terminal tab',
   konsole: 'Konsole tab',

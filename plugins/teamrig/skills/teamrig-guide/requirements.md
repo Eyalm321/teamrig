@@ -48,7 +48,7 @@ is not on the PATH unless you add that folder. Each change to the plugin raises 
 | Platform | Terminal | Program it runs |
 | --- | --- | --- |
 | any, inside tmux | `tmux` | `tmux new-window` (tmux 3.0 or later) |
-| Windows | `windows-terminal` | `wt.exe` |
+| Windows | `windows-terminal`, then `windows-console` | `wt.exe`; without it, the session in a console window of its own |
 | macOS | `macos-terminal` | Terminal, through `osascript` |
 | Linux | `gnome-terminal`, then `konsole`, then `x-terminal-emulator` | the first one found |
 

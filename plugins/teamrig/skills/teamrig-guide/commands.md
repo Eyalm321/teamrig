@@ -3380,8 +3380,8 @@ Flags:
   folder it ran in when that was not the team's. It measures that session as `hire` does and refuses, with why, when
   it is gone, over `hiring.resumeMaxTokens` or idle over `hiring.resumeMaxIdleDays`. A closed session needs no
   `--resume`; with it, it refuses rather than open fresh.
-- `--terminal <name>`: `auto`, `tmux`, `windows-terminal`, `macos-terminal`, `gnome-terminal`, `konsole`,
-  `x-terminal-emulator` or `print`; default the config's `open.terminal` (`auto`). With [open.teamWindow] on, a
+- `--terminal <name>`: `auto`, `tmux`, `windows-terminal`, `windows-console`, `macos-terminal`, `gnome-terminal`,
+  `konsole`, `x-terminal-emulator` or `print`; default the config's `open.terminal` (`auto`). With [open.teamWindow] on, a
   Windows Terminal tab opens in the team's own window, `teamrig-<team>`.
 - `--project <dir>`: the folder to open in; default the config's `launch.<id>.project`, else `team.project`, else
   the folder holding the team's `.teamrig.json`. A closed session whose last Claude Code session ran in another folder

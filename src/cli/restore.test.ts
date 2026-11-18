@@ -153,7 +153,10 @@ describe('teamrig restore check', () => {
     const kit = await restoreKit();
     const result = await kit.run(['restore', 'check'], machine(kit, new FakeProcesses()));
     assert.equal(result.code, EXIT.printed);
-    assert.deepEqual(result.stdout, ['MANUAL no terminal opened (windows-terminal is not installed); open a new terminal and run this in PowerShell:', shellCommand('win32', USER_HOME, RUN)]);
+    assert.deepEqual(result.stdout, [
+      `MANUAL no terminal opened (windows-terminal is not installed; windows-console found no ${NODE} to start); open a new terminal and run this in PowerShell:`,
+      shellCommand('win32', USER_HOME, RUN),
+    ]);
   });
 
   it('logs that it started before a bad flag stops it (T1705)', async () => {
@@ -239,7 +242,7 @@ describe('teamrig restore run', () => {
     const failed = await restoreKit();
     const result = await failed.run(['restore', 'run', '--tab'], machine(failed, new FakeProcesses()));
     assert.equal(result.code, EXIT.failed);
-    assert.ok(result.stdout.includes(`FAILED to reopen app-alpha: no terminal opened (windows-terminal is not installed); run: ${shellCommand('win32', APP, ALPHA_LAUNCH)}`));
+    assert.ok(result.stdout.includes(`FAILED to reopen app-alpha: no terminal opened (windows-terminal is not installed; windows-console found no ${NODE} to start); run: ${shellCommand('win32', APP, ALPHA_LAUNCH)}`));
     assert.equal(result.stdout.at(-1), `This tab closes in ${TAB_CLOSE_DELAY_MS / 1_000} s.`);
     assert.deepEqual(failed.clock.sleeps, [TAB_CLOSE_DELAY_MS]);
     assert.equal((await new RestoreRegistry(failed.files, restoreSessionsDir(KIT)).read(ALPHA))?.restoreAttempts, 0);

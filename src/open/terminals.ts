@@ -59,6 +59,15 @@ export function tabCommand(terminal: Terminal, tab: TabRequest): TabCommand {
       // `-w 0` is the most recent window; a name is the window of that name, made when none is open.
       return command('wt.exe', ['-w', window ?? '0', 'new-tab', '--title', title, '-d', folder, '--', ...argv], folder, 'exit');
     }
+    case 'windows-console': {
+      // Windows without Windows Terminal (#1473): the launch itself, started detached, gets a console window of its
+      // own from Node. Nothing re-reads its arguments, so a path Windows Terminal would misread is fine here.
+      const [program, ...args] = argv;
+      if (program === undefined) {
+        return { kind: 'unusable', why: 'windows-console has no program to start' };
+      }
+      return command(program, args, folder, 'spawn');
+    }
     case 'macos-terminal':
       // Without `activate`, Terminal opens the window behind the app the owner is in.
       return command(
@@ -89,12 +98,15 @@ export function tabCommand(terminal: Terminal, tab: TabRequest): TabCommand {
   }
 }
 
-/** The terminals `auto` tries, in order: tmux inside tmux, then the platform's own. */
+/**
+ * The terminals `auto` tries, in order: tmux inside tmux, then the platform's own. On Windows a console window of the
+ * launch's own comes after Windows Terminal, so a machine without it still opens the session.
+ */
 export function autoTerminals(env: Env, platform: NodeJS.Platform): Terminal[] {
   const inTmux: Terminal[] = (env['TMUX'] ?? '') === '' ? [] : ['tmux'];
   switch (platform) {
     case 'win32':
-      return [...inTmux, 'windows-terminal'];
+      return [...inTmux, 'windows-terminal', 'windows-console'];
     case 'darwin':
       return [...inTmux, 'macos-terminal'];
     default:
