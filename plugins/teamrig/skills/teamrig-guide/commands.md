@@ -2320,6 +2320,39 @@ Output:
 CLOSED shop-api (session api): quiet 75 min, its Claude Code holds 1300 MB, now free; teamrig open shop-api resumes it
 ```
 
+### teamrig cleanup launchers
+
+Lists every `teamrig launch` process on this machine, the root of a session's tab that runs and restarts its Claude
+Code, and marks one ORPHANED when its tab is gone: the terminal that started it has ended, or a later process now
+holds that terminal's id. Each line gives the process id, the team and session, when it started and what started it,
+then a count. Without `--yes` it ends nothing; with `--yes` it ends each orphaned launcher and every process it
+started, after checking that its id still holds the same process: that session's launch, the same starter and, on
+Windows, the same start (an id the system gave to another program, or to a reopened tab of that session, is left
+alone and shown `GONE`). ORPHANED means the starter ended, not that a window closed: a launcher run through a
+starter that exits while its window stays (a script or shortcut) is marked too, so read the starter on each line
+before `--yes`. Its own tab's launcher is never offered. It changes this machine, not a team, so it
+takes no `--session`. Exit 0, or 1 when the machine's processes cannot be listed (it then ends nothing) or an end
+failed.
+
+Flags:
+
+- `--yes`: end the orphaned launchers.
+
+Example:
+
+```sh
+teamrig cleanup launchers
+```
+
+Output:
+
+```text
+LIVE pid 4120 shop/api, started 11-17 09:12, starter 3880 WindowsTerminal.exe
+ORPHANED pid 5236 shop/web, started 11-16 22:40, starter 4904 (gone): its terminal has ended
+2 launcher(s), 1 orphaned
+DRY RUN ended nothing; run it again with --yes to end the 1 orphaned
+```
+
 ### teamrig rename
 
 Records a session's new name (`teamrig rename <id|name> <new-name>`). Its old names keep finding it in every
@@ -4983,7 +5016,9 @@ cutoff on, `--detach` is REFUSED at once, as a plain step is. It is refused (exi
 waits on the checks' result, and under a live host lock, where the parent step waits for it. `--detached-run` is set
 by `--detach` and the hand-over only.
 
-Everything after `--` is the command, read as `teamrig test` reads it. Run a test run as
+Everything after `--` is the command, read as `teamrig test` reads it: one quoted word runs as a shell line, several
+run as one command with each word passed as is, and a word that is only `&&`, `||` or `;` is REFUSED (exit 64) before
+the step joins the line. Run a test run as
 `teamrig queue ... -- teamrig test -- <command>`: it then gets both the lock and the short summary.
 
 A step's processes get `$TEAMRIG_HOST_LOCK`, the lock's id, and so do `merge`'s push, `deploy`'s
@@ -5810,8 +5845,10 @@ recognised. It reads the Node.js test runner (spec and TAP), Jest and Vitest. Ex
 [delivery.passEnv] names.
 
 Everything after `--` is the command. One quoted word runs as written, so `"npm run build && npm test"` works;
-several words are passed on as typed, globs included. An empty command is REFUSED (exit 64), as a shell would run
-it as nothing and exit 0. On Windows, cmd.exe runs the command and stops reading at a line break, so a word that holds
+several words run as one command, each word passed on as typed, globs included. So a word that is only `&&`, `||` or
+`;` is REFUSED (exit 64) before anything runs, as the first program would get it as an argument: pass the whole chain
+as one quoted word, as the refusal shows. An operator inside a word (`a;b`) is passed on as today. An empty command is
+REFUSED (exit 64), as a shell would run it as nothing and exit 0. On Windows, cmd.exe runs the command and stops reading at a line break, so a word that holds
 one (a `bash -c` script over several lines) is REFUSED too, before anything runs: put the script in a file and run the
 file, or keep each word on one line.
 
