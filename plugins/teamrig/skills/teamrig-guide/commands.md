@@ -6060,8 +6060,10 @@ model little. The whole output goes to a numbered log, `test-<session>-<n>.log` 
 (the kit home's `logs` folder outside a team); each session keeps its newest 20. Then one `PASS` or `FAIL` line with
 the counts, the time and the log's path, and for a failed run each failing test in full within
 `tests.maxFailureChars` (4,000 characters by default), or the output's last 40 lines when no test runner is
-recognised. It reads the Node.js test runner (spec and TAP), Jest and Vitest. Exit 0 when the command passed,
-1 otherwise.
+recognised. It reads the Node.js test runner (spec and TAP), Jest and Vitest. A run that prints nothing for
+`tests.idleStopSeconds` (600 by default, 0 never; a busy host stretches it up to three times) is stopped with every
+process it started and fails, its `FAIL` line saying so and the output's last lines naming where it hung; on POSIX,
+Ctrl-C or the terminal closing ends that whole group too. Exit 0 when the command passed, 1 otherwise.
 
 In a team, the command runs through [teamrig queue](#teamrig-queue) `--kind test`, so it waits its turn for host
 memory and the host lock and runs below normal priority, as every queued step does: one spec file run by node
