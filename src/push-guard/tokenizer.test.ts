@@ -659,6 +659,9 @@ describe('parseShell: bindings the commands may not show', () => {
       'n=0; declare n=x; echo $((n))',
       'n=0; $c n; echo $((n))',
       'n=0; echo $((n) )',
+      "_=0; echo 'a[$(touch F)]' >/dev/null; echo $((_))",
+      "BASH_REMATCH=0; [[ 'a[$(touch F)]' =~ .* ]]; echo $((BASH_REMATCH))",
+      'N=0; echo $((N))',
     ]) {
       assert.equal(unclear(line), true, line);
     }
