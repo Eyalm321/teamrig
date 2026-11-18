@@ -567,9 +567,10 @@ process. A line that only mentions one of these words is refused as well (`grep 
 Grep tool instead, which runs no shell. One exception: a line whose every program is a `git grep` of the repository may
 name a teamrig credential (`git grep -n teamrig-gh-`), since it searches tracked files and reads no store. The
 program word must be a bare `git`, and options on both sides of `grep` are allow-lists spelled in full (git takes any
-unique prefix of a long option): before it only `-C <dir>`, `--no-pager` and `-P`; after it read-only matching and
-output options (`-n -i -w -v -l -c -e -A -B -C --count --name-only --cached --max-depth` and the like). Anything else
-(`--no-index`, `--untracked`, `-O`, `--textconv` or an abbreviation of one), arguments fed from stdin (`xargs`), an
+unique prefix of a long option): before it only `--no-pager` and `-P` (no `-C <dir>`: run it from the checkout); after
+it read-only matching and output options (`-n -i -w -v -l -c -e -A -B -C --count --name-only --cached --max-depth` and
+the like). Anything else (`--no-index`, `--untracked`, `-O`, `--textconv` or an abbreviation of one), a word the shell
+expands (`$X`, `"${X}"`), arguments fed from stdin (`xargs`), an
 environment set for git (`NAME=value git`, `env`), or any other command on the line keeps it refused. `secretGuard.secretReads` settles it; no `!pattern` lets one through. The
 reason: "teamrig secret guard: this call reads a saved credential out of the host's credential store (gh auth token),
 printed or not. A session never reads the store: each tool's key stays with the tool that reads it (teamrig's own
