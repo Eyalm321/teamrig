@@ -65,11 +65,15 @@ export function plainArithmetic(text: string): readonly string[] | undefined {
  * unquoted `NAME=value` words alone, in the line's own shell, each surely run before the next); and every other
  * word anywhere that may assign it (`NAME=`, `NAME+=`, `NAME[`, an argument such as `echo NAME=x` too) must again
  * give digits or one plain arithmetic expansion of such names. A `for` loop over it, or any program in
- * {@link SETTERS} or one a variable names, leaves it unclear.
+ * {@link SETTERS} or one a variable names, leaves it unclear. So does a name with no lower-case letter: bash
+ * sets some of those itself, unseen by the line (`_`, `BASH_REMATCH`, `REPLY`, `OPTARG`).
  */
 export function countersHold(commands: readonly ShellCommand[], names: readonly string[]): boolean {
   if (names.length === 0) {
     return true;
+  }
+  if (!names.every((name) => /[a-z]/.test(name))) {
+    return false;
   }
   const held = new Set<string>();
   for (const command of commands) {
