@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import type { JsonRecord } from '../core/guards.ts';
 import { withStampFooter } from '../core/stamp.ts';
-import { isIssueAssign, isIssueAssigneeRead, isIssueBodyEdit, isIssueClose, isIssueComment, isIssueRead, isIssueUnassign, isLabelAdd, isLabelFileRead, isLabelRead, isLabelRemove, isUserRead } from '../github/gh.ts';
+import { isIssueAssign, isIssueAssigneeRead, isIssueBodyEdit, isIssueClose, isIssueComment, isIssueRead, isIssueUnassign, isLabelAdd, isLabelFileRead, isLabelRead, isLabelRemove, isUserRead, labelCreateArgs } from '../github/gh.ts';
+import { areaLabelSpec } from '../issues/area-label.ts';
 import { APP, CliHarness, EVENTS_PATH, TEAM } from '../testing/cli-harness.ts';
 import { FakeCredentials } from '../testing/fake-credentials.ts';
 import { FakeGh, ghIssue } from '../testing/fake-gh.ts';
@@ -190,6 +191,21 @@ describe('teamrig issue label', () => {
     const create = gh.ran.find((request) => request.args.includes('-X') && request.args.includes('repos/acme/web/labels'));
     assert.deepEqual(create?.args, ['api', 'repos/acme/web/labels', '-X', 'POST', '-f', 'name=area:cli', '-f', 'color=1d76db', '-f', 'description=Area: the teamrig command line']);
     assert.ok(gh.ran.some((request) => isLabelAdd(request.args)));
+  });
+
+  it('makes a missing area label github.areaOwners names, in its spelling, then adds it; refuses one it does not name (#1499)', async () => {
+    const team: JsonRecord = { ...TEAM, github: { repos: ['acme/web'], areaOwners: { 'area:cli': 'lead' } } };
+    const gh = new FakeGh().hasLabels('acme/web', ['p1']);
+    const result = await new CliHarness(team).run(['issue', 'label', 'acme/web#7', '--add', 'Area:CLI'], { ...AS_LEAD, gh });
+    assert.equal(result.code, EXIT.ok, result.stdout.join('\n'));
+    assert.ok(result.stdout.includes('MADE acme/web: the label "area:cli", as github.areaOwners names it'), result.stdout.join('\n'));
+    const create = gh.ran.find((request) => request.args.includes('-X') && request.args.includes('repos/acme/web/labels'));
+    assert.deepEqual(create?.args, labelCreateArgs('acme/web', areaLabelSpec('area:cli')));
+    assert.ok(gh.ran.some((request) => isLabelAdd(request.args)));
+    const other = new FakeGh();
+    const refused = await new CliHarness(team).run(['issue', 'label', 'acme/web#7', '--add', 'area:web'], { ...AS_LEAD, gh: other });
+    assert.equal(refused.code, EXIT.failed);
+    assert.ok(other.ran.every((request) => isLabelRead(request.args) || isLabelFileRead(request.args)));
   });
 
   it('refuses, running no gh, no list, a label in both, an empty or control-character label, and a repository not listed', async () => {

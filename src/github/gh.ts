@@ -3,6 +3,7 @@ import type { Env } from '../core/home.ts';
 import { endOf, type ShellEnd } from '../test-run/shell.ts';
 import type { CloseReason, IssueDraft, LabelSpec } from '../issues/host.ts';
 import { LABEL_FILE, parseLabelFile } from '../issues/label-file.ts';
+import { areaLabelSpec } from '../issues/area-label.ts';
 import { MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
 import { QUERY_VARIABLES, RAW_FIELD } from './queries.ts';
 
@@ -444,6 +445,15 @@ export function isFileLabelCreate(args: readonly string[], fileLabels: FileLabel
   return labelCreateIn(args, fileLabels);
 }
 
+/**
+ * True for the command line labelCreateArgs builds for an area label (areaLabelSpec) of one of `areaLabels`, the
+ * labels github.areaOwners names as `issue label` handed them to the runner, word for word as isLabelCreate takes a
+ * managed one. A runner handed none makes none.
+ */
+export function isAreaLabelCreate(args: readonly string[], areaLabels: readonly string[]): boolean {
+  return labelCreateIn(args, () => areaLabels.map(areaLabelSpec));
+}
+
 /** True for labelCreateArgs's line for one of the labels `labelsOf` gives its repository, word for word. */
 function labelCreateIn(args: readonly string[], labelsOf: FileLabels): boolean {
   const repo = LABELS_PATH.exec(args[1] ?? '')?.[1] ?? '';
@@ -616,6 +626,11 @@ export interface GhResult {
 /** Runs the GitHub CLI to its end with no stdin. It rejects when `gh` cannot start, such as when it is not installed. */
 export interface GhRunner {
   run(request: GhRequest): Promise<GhResult>;
+  /**
+   * Hands the runner the labels github.areaOwners names, so it makes those as area labels (isAreaLabelCreate) and no
+   * other; the runner reads no config of its own. Each call replaces the last; a runner without it makes none.
+   */
+  keepAreaLabels?(names: readonly string[]): void;
 }
 
 /** How long one `gh` run may take before it is stopped: a page of a hundred issues takes seconds. */
@@ -843,19 +858,23 @@ export function isReviewRead(args: readonly string[]): boolean {
  * The real runner: `spawn` with no shell, so an issue title or a repository name can never become a
  * command. gh is told never to prompt, as nobody is there to answer. `program` and `leading` let a test
  * stand a Node script in for gh. A run that prints more than `maxBytes` is stopped and rejects with
- * GhOutputCapError. It keeps what each repository's label file named when it read one, so it makes only those
- * labels beside its own.
+ * GhOutputCapError. It keeps what each repository's label file named when it read one, and the area labels it was
+ * handed, so it makes only those labels beside its own.
  */
 export function nodeGhRunner(program = 'gh', leading: readonly string[] = [], timeoutMs = GH_TIMEOUT_MS, maxBytes = GH_OUTPUT_MAX_BYTES): GhRunner {
   const labelFiles = new LabelFileReads();
+  let areaLabels: readonly string[] = [];
   return {
     run: async (request) => {
-      if (!isAllowedGh(request.args) && !isFileLabelCreate(request.args, labelFiles.of)) {
+      if (!isAllowedGh(request.args) && !isFileLabelCreate(request.args, labelFiles.of) && !isAreaLabelCreate(request.args, areaLabels)) {
         throw new GhRefusedError(request.args);
       }
       const result = await spawnGh(program, leading, request, timeoutMs, maxBytes);
       labelFiles.note(request.args, result);
       return result;
+    },
+    keepAreaLabels: (names) => {
+      areaLabels = [...names];
     },
   };
 }

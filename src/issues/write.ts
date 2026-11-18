@@ -3,6 +3,7 @@ import { privateShapeIn } from '../core/private-shapes.ts';
 import type { SecretScanner } from '../core/secrets.ts';
 import { targetText, type CloseReason, type IssueHost, type IssueTarget } from './host.ts';
 import type { HostLabelFile, LabelSpec } from './host.ts';
+import { areaLabelSpec } from './area-label.ts';
 import { LABEL_FILE } from './label-file.ts';
 import { managedLabel } from './managed-labels.ts';
 import { taskIdIn } from './posted.ts';
@@ -58,6 +59,8 @@ export interface LabelWrite {
   readonly target: IssueTarget;
   readonly add: readonly string[];
   readonly remove: readonly string[];
+  /** The labels github.areaOwners names, made as area labels (areaLabelSpec) when the repository lacks one; none when absent. */
+  readonly areaLabels?: readonly string[];
 }
 
 /** Why `label` is no label name a host takes, or undefined when it is one: holding a control character, empty, padded or too long. */
@@ -86,14 +89,19 @@ interface LabelToMake {
 }
 
 /**
- * How `label`, which `repo` lacks, is made: as teamrig's own (managedLabel, its case exact), else as the repository's
- * label file names it (its case aside, as GitHub's label names ignore case). Else the reason it is not made, so a
- * typo never makes a new label. `labelFile` reads that file, at most once a run.
+ * How `label`, which `repo` lacks, is made: as teamrig's own (managedLabel, its case exact), else as an area label
+ * of `areaLabels` (github.areaOwners) or as the repository's label file names it, in that spelling (case aside, as
+ * GitHub's label names ignore case). Else the reason it is not made, so a typo never makes a new label. `labelFile`
+ * reads that file, at most once a run.
  */
-async function missingLabel(repo: string, label: string, labelFile: () => Promise<HostLabelFile>): Promise<LabelToMake | string> {
+async function missingLabel(repo: string, label: string, areaLabels: readonly string[], labelFile: () => Promise<HostLabelFile>): Promise<LabelToMake | string> {
   const managed = managedLabel(label);
   if (managed !== undefined) {
     return { label: managed, source: 'one teamrig makes' };
+  }
+  const area = areaLabels.find((name) => name.toLowerCase() === label.toLowerCase());
+  if (area !== undefined) {
+    return { label: areaLabelSpec(area), source: 'as github.areaOwners names it' };
   }
   const file = await labelFile();
   if (file.kind === 'failed') {
@@ -110,7 +118,8 @@ async function missingLabel(repo: string, label: string, labelFile: () => Promis
 /**
  * Adds and takes off labels through `host`, one line said for each step: ACCESS, then MADE, LABELED and UNLABELED, or
  * FAILED with the reason. Every label to add must already be one of the repository's, read before any write, or one
- * teamrig makes, or one the repository's label file names (made first), so a typo never makes a new label; the first
+ * teamrig makes, an area label github.areaOwners names, or one the repository's label file names (made first), so a
+ * typo never makes a new label; the first
  * failure stops it, and a failure after a write says what was done. True when every step was done.
  */
 export async function labelIssue(host: IssueHost, write: LabelWrite, say: (line: string) => void): Promise<boolean> {
@@ -129,7 +138,7 @@ export async function labelIssue(host: IssueHost, write: LabelWrite, say: (line:
     if (found.kind === 'found') {
       continue;
     }
-    const make = found.kind === 'failed' ? found.reason : await missingLabel(write.target.repo, label, labelFile);
+    const make = found.kind === 'failed' ? found.reason : await missingLabel(write.target.repo, label, write.areaLabels ?? [], labelFile);
     if (typeof make === 'string') {
       say(`FAILED ${shown}: ${make}; nothing was changed`);
       return false;

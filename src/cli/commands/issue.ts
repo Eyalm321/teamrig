@@ -93,8 +93,9 @@ export async function issueClose(args: ParsedArgs, runtime: CliRuntime): Promise
 /**
  * `issue label <owner/name#n> [--add <label,...>] [--remove <label,...>]` (T2679): adds labels to and takes labels
  * off one issue or pull request of the team's repositories, through the same host and caller checks as `issue
- * comment`. Each label to add must already be the repository's (issues/write.ts); a label in both lists, or one no
- * host takes, is refused before anything runs. Exit 1 when the host failed, else 0.
+ * comment`. Each label to add must already be the repository's, or one teamrig makes: its own, an area label
+ * github.areaOwners names, or one the repository's label file names (issues/write.ts); a label in both lists, or one
+ * no host takes, is refused before anything runs. Exit 1 when the host failed, else 0.
  */
 export async function issueLabel(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const target = targetOf(args);
@@ -107,11 +108,15 @@ export async function issueLabel(args: ParsedArgs, runtime: CliRuntime): Promise
   if (both !== undefined) {
     throw new RefusedError(`the label ${JSON.stringify(both)} is in both --add and --remove: give it in one`);
   }
-  const host = await hostFor(args, runtime, target.repo, undefined);
+  const checked = await checkedRepo(args, runtime, target.repo);
+  const host = hostAfter(checked, runtime, undefined);
   if (host === undefined) {
     return EXIT.ok;
   }
-  return (await labelIssue(host, { target, add, remove }, (line) => runtime.out.stdout(line))) ? EXIT.ok : EXIT.failed;
+  // The runner reads no config, so it is handed the area labels it may make, and makes no other.
+  const areaLabels = Object.keys(checked.config.github.areaOwners);
+  runtime.gh.keepAreaLabels?.(areaLabels);
+  return (await labelIssue(host, { target, add, remove, areaLabels }, (line) => runtime.out.stdout(line))) ? EXIT.ok : EXIT.failed;
 }
 
 /**

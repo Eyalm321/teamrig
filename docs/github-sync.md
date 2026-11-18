@@ -352,8 +352,9 @@ teamrig issue migrate rows.jsonl --yes               # opens the issues
 ## Commenting on, labelling and closing
 
 `teamrig issue comment` posts one comment on an issue or pull request, `teamrig issue label` adds and takes off its
-labels (where the repository lacks it, it makes first, with a `MADE` line, the `design` label or a label the
-repository's `.github/labels.json` defines, with that file's colour and description; any other label must already
+labels (where the repository lacks it, it makes first, with a `MADE` line, the `design` label, an area label
+`areaOwners` names, in its spelling with one area colour and description, or a label the repository's
+`.github/labels.json` defines, with that file's colour and description; any other label must already
 be there), and `teamrig issue close` closes one, first posting its `--comment` when given; a pull request closes
 unmerged. `--reason completed`, `not-planned` or `duplicate` says why it closed (GitHub keeps it on an issue only);
 `--duplicate-of` closes it as a duplicate of another issue of the same repository, which GitHub links as the

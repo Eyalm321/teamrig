@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { SecretScanner } from '../core/secrets.ts';
 import { FakeIssueHost } from '../testing/fake-issue-host.ts';
+import { areaLabelSpec } from './area-label.ts';
 import { editIssueBody, labelIssue, labelRefusal, MAX_COMMENT, MAX_LABEL, postRefusal, writeIssue, type IssueWrite, type LabelWrite } from './write.ts';
 
 const TARGET = { repo: 'acme/web', number: 7 };
@@ -224,6 +225,27 @@ describe('labelIssue', () => {
       { kind: 'label-create', repo: 'acme/web', label: docs },
     ]);
     assert.deepEqual(host.labelFileReads, ['acme/web']);
+  });
+
+  it('makes a missing label github.areaOwners names as an area label, in its spelling, before the label file (#1499)', async () => {
+    const host = new FakeIssueHost().hasLabels('p2');
+    assert.deepEqual(await label(host, { add: ['Area:CLI', 'p2'], remove: [], areaLabels: ['area:cli', 'area:docs'] }), {
+      done: true,
+      lines: ['ACCESS acme: writes as the test', 'MADE acme/web: the label "area:cli", as github.areaOwners names it', 'LABELED acme/web#7: "Area:CLI", "p2"'],
+    });
+    assert.deepEqual(host.calls[0], { kind: 'label-create', repo: 'acme/web', label: areaLabelSpec('area:cli') });
+    assert.deepEqual(host.labelFileReads, []);
+  });
+
+  it('makes no area label the repository has already, and refuses one github.areaOwners does not name (#1499)', async () => {
+    const has = new FakeIssueHost().hasLabels('area:cli');
+    assert.equal((await label(has, { add: ['area:cli'], remove: [], areaLabels: ['area:cli'] })).done, true);
+    assert.deepEqual(has.calls.map((call) => call.kind), ['label-add']);
+    const unnamed = new FakeIssueHost();
+    assert.deepEqual((await label(unnamed, { add: ['area:web'], remove: [], areaLabels: ['area:cli'] })).lines.slice(1), [
+      'FAILED acme/web#7: acme/web has no label "area:web", and it has no .github/labels.json: add it to that file or make it there first, as adding it here would make a new one; nothing was changed',
+    ]);
+    assert.deepEqual(unnamed.calls, []);
   });
 
   it('reads no label file for a label the repository has or one teamrig makes', async () => {

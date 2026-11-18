@@ -17,6 +17,7 @@ import {
   isIssueRead,
   isJobLogRead,
   isLabelAdd,
+  isAreaLabelCreate,
   isFileLabelCreate,
   isLabelCreate,
   isLabelFileRead,
@@ -328,6 +329,8 @@ export class FakeGh implements GhRunner {
   private readonly labelFiles = new Map<string, string>();
   /** What each label file read named, as the real runner keeps it, so a create of a label it named is taken. */
   private readonly fileReads = new LabelFileReads();
+  /** The area labels it was handed, as the real runner keeps them, so a create of one of them is taken. */
+  private areaLabels: readonly string[] = [];
   private readonly unassignable = new Map<string, readonly string[]>();
   private readonly participants = new Map<string, readonly string[]>();
   private readonly spellings = new Map<string, string>();
@@ -514,6 +517,10 @@ export class FakeGh implements GhRunner {
     return this.ran.filter((request) => isWatchProbe(request.args)).map((request) => (request.args[request.args.length - 1] ?? '').slice('repos/'.length));
   }
 
+  keepAreaLabels(names: readonly string[]): void {
+    this.areaLabels = [...names];
+  }
+
   async run(request: GhRequest): Promise<GhResult> {
     this.ran.push(request);
     if (this.failure !== undefined) {
@@ -536,7 +543,7 @@ export class FakeGh implements GhRunner {
       this.fileReads.note(request.args, result);
       return result;
     }
-    if (isFileLabelCreate(request.args, this.fileReads.of)) {
+    if (isFileLabelCreate(request.args, this.fileReads.of) || isAreaLabelCreate(request.args, this.areaLabels)) {
       return this.writeFailure ?? this.labelCreate(request.args);
     }
     if (isAssigneeRead(request.args)) {

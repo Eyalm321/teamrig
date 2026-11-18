@@ -28,6 +28,7 @@ import {
   isIssueUnassign,
   isJobLogRead,
   isLabelAdd,
+  isAreaLabelCreate,
   isFileLabelCreate,
   isLabelCreate,
   isLabelFileRead,
@@ -68,6 +69,7 @@ import {
   type IssueNumber,
 } from './gh.ts';
 import type { IssueDraft, LabelSpec } from '../issues/host.ts';
+import { areaLabelSpec } from '../issues/area-label.ts';
 import { MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
 import { CLOSED_ISSUES_QUERY, closedPageArgs, OPEN_ISSUES_QUERY, openPageArgs, PULL_REQUESTS_QUERY, pullPageArgs } from './queries.ts';
 
@@ -466,6 +468,34 @@ describe("the repository's label file: its read, and the create of a label it na
     await assert.rejects(runner.run({ args: create, env: ENV }), GhRefusedError);
     await runner.run({ args: labelFileReadArgs('acme/web'), env: ENV });
     assert.deepEqual(JSON.parse((await runner.run({ args: create, env: ENV })).stdout), create);
+  });
+});
+
+describe('the area label create (#1499)', () => {
+  it('allows the create of an area label it was handed, with the one area colour and description, word for word', () => {
+    const create = labelCreateArgs('acme/web', areaLabelSpec('area:cli'));
+    assert.equal(isAreaLabelCreate(create, []), false, 'none handed');
+    assert.ok(isAreaLabelCreate(create, ['area:cli']));
+    assert.equal(isAllowedGh(create), false, 'the fixed list alone never takes it');
+    for (const other of [
+      labelCreateArgs('acme/web', areaLabelSpec('area:x')),
+      labelCreateArgs('acme/web', { ...areaLabelSpec('area:cli'), color: '000000' }),
+      labelCreateArgs('acme/web', { ...areaLabelSpec('area:cli'), description: 'x' }),
+      create.map((arg) => (arg === 'POST' ? 'PATCH' : arg)),
+    ]) {
+      assert.equal(isAreaLabelCreate(other, ['area:cli']), false, other.join(' '));
+    }
+  });
+
+  it('makes, through the real runner, an area label only once handed it, and the last hand replaces the one before', async () => {
+    const gh = script('area-label.mjs', 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+    const runner = nodeGhRunner(process.execPath, [gh]);
+    const create = labelCreateArgs('acme/web', areaLabelSpec('area:cli'));
+    await assert.rejects(runner.run({ args: create, env: ENV }), GhRefusedError);
+    runner.keepAreaLabels?.(['area:cli']);
+    assert.deepEqual(JSON.parse((await runner.run({ args: create, env: ENV })).stdout), create);
+    runner.keepAreaLabels?.(['area:docs']);
+    await assert.rejects(runner.run({ args: create, env: ENV }), GhRefusedError);
   });
 });
 
