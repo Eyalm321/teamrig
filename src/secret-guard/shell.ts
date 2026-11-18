@@ -28,7 +28,7 @@ export function shellFindings(command: string, context: ProgramsContext, rules: 
   const printing = runs.programs.filter((run) => !quiet(run));
   const printingBare = runs.bare.filter((bare) => !quiet(bare));
   return uniqueFindings([
-    ...credentialReadFindings(command, runs.programs),
+    ...credentialReadFindings(command, runs),
     ...printing.flatMap((run) => [
       ...fileFindings(run, rules),
       ...envFindings(run, rules.names),

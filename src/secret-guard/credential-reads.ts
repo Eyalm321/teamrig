@@ -1,5 +1,5 @@
 import { SHIP_TOKEN, TOKEN_PREFIX } from '../github/tokens.ts';
-import type { ProgramRun } from '../package-guard/programs.ts';
+import type { LineRuns, ProgramRun } from '../package-guard/programs.ts';
 import type { SecretFinding } from './findings.ts';
 
 /** A way a shell line reads a saved credential, and how the refusal names it. */
@@ -52,14 +52,18 @@ const STORE_TEXTS: readonly CredentialRead[] = [
   { label: SHIP_TOKEN, pattern: new RegExp(`\\b${literally(SHIP_TOKEN)}\\b`, 'i'), name: true },
 ];
 
-/** The git options before the subcommand that take the next word as their value. */
-const GIT_VALUE_OPTIONS = new Set(['-C', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+/** The git options allowed before `grep` that take the next word as their value; every other option refuses. */
+const GIT_VALUE_OPTIONS = new Set(['-C', '--git-dir', '--work-tree']);
+
+/** The git options allowed before `grep` that take no value, or their value after `=`. */
+const GIT_PLAIN_OPTION = /^(?:--no-pager|-P|--git-dir=.*|--work-tree=.*)$/;
 
 /**
- * True when `run` is a `git grep` that searches only the repository and starts nothing else (#1469): no `-c` or
- * `--config-env` before the subcommand, which could set a program for git to start, no `--no-index`, which searches
- * any folder, and no `-O`/`--open-files-in-pager`, which starts a program on the files it finds (a short-option
- * bundle holding `O` counts too).
+ * True when `run` is a `git grep` that searches only the repository and starts nothing else (#1469). Before the
+ * subcommand only the options above may stand (an allow-list: any other, such as one that turns the pager on or sets
+ * config, refuses). After it: no `--no-index`, which searches any folder, no `-O`/`--open-files-in-pager`, which
+ * starts a program on the files it finds (a short-option bundle holding `O` counts too), and no `--textconv`, which
+ * starts the repository's configured converters.
  */
 function repoSearch(run: ProgramRun): boolean {
   if (run.name !== 'git') return false;
@@ -67,12 +71,32 @@ function repoSearch(run: ProgramRun): boolean {
   let at = 0;
   for (; at < args.length; at += 1) {
     const arg = args[at] ?? '';
-    if (arg === '-c' || arg.startsWith('-c') || arg.startsWith('--config-env')) return false;
     if (GIT_VALUE_OPTIONS.has(arg)) at += 1;
     else if (!arg.startsWith('-')) break;
+    else if (!GIT_PLAIN_OPTION.test(arg)) return false;
   }
   if (args[at] !== 'grep') return false;
-  return args.slice(at + 1).every((arg) => arg !== '--no-index' && !arg.startsWith('--open-files-in-pager') && !/^-[^-]*O/.test(arg));
+  return args
+    .slice(at + 1)
+    .every((arg) => arg !== '--no-index' && arg !== '--textconv' && !arg.startsWith('--open-files-in-pager') && !/^-[^-]*O/.test(arg));
+}
+
+/**
+ * True when the line runs only repository searches (`repoSearch`) and nothing else: no command that starts no
+ * program (a shell variable set alone), none whose program the walker cannot name, no shell fed from a pipe, and no
+ * environment set for what it starts (`NAME=value git`, `env NAME=value git`), since the environment can name a
+ * program git starts.
+ */
+function onlyRepoSearches(runs: LineRuns): boolean {
+  return (
+    runs.programs.length > 0 &&
+    runs.programs.every(repoSearch) &&
+    runs.bare.length === 0 &&
+    runs.opaque.length === 0 &&
+    runs.fedShells.length === 0 &&
+    runs.foreignShells.length === 0 &&
+    runs.envEdits.length === 0
+  );
 }
 
 /**
@@ -82,10 +106,10 @@ function repoSearch(run: ProgramRun): boolean {
  * line that runs only repository searches: it is text being looked for there, and a search of tracked files reads no
  * store.
  */
-export function credentialReadFindings(command: string, runs: readonly ProgramRun[]): SecretFinding[] {
-  const lines = runs.map((run) => [run.name, ...run.args.map((arg) => arg.text)].join(' '));
+export function credentialReadFindings(command: string, runs: LineRuns): SecretFinding[] {
+  const lines = runs.programs.map((run) => [run.name, ...run.args.map((arg) => arg.text)].join(' '));
   const byRun = STORE_COMMANDS.filter(({ pattern }) => lines.some((line) => pattern.test(line)));
-  const onlySearches = runs.length > 0 && runs.every(repoSearch);
+  const onlySearches = onlyRepoSearches(runs);
   const byText = STORE_TEXTS.filter(({ pattern, name }) => !(name === true && onlySearches) && pattern.test(command));
   return [...byRun, ...byText].map(({ label }): SecretFinding => ({ kind: 'credential', via: label }));
 }

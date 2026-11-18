@@ -6,7 +6,7 @@ import { credentialReadFindings } from './credential-reads.ts';
 
 /** How the guard names each credential read in `line`, read in `dialect`. */
 function reads(line: string, dialect: ShellDialect = 'bash'): string[] {
-  const runs = runsOf(line, { cwd: 'C:/w', home: 'C:/u', dialect }).programs;
+  const runs = runsOf(line, { cwd: 'C:/w', home: 'C:/u', dialect });
   return credentialReadFindings(line, runs).map((finding) => (finding.kind === 'credential' ? finding.via : finding.kind));
 }
 
@@ -85,6 +85,15 @@ describe('credentialReadFindings', () => {
       ['grep -rn teamrig-ship-gh .', ['teamrig-ship-gh']],
       ['git grep "$(gh auth token)" teamrig-gh-', ['gh auth token', 'teamrig-gh-<owner>']],
       ['git grep keytar', ['keytar']],
+      ['GIT_PAGER=less git grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['PAGER=less git -p grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=less git grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['env GIT_PAGER=less git grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['GIT_PAGER=less; git grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git -p grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git --paginate grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git --namespace x grep teamrig-gh-', ['teamrig-gh-<owner>']],
+      ['git grep --textconv teamrig-gh-', ['teamrig-gh-<owner>']],
     ];
     for (const [line, via] of cases) {
       assert.deepEqual(reads(line), via, line);
@@ -120,7 +129,7 @@ describe('credentialReadFindings', () => {
   // takes seconds on this line, past the bound; with the `^` each pattern looks once.
   it('reads a long line in time in proportion to it', () => {
     const line = `gh ${'gh git git-credential-x security secret-tool cmdkey vaultcmd keyring '.repeat(10_000)}x`;
-    const runs = runsOf(line, { cwd: 'C:/w', home: 'C:/u', dialect: 'bash' }).programs;
+    const runs = runsOf(line, { cwd: 'C:/w', home: 'C:/u', dialect: 'bash' });
     const started = performance.now();
     assert.deepEqual(credentialReadFindings(line, runs), []);
     const took = performance.now() - started;
