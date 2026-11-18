@@ -19,7 +19,7 @@ function prompt(fields: JsonRecord = {}): string {
 }
 
 describe('runCli: a hand-started tab binds itself by its Claude Code title (T302)', () => {
-  it('binds a tab titled by its id, renames nothing, marks nothing read, and shows its lines', async () => {
+  it('binds a tab titled by its id, renames nothing, marks nothing read by binding, and shows its lines', async () => {
     const kit = new CliHarness();
     await kit.run(['inbox', 'add', '--to', 'alpha', '--text', 'T7 is yours', '--session', 'lead']);
     const result = await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'alpha' }) });
@@ -28,7 +28,8 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     assert.match(result.stdout[1] ?? '', /^INBOX alpha, new in .*\n- 2030-01-08 10:00 UTC lead: T7 is yours$/);
     assert.equal(result.stdout.length, 2);
     assert.equal(await kit.files.read(RENAMES_PATH), undefined);
-    assert.match((await kit.run(['inbox', 'status', '--session', 'alpha'])).stdout[0] ?? '', /^alpha 1 unread .*\(read to line 0 of 1 at 01-08 10:00 UTC\)$/);
+    // The bind marks nothing read; the hook then marks read the line it showed whole (#1401).
+    assert.match((await kit.run(['inbox', 'status', '--session', 'alpha'])).stdout[0] ?? '', /^alpha 0 unread \(read to line 1 of 1 at 01-08 10:00 UTC\)$/);
 
     assert.deepEqual((await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'alpha' }) })).stdout, []);
     assert.ok(contextOf(await kit.run(['hook', 'session-start'], { stdin: prompt({ source: 'resume' }) })).includes('You are the `alpha` session of team `app`'));
@@ -89,7 +90,7 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     assert.ok(contextOf(start).includes('No session is set'));
   });
 
-  it('marks read, without printing again, the lines the prompt hook already showed the tab', async () => {
+  it('leaves inbox read only the new lines once the prompt hook showed the tab the others whole (#1401)', async () => {
     const kit = new CliHarness();
     const env = { TEAMRIG_SESSION: 'bravo', ...AS_CLAUDE };
     for (const text of ['first', 'second']) {
@@ -100,9 +101,25 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     assert.match((await kit.run(['hook', 'inbox-reminder'], { stdin: titled, env })).stdout[0] ?? '', /lead: first\n.*lead: second$/);
     await kit.run(['inbox', 'add', '--to', 'bravo', '--text', 'third', '--session', 'lead']);
     const read = await kit.run(['inbox', 'read'], { env });
+    assert.deepEqual(read.stdout, ['- 2030-01-08 10:00 UTC lead: third', 'READ bravo: 1 new line, shown above; new ones are shown at your next prompt']);
+  });
+
+  it('leaves unread, for inbox read to print whole, a line the prompt hook showed cut (#1401)', async () => {
+    const kit = new CliHarness();
+    const env = { TEAMRIG_SESSION: 'bravo', ...AS_CLAUDE };
+    for (const text of ['first', 'x'.repeat(1600)]) {
+      await kit.run(['inbox', 'add', '--to', 'bravo', '--text', text, '--session', 'lead']);
+    }
+    const titled = prompt({ session_title: 'app-bravo' });
+    assert.match((await kit.run(['hook', 'inbox-reminder'], { stdin: titled, env })).stdout[0] ?? '', /lead: first\n\+1 more/);
+    // Over the character cap alone, the long line comes cut at the next prompt.
+    assert.match((await kit.run(['hook', 'inbox-reminder'], { stdin: titled, env })).stdout[0] ?? '', /lead: x+…\nThe line above was cut/);
+    await kit.run(['inbox', 'add', '--to', 'bravo', '--text', 'third', '--session', 'lead']);
+    const read = await kit.run(['inbox', 'read'], { env });
     assert.deepEqual(read.stdout, [
+      `- 2030-01-08 10:00 UTC lead: ${'x'.repeat(1600)}`,
       '- 2030-01-08 10:00 UTC lead: third',
-      'READ bravo: 1 new line, shown above, and 2 the prompt hook showed this session, now marked read too; new ones are shown at your next prompt',
+      'READ bravo: 2 new lines, shown above; new ones are shown at your next prompt',
     ]);
   });
 });
