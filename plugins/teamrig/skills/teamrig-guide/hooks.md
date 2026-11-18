@@ -584,7 +584,9 @@ tokens under (`teamrig-gh-<owner>`, `teamrig-ship-gh`), or asks teamrig's own gi
 (`git-credential get`, however teamrig is launched; a `git config` line that only names the helper passes). Without this any session could read every key its user saved,
 so a key kept for one tool drew no line between sessions; teamrig's own commands still read theirs, in their own
 process. A line that only mentions one of these words is refused as well (`grep -rn teamrig-gh- src`): search with the
-Grep tool instead, which runs no shell. `secretGuard.secretReads` settles it; no `!pattern` lets one through. The
+Grep tool instead, which runs no shell. One exception: a line whose every program is a `git grep` of the repository may
+name a teamrig credential (a search for the token-name prefix), since it searches tracked files and reads no store; a `-c` or
+`--config-env` before `grep`, `--no-index`, `-O` or any other program on the line keeps it refused. `secretGuard.secretReads` settles it; no `!pattern` lets one through. The
 reason: "teamrig secret guard: this call reads a saved credential out of the host's credential store (gh auth token),
 printed or not. A session never reads the store: each tool's key stays with the tool that reads it (teamrig's own
 commands read theirs themselves). To check a saved key, ask the owner to look in their own terminal.
