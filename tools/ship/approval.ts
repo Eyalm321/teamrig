@@ -213,7 +213,7 @@ function shipsInAt(git: GitText, from: string, rev: string): ShipsIn {
  * (`stampedSection`); a version-only change leaves no line.
  */
 function normalizedOf(diff: string, writes: ShipWrites, shipsIn: ShipsIn): string[] {
-  return sectionsOf(diff.split('\n')).flatMap((section) => {
+  return sectionsOf(linesOf(diff)).flatMap((section) => {
     const path = sectionPath(section);
     const file = writes.versionFiles.find((one) => one.path === path);
     if (file !== undefined) return maskedSection(section, file);
@@ -245,6 +245,14 @@ function sectionPath(section: readonly string[]): string | undefined {
   if (!header.startsWith(prefix) || !Number.isInteger(length) || length <= 0) return undefined;
   const path = header.slice(prefix.length, prefix.length + length);
   return header === `${prefix}${path} b/${path}` ? path : undefined;
+}
+
+/**
+ * A diff's lines, less the empty one its closing newline leaves: kept, it would ride in the last file's section, so a
+ * version raise sorting last would drop it with that section and move the hash of an unchanged change (T4216).
+ */
+function linesOf(diff: string): string[] {
+  return diff === '' ? [] : diff.replace(/\n$/, '').split('\n');
 }
 
 /** A diff's lines cut into one list per file, each starting at its `diff --git` line. */

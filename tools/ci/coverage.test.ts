@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import {
   coverageFindings,
   coverageRun,
@@ -16,6 +17,9 @@ import {
   suiteArgs,
   suiteWorkers,
   suiteEnv,
+  coverageTempBase,
+  runDirPrefix,
+  staleRunDirs,
   type CoveragePolicy,
   type CoverageRun,
   type FileCoverage,
@@ -183,6 +187,29 @@ describe('suiteEnv', () => {
       NODE_V8_COVERAGE: '/srv/work/cov',
       PATH: '/usr/bin',
     });
+  });
+
+  it("points every temporary folder, Node's coverage folder among them, at the run's own folder (#1585)", () => {
+    assert.deepEqual(suiteEnv({ NODE_TEST_CONTEXT: 'child-v8', TMPDIR: '/tmp', PATH: '/usr/bin' }, '/var/u/.teamrig/tmp/coverage/run-7-a/tmp'), {
+      PATH: '/usr/bin',
+      TMPDIR: '/var/u/.teamrig/tmp/coverage/run-7-a/tmp',
+      TMP: '/var/u/.teamrig/tmp/coverage/run-7-a/tmp',
+      TEMP: '/var/u/.teamrig/tmp/coverage/run-7-a/tmp',
+    });
+  });
+});
+
+describe('coverage run folders (#1585)', () => {
+  it("live under teamrig's home folder, never the system temporary folder", () => {
+    assert.equal(coverageTempBase({ TEAMRIG_HOME: '/srv/teamrig' }, '/var/u'), join('/srv/teamrig', 'tmp', 'coverage'));
+    assert.equal(coverageTempBase({ TEAMRIG_HOME: ' ' }, '/var/u'), join('/var/u', '.teamrig', 'tmp', 'coverage'));
+    assert.equal(coverageTempBase({ XDG_CACHE_HOME: '/srv/cache' }, '/var/u'), join('/var/u', '.teamrig', 'tmp', 'coverage'));
+  });
+
+  it('names a run folder by its pid and finds only the folders of runs that are gone', () => {
+    assert.equal(runDirPrefix(42), 'run-42-');
+    const alive = (pid: number): boolean => pid === 42;
+    assert.deepEqual(staleRunDirs(['run-42-aB3', 'run-7-xY9', 'notes', 'run-x-1', 'run-8-'], alive), ['run-7-xY9', 'run-8-']);
   });
 });
 
