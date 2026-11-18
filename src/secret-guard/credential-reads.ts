@@ -6,6 +6,8 @@ import type { SecretFinding } from './findings.ts';
 interface CredentialRead {
   readonly label: string;
   readonly pattern: RegExp;
+  /** A name the store holds a key under, not an API that reads it: a search of tracked source for it reads no store. */
+  readonly name?: true;
 }
 
 /**
@@ -50,18 +52,44 @@ const STORE_TEXTS: readonly CredentialRead[] = [
   { label: 'Get-StoredCredential', pattern: /\bGet-StoredCredential\b/i },
   { label: 'keyring.get_password', pattern: /\bkeyring\.get_(?:password|credential)\b/i },
   { label: 'keytar', pattern: /\bkeytar\b/i },
-  { label: `${TOKEN_PREFIX}<owner>`, pattern: new RegExp(`\\b${literally(TOKEN_PREFIX)}`, 'i') },
-  { label: SHIP_TOKEN, pattern: new RegExp(`\\b${literally(SHIP_TOKEN)}\\b`, 'i') },
+  { label: `${TOKEN_PREFIX}<owner>`, pattern: new RegExp(`\\b${literally(TOKEN_PREFIX)}`, 'i'), name: true },
+  { label: SHIP_TOKEN, pattern: new RegExp(`\\b${literally(SHIP_TOKEN)}\\b`, 'i'), name: true },
 ];
+
+/** The git options before the subcommand that take the next word as their value. */
+const GIT_VALUE_OPTIONS = new Set(['-C', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+
+/**
+ * True when `run` is a `git grep` that searches only the repository and starts nothing else (#1469): no `-c` or
+ * `--config-env` before the subcommand, which could set a program for git to start, no `--no-index`, which searches
+ * any folder, and no `-O`/`--open-files-in-pager`, which starts a program on the files it finds (a short-option
+ * bundle holding `O` counts too).
+ */
+function repoSearch(run: ProgramRun): boolean {
+  if (run.name !== 'git') return false;
+  const args = run.args.map((arg) => arg.text);
+  let at = 0;
+  for (; at < args.length; at += 1) {
+    const arg = args[at] ?? '';
+    if (arg === '-c' || arg.startsWith('-c') || arg.startsWith('--config-env')) return false;
+    if (GIT_VALUE_OPTIONS.has(arg)) at += 1;
+    else if (!arg.startsWith('-')) break;
+  }
+  if (args[at] !== 'grep') return false;
+  return args.slice(at + 1).every((arg) => arg !== '--no-index' && !arg.startsWith('--open-files-in-pager') && !/^-[^-]*O/.test(arg));
+}
 
 /**
  * The saved credentials a shell line reads: each run whose command reads the store, printed or not, then each store API
  * or teamrig credential name the line's text holds. Once the guard refuses these, a key saved for one tool draws a line
- * between sessions; until then any session could read every key its user saved.
+ * between sessions; until then any session could read every key its user saved. A credential name stands aside on a
+ * line that runs only repository searches: it is text being looked for there, and a search of tracked files reads no
+ * store.
  */
 export function credentialReadFindings(command: string, runs: readonly ProgramRun[]): SecretFinding[] {
   const lines = runs.map((run) => [run.name, ...run.args.map((arg) => arg.text)].join(' '));
   const byRun = STORE_COMMANDS.filter(({ pattern }) => lines.some((line) => pattern.test(line)));
-  const byText = STORE_TEXTS.filter(({ pattern }) => pattern.test(command));
+  const onlySearches = runs.length > 0 && runs.every(repoSearch);
+  const byText = STORE_TEXTS.filter(({ pattern, name }) => !(name === true && onlySearches) && pattern.test(command));
   return [...byRun, ...byText].map(({ label }): SecretFinding => ({ kind: 'credential', via: label }));
 }
