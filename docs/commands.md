@@ -262,8 +262,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       the next move (who acts first, on which task)
   check [--week <date>] [--tree] [--all]   tasks and skills that break a team rule and context
       text over budget, in a short form within 3,000 characters; --all: every flag in full
-  plan [--week <date>] [--tree]    the week plan (default: the newest week that has started)
-      --tree (the lead only): also every team under it, read-only, ids as <team>/T<n>
+  plan [--week <date>] [--tree] [--by-slice]    the week plan (default: the newest week that has
+      started); --tree (the lead only): also every team under it, read-only, ids as <team>/T<n>;
+      --by-slice: the week's tasks under each slice of the team's goals first, then the rest by band
   verify [--session <id|name>]   the session's verifying tasks, oldest first, each with its proof and
       the date to verify by, then its done tasks still watched for a sighting (--watch)
   stats [--range 7d|30d|90d|180d|1y|all] [--session <id|name>] [--tree]   the register's numbers
@@ -279,12 +280,16 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       focus.maxActiveKeyResults ones with a target of today or later)
   goal set <tag> [--target <YYYY-MM-DD>] [--title "<title>"] [--slice <n>] --note "<why>"   the lead
       moves a goal's target (a slip, kept with its note), renames it or opens its next slice (1 first)
+  goal slice <tag> <n> [--title "<title>"] [--owner <session>] [--ship <YYYY-MM-DD>] [--proof "<proof>"]
+      [--tasks T1,T2] [--size <pct>] [--proven "<evidence>"] --note "<why>"   the lead adds a shippable
+      slice of a goal, naming all but --size and --proven, or changes it (a ship day move is a slip kept
+      with its note); the slice's owner records only --proven, once its live proof exists
   goal rank <tag> <n>|none   the lead ranks a goal, 1 first, or takes it off the ranking; goal-first
       ranking gives a task the best rank of its goals and the goals they are part of
   goal list   the team's goals, the ranked ones first, then the rest as a tree, each with its window,
       slips, rank and title
-  goal show <tag>   one goal: its window, rank, who added it and when, its parts, and each slip with its
-      note
+  goal show <tag>   one goal: its window, rank, who added it and when, its parts, each slip with its
+      note, and its slices with their ship day moves and proof
   files <id> | files --notes [--session <id|name>]   prints the folder for a task's files (design.md,
       build.md, plan.md, review.md, evidence/, scripts/, out/) in the team that holds it, or for your notes
       that belong to no task; makes it when missing
@@ -323,6 +328,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       open.headroom.closeIdleMinutes, in a turn, at a tool call or waiting on a decision it put to the
       person, running background work or shells, or too big or old to resume with no refresh ready;
       without --yes it shows the close and ends nothing
+  cleanup launchers [--yes]    lists each teamrig launch process on this host (a tab's root, which runs
+      its Claude Code) and which lost their tab: the terminal that started it has ended; without --yes
+      it ends nothing, with --yes it ends each orphaned one and what it started, never its own tab's
   rename <id|name> <new-name>  records a session's new name; its old names keep finding it
       (the session itself or the lead)
   hire <id> --scope "<its job>" --reason "<why>" [--name <name>] [--model <model>] [--effort <level>]
@@ -562,8 +570,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       names); once the shell that started it ends, it kills a running step (exit 129); a
       waiting one goes on as a detached run that keeps its place in line while the tab's Claude Code runs (not a git hook's
       step), its session told, else stops; REFUSED from delivery.schedule.queueCutoffUtc to midnight UTC and once its line has not
-      moved for delivery.queue.waitMinutes; exit 0 when the command passed, 1 when it failed or was killed. Its
-      processes get $TEAMRIG_HOST_LOCK: a queued step started under a live lock (a git hook's checks
+      moved for delivery.queue.waitMinutes; exit 0 when the command passed, 1 when it failed or was killed. The
+      command after -- is read as test reads it: one quoted word runs as a shell line, several as one command
+      with each word passed as is. Its processes get $TEAMRIG_HOST_LOCK: a queued step started under a live lock (a git hook's checks
       under queue, merge or deploy) runs at once under it. No --session: $TEAMRIG_SESSION, the
       parent step's session, else the session this Claude Code tab is bound to. Every step, merge and
       deploy waits in its turn for host memory: the least of 3 free-memory reads 1 s apart over
@@ -688,7 +697,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
       has pushed but not deployed (it fetches each main checkout)
   test [--session <id|name>] -- <command ...>   runs a test command in the shell, writes all it printed
       to a log (each session keeps its newest 20) and prints one PASS or FAIL line, then each failing
-      test within tests.maxFailureChars; exit 0 when the command passed, 1 otherwise
+      test within tests.maxFailureChars; exit 0 when the command passed, 1 otherwise. One quoted word
+      runs as a shell line ("npm run build && npm test"); several run as one command, each word passed
+      as is, so a word that is only &&, || or ; is REFUSED before anything runs
   hook push-guard | hook package-guard | hook secret-guard | hook db-write-guard | hook exec-guard | hook pass-record-guard | hook service-role-guard | hook cold-send | hook failed-send | hook missing-cli | hook route-reminder | hook loop-nudge | hook secret-redact | hook helper-gate | hook inbox-reminder | hook session-start | hook stop | hook subagent-start | hook subagent-stop | hook refresh-wake | hook restore-track | hook effort-writeback | hook tab-status | hook pre-compact | hook tool-end | hook readonly-allow | hook picker-guard | hook prompt-refuse | hook route-allow
       (run by Claude Code, hook JSON on stdin)
   hook clear-dir | hook clear-claim [--hold [--why <reason>]] [--end]

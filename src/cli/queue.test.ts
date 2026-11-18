@@ -544,6 +544,14 @@ describe('teamrig queue', () => {
     assert.deepEqual([steps.ran, kit.files.get(LOCK), kit.files.get(LEDGER)], [[], undefined, undefined]);
   });
 
+  it('refuses a word that is only &&, before it queues, and names the one-word form (#661)', async () => {
+    const { kit, steps } = harness();
+    const result = await kit.run(['queue', '--session', 'alpha', '--what', 'build', '--', 'npm', 'run', 'build', '&&', 'npm', 'test'], { steps });
+    assert.deepEqual([result.code, result.stdout], [EXIT.usage, []]);
+    assert.match(result.stderr[0]?.split('\n')[0] ?? '', /^the word "&&" of the command is a shell operator.*-- "npm run build && npm test"$/u);
+    assert.deepEqual([steps.ran, kit.files.get(LOCK), kit.files.get(LEDGER)], [[], undefined, undefined]);
+  });
+
   it('runs the same command on Linux, whose shell keeps a quoted line break', async () => {
     const { kit, steps } = harness();
     const result = await kit.run(['queue', '--session', 'alpha', '--what', 'build', '--', 'bash', '-c', '\nnpm test'], { steps });
@@ -1275,6 +1283,18 @@ describe("teamrig queue runs a configured ship tool only from main's current cod
       const processes = new FakeProcesses();
       const detached = await kit.run([...SHIP_STEP.slice(0, 7), '--detach', ...SHIP_STEP.slice(7)], { steps, mergeGit: git, processes });
       assert.deepEqual([detached.code, detached.stdout, processes.hidden, steps.ran, ledgerOf(kit)], [EXIT.refused, [`REFUSED ${STALE}`], [], [], []], `${name}, detached`);
+    }
+  });
+
+  it('names the git version, not a stale tool, when a git older than 2.31 cannot read the tool\'s checkout (#1472)', async () => {
+    const NO_CHECKOUT = STALE.replaceAll('-C /repo/ship ', '-C /repo/ship/tools/ship ');
+    const OLD_GIT = `the ship tool check reads ${SHIP_TOOL}'s checkout with git rev-parse --path-format=absolute, which needs git 2.31 or newer, and this host runs git 2.30.2: upgrade git, then queue the step again`;
+    for (const [version, refusal] of [['2.30.2', OLD_GIT], ['1.9', OLD_GIT.replace('2.30.2', '1.9')], ['2.31.0', NO_CHECKOUT], [undefined, NO_CHECKOUT]] as const) {
+      const git = shipGit();
+      git.checkouts.delete('/repo/ship/tools/ship');
+      git.versionIs = version;
+      const { kit, steps } = harness(SHIPPING);
+      assert.deepEqual(await kit.run(SHIP_STEP, { steps, mergeGit: git }), { code: EXIT.refused, stdout: [`REFUSED ${refusal}`], stderr: [] }, String(version));
     }
   });
 

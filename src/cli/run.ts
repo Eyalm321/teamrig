@@ -21,11 +21,17 @@ interface CommandSpec {
   readonly rest?: boolean;
   /** What running it does: `/teamrig` runs a `read` at once, a `write` only when the person typed it, never an `internal` one (src/cli/commands/slash.ts). */
   readonly effect: CommandEffect;
+  /**
+   * The command binds the tab to the session it names and keeps its own bind-once rule (T3081): a tool call cannot move
+   * a bound tab, the person can. The tab-session gate (T3082) leaves it to that rule rather than refusing the person.
+   */
+  readonly bindsTab?: boolean;
   /** Commands load on first use, so a hook that runs on every tool call loads only its own code. */
   readonly load: () => Promise<Command>;
 }
 
 const registerCommands = () => import('./commands/register.ts');
+const tabSessionCommands = () => import('./commands/tab-session.ts');
 const statsCommands = () => import('./commands/stats.ts');
 const reportCommands = () => import('./commands/report.ts');
 const goalCommands = () => import('./commands/goal.ts');
@@ -115,6 +121,7 @@ const rolesCommands = () => import('./commands/roles.ts');
 const slashCommands = () => import('./commands/slash.ts');
 const restoreCommands = () => import('./commands/restore.ts');
 const restoreInstallCommands = () => import('./commands/restore-install.ts');
+const cleanupCommands = () => import('./commands/cleanup.ts');
 const execCommands = () => import('./commands/exec.ts');
 const refsCommands = () => import('./commands/refs.ts');
 const sweepCommands = () => import('./commands/sweep.ts');
@@ -145,17 +152,18 @@ const COMMANDS: Readonly<Record<string, CommandSpec>> = {
   // --session names the caller on every task and inbox command, so a session can always pass it.
   show: { effect: 'read', flags: ['session'], switches: ['tree', 'history'], load: async () => (await registerCommands()).show },
   check: { effect: 'read', flags: ['session', 'week'], switches: ['tree', 'all'], load: async () => (await registerCommands()).check },
-  plan: { effect: 'read', flags: ['session', 'week'], switches: ['tree'], load: async () => (await registerCommands()).plan },
+  plan: { effect: 'read', flags: ['session', 'week'], switches: ['tree', 'by-slice'], load: async () => (await registerCommands()).plan },
   verify: { effect: 'read', flags: ['session'], load: async () => (await registerCommands()).verify },
   stats: { effect: 'read', flags: ['session', 'range'], switches: ['tree'], load: async () => (await statsCommands()).stats },
   'report done': { effect: 'read', flags: ['session', 'day'], switches: ['all'], load: async () => (await reportCommands()).reportDone },
   'goal add': { effect: 'write', flags: ['session', 'title', 'start', 'target', 'parent'], load: async () => (await goalCommands()).goalAdd },
   'goal set': { effect: 'write', flags: ['session', 'target', 'title', 'slice', 'note'], load: async () => (await goalCommands()).goalSet },
+  'goal slice': { effect: 'write', flags: ['session', 'title', 'owner', 'ship', 'proof', 'tasks', 'size', 'proven', 'note'], load: async () => (await goalCommands()).goalSlice },
   'goal rank': { effect: 'write', flags: ['session'], load: async () => (await goalCommands()).goalRank },
   'goal list': { effect: 'read', flags: ['session'], load: async () => (await goalCommands()).goalList },
   'goal show': { effect: 'read', flags: ['session'], load: async () => (await goalCommands()).goalShow },
   files: { effect: 'write', flags: ['session'], switches: ['notes'], load: async () => (await filesCommands()).files },
-  'inbox read': { effect: 'write', flags: ['session'], load: async () => (await inboxCommands()).read },
+  'inbox read': { effect: 'write', bindsTab: true, flags: ['session'], load: async () => (await inboxCommands()).read },
   'inbox status': { effect: 'read', flags: ['session'], load: async () => (await inboxCommands()).status },
   'inbox add': { effect: 'write', flags: ['session', 'to', 'text', 'wake', 'wake-by'], load: async () => (await inboxCommands()).add },
   'exec request': { effect: 'write', flags: ['session', 'file'], load: async () => (await execCommands()).request },
@@ -208,6 +216,7 @@ const COMMANDS: Readonly<Record<string, CommandSpec>> = {
   who: { effect: 'read', flags: [], load: async () => (await teamCommands()).who },
   sessions: { effect: 'read', flags: ['project'], switches: ['pass'], load: async () => (await sessionsCommands()).sessions },
   close: { effect: 'write', flags: ['session', 'project'], switches: ['yes'], load: async () => (await closeCommands()).close },
+  'cleanup launchers': { effect: 'write', flags: [], switches: ['yes'], load: async () => (await cleanupCommands()).cleanupLaunchers },
   rename: { effect: 'write', flags: ['session'], load: async () => (await teamCommands()).rename },
   hire: {
     effect: 'write',
@@ -610,8 +619,9 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       the next move (who acts first, on which task)
   check [--week <date>] [--tree] [--all]   tasks and skills that break a team rule and context
       text over budget, in a short form within 3,000 characters; --all: every flag in full
-  plan [--week <date>] [--tree]    the week plan (default: the newest week that has started)
-      --tree (the lead only): also every team under it, read-only, ids as <team>/T<n>
+  plan [--week <date>] [--tree] [--by-slice]    the week plan (default: the newest week that has
+      started); --tree (the lead only): also every team under it, read-only, ids as <team>/T<n>;
+      --by-slice: the week's tasks under each slice of the team's goals first, then the rest by band
   verify [--session <id|name>]   the session's verifying tasks, oldest first, each with its proof and
       the date to verify by, then its done tasks still watched for a sighting (--watch)
   stats [--range 7d|30d|90d|180d|1y|all] [--session <id|name>] [--tree]   the register's numbers
@@ -627,12 +637,16 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       focus.maxActiveKeyResults ones with a target of today or later)
   goal set <tag> [--target <YYYY-MM-DD>] [--title "<title>"] [--slice <n>] --note "<why>"   the lead
       moves a goal's target (a slip, kept with its note), renames it or opens its next slice (1 first)
+  goal slice <tag> <n> [--title "<title>"] [--owner <session>] [--ship <YYYY-MM-DD>] [--proof "<proof>"]
+      [--tasks T1,T2] [--size <pct>] [--proven "<evidence>"] --note "<why>"   the lead adds a shippable
+      slice of a goal, naming all but --size and --proven, or changes it (a ship day move is a slip kept
+      with its note); the slice's owner records only --proven, once its live proof exists
   goal rank <tag> <n>|none   the lead ranks a goal, 1 first, or takes it off the ranking; goal-first
       ranking gives a task the best rank of its goals and the goals they are part of
   goal list   the team's goals, the ranked ones first, then the rest as a tree, each with its window,
       slips, rank and title
-  goal show <tag>   one goal: its window, rank, who added it and when, its parts, and each slip with its
-      note
+  goal show <tag>   one goal: its window, rank, who added it and when, its parts, each slip with its
+      note, and its slices with their ship day moves and proof
   files <id> | files --notes [--session <id|name>]   prints the folder for a task's files (design.md,
       build.md, plan.md, review.md, evidence/, scripts/, out/) in the team that holds it, or for your notes
       that belong to no task; makes it when missing
@@ -671,6 +685,9 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       open.headroom.closeIdleMinutes, in a turn, at a tool call or waiting on a decision it put to the
       person, running background work or shells, or too big or old to resume with no refresh ready;
       without --yes it shows the close and ends nothing
+  cleanup launchers [--yes]    lists each teamrig launch process on this host (a tab's root, which runs
+      its Claude Code) and which lost their tab: the terminal that started it has ended; without --yes
+      it ends nothing, with --yes it ends each orphaned one and what it started, never its own tab's
   rename <id|name> <new-name>  records a session's new name; its old names keep finding it
       (the session itself or the lead)
   hire <id> --scope "<its job>" --reason "<why>" [--name <name>] [--model <model>] [--effort <level>]
@@ -910,8 +927,9 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       names); once the shell that started it ends, it kills a running step (exit 129); a
       waiting one goes on as a detached run that keeps its place in line while the tab's Claude Code runs (not a git hook's
       step), its session told, else stops; REFUSED from delivery.schedule.queueCutoffUtc to midnight UTC and once its line has not
-      moved for delivery.queue.waitMinutes; exit 0 when the command passed, 1 when it failed or was killed. Its
-      processes get $TEAMRIG_HOST_LOCK: a queued step started under a live lock (a git hook's checks
+      moved for delivery.queue.waitMinutes; exit 0 when the command passed, 1 when it failed or was killed. The
+      command after -- is read as test reads it: one quoted word runs as a shell line, several as one command
+      with each word passed as is. Its processes get $TEAMRIG_HOST_LOCK: a queued step started under a live lock (a git hook's checks
       under queue, merge or deploy) runs at once under it. No --session: $TEAMRIG_SESSION, the
       parent step's session, else the session this Claude Code tab is bound to. Every step, merge and
       deploy waits in its turn for host memory: the least of 3 free-memory reads 1 s apart over
@@ -1036,7 +1054,9 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       has pushed but not deployed (it fetches each main checkout)
   test [--session <id|name>] -- <command ...>   runs a test command in the shell, writes all it printed
       to a log (each session keeps its newest 20) and prints one PASS or FAIL line, then each failing
-      test within tests.maxFailureChars; exit 0 when the command passed, 1 otherwise
+      test within tests.maxFailureChars; exit 0 when the command passed, 1 otherwise. One quoted word
+      runs as a shell line ("npm run build && npm test"); several run as one command, each word passed
+      as is, so a word that is only &&, || or ; is REFUSED before anything runs
   hook push-guard | hook package-guard | hook secret-guard | hook db-write-guard | hook exec-guard | hook pass-record-guard | hook service-role-guard | hook cold-send | hook failed-send | hook missing-cli | hook route-reminder | hook loop-nudge | hook secret-redact | hook helper-gate | hook inbox-reminder | hook session-start | hook stop | hook subagent-start | hook subagent-stop | hook refresh-wake | hook restore-track | hook effort-writeback | hook tab-status | hook pre-compact | hook tool-end | hook readonly-allow | hook picker-guard | hook prompt-refuse | hook route-allow
       (run by Claude Code, hook JSON on stdin)
   hook clear-dir | hook clear-claim [--hold [--why <reason>]] [--end]
@@ -1119,6 +1139,10 @@ export async function runCli(given: readonly string[], runtime: CliRuntime): Pro
       throw new UsageError(`unknown command "${args.command}"`);
     }
     refuseSettingsWrite(args.command, args.switches, runtime);
+    if (spec.effect === 'write' && spec.bindsTab !== true) {
+      // A write runs only as the tab's own session, whatever --session says (T3082); a tab's binding has its own rule.
+      await (await tabSessionCommands()).refuseAnotherTabSession(args, runtime);
+    }
     const command = await spec.load();
     return await command(args, runtime);
   } catch (error) {
