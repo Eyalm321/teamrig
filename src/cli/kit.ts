@@ -281,6 +281,10 @@ export function requireConfig(kit: Kit, runtime: CliRuntime, access: Access): Ki
   for (const warning of configWarnings(load)) {
     runtime.out.stderr(`WARN ${warning}`);
   }
+  const [warning] = load.warnings;
+  if (warning !== undefined) {
+    runtime.out.stderr(`WARN config: ${load.warnings.length} warning(s) (first: ${issueText(warning)}); run: teamrig config validate`);
+  }
   return load.config;
 }
 
