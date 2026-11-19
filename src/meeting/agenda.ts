@@ -83,7 +83,8 @@ export interface AgendaInput {
   readonly carried: readonly string[];
   /**
    * The teams under the lead's that meet the owner themselves (`decisions.ownMeetingTeams`, #1430), each with the
-   * registers its meeting covers: none of them is in `below`, and DECISIONS gives each one count line instead.
+   * registers its meeting covers. Those registers stay in `below`, so LATE, INCIDENTS, LATER and DONE still list them;
+   * only DECISIONS and DEDICATED leave their waits out, DECISIONS giving each such team one count line instead.
    */
   readonly ownMeetings: readonly OwnMeetingTeam[];
 }
@@ -204,6 +205,12 @@ function ownMeetingLines(input: AgendaInput): string[] {
   });
 }
 
+/** The teams under the lead's whose waits on the owner this meeting asks: every one but those that meet the owner themselves (#1430). */
+function askedHere(input: Pick<AgendaInput, 'below' | 'ownMeetings'>): readonly AgendaTeam[] {
+  const covered = new Set(input.ownMeetings.flatMap(({ registers }) => registers.map((register) => register.team)));
+  return input.below.filter((team) => !covered.has(team.team));
+}
+
 /**
  * The cards the agenda asks today, in its order: the carried over ones first (T2775), a batch one too on any day, as a
  * meeting asked it already; then the other daily ones; then the Improvements batch on its weekday (empty on the
@@ -211,7 +218,7 @@ function ownMeetingLines(input: AgendaInput): string[] {
  * in the same order (src/meeting/panel.ts).
  */
 export function askedDecisions(input: DecisionAgenda): { readonly daily: readonly Decision[]; readonly batch: readonly Decision[] } {
-  const order = decisionOrder([decisionRead(input, undefined), ...input.below.map((team) => decisionRead(team, team.team))]);
+  const order = decisionOrder([decisionRead(input, undefined), ...askedHere(input).map((team) => decisionRead(team, team.team))]);
   const carried = new Set(input.carried);
   const isCarried = (decision: Decision): boolean => carried.has(decisionKey(decision));
   const fresh = (decisions: readonly Decision[]): Decision[] => decisions.filter((decision) => !isCarried(decision));
@@ -318,7 +325,7 @@ function dedicatedGroupLines(group: DedicatedGroup, input: AgendaInput): string[
  * none is read out: each session gets its own meeting after the daily, with a full brief. No block when none waits.
  */
 function dedicatedLines(input: AgendaInput): string[] {
-  const groups = [dedicatedGroups(input, undefined), ...input.below.map((team) => dedicatedGroups(team, team.team))].flat();
+  const groups = [dedicatedGroups(input, undefined), ...askedHere(input).map((team) => dedicatedGroups(team, team.team))].flat();
   if (groups.length === 0) {
     return [];
   }

@@ -30,10 +30,9 @@ export function decisionAgendaOf({ own, teams }: RollUp, runtime: CliRuntime, no
   const ownMeetings = new Map<string, AgendaTeam[]>();
   for (const rolled of teams.filter((team) => team.team !== own.team)) {
     const register = { team: rolled.team, ...agendaRegisterOf(rolled, runtime) };
+    below.push(register);
     const meets = ownMeetingTeamOf(rolled.team, own, teams);
-    if (meets === undefined) {
-      below.push(register);
-    } else {
+    if (meets !== undefined) {
       ownMeetings.set(meets, [...(ownMeetings.get(meets) ?? []), register]);
     }
   }

@@ -187,6 +187,18 @@ describe("runCli: a child team's owner decisions go up to the lead at its tree's
     assert.deepEqual(decisions.slice(0, 2), ['DECISIONS 0 waiting on owner (decision or approval)', "  Team web: 2 more waiting on owner, asked at its own lead's meeting with owner (decisions.ownMeetingTeams), not here."]);
   });
 
+  it("keeps a team that meets the owner itself on the root's LATE rows: only its waits on the owner leave (#1430)", async () => {
+    for (const ownMeetingTeams of [[], ['web']]) {
+      const kit = await treeHarness({ decisions: { ownMeetingTeams } });
+      const added = await kit.run(['add', '--title', 'Ship the icons', '--description', 'what and why', '--priority', 'p2', '--due', '2020-01-01', '--session', 'pixel'], { env: UI });
+      assert.equal(added.code, EXIT.ok, added.stderr.join('\n'));
+      const root = await kit.run(['meeting', 'agenda', '--session', 'lead']);
+      assert.equal(root.code, EXIT.ok, root.stderr.join('\n'));
+      assert.ok(root.stdout.includes('LATE 1 past their due date'), `${ownMeetingTeams.join(',')}\n${root.stdout.join('\n')}`);
+      assert.ok(root.stdout.some((line) => line.includes('ui/T1')), `${ownMeetingTeams.join(',')}\n${root.stdout.join('\n')}`);
+    }
+  });
+
   it("counts a child team's task on the root's goal row, its wait named by <team>/<id> (T2092)", async () => {
     const kit = await treeHarness();
     const steps: readonly (readonly [Env, readonly string[]])[] = [
