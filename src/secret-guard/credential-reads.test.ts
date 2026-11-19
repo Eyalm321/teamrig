@@ -2,12 +2,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runsOf } from '../package-guard/programs.ts';
 import type { ShellDialect } from '../push-guard/tokenizer.ts';
-import { credentialReadFindings } from './credential-reads.ts';
+import { Location } from '../push-guard/location.ts';
+import { credentialReadFindings, NO_SEARCH_START, type SearchStart } from './credential-reads.ts';
 
-/** How the guard names each credential read in `line`, read in `dialect`. */
-function reads(line: string, dialect: ShellDialect = 'bash'): string[] {
+/** The checkout the lines start in, as the walker resolves it. */
+const CHECKOUT = new Location('C:/w', 'C:/u').dir;
+
+/** How the guard names each credential read in `line`, read in `dialect`, started in a work tree unless `start` says. */
+function reads(line: string, dialect: ShellDialect = 'bash', start: SearchStart = { dir: CHECKOUT, inWorkTree: () => true }): string[] {
   const runs = runsOf(line, { cwd: 'C:/w', home: 'C:/u', dialect });
-  return credentialReadFindings(line, runs).map((finding) => (finding.kind === 'credential' ? finding.via : finding.kind));
+  return credentialReadFindings(line, runs, start).map((finding) => (finding.kind === 'credential' ? finding.via : finding.kind));
 }
 
 describe('credentialReadFindings', () => {
@@ -71,9 +75,36 @@ describe('credentialReadFindings', () => {
       // A quoted glob reaches git as written, so the guard reads the word git gets.
       "git grep -e 'teamrig-gh-*'",
       'git grep teamrig-gh- -- "*.ts"',
+      'cd C:/w && git grep -n teamrig-gh-',
     ]) {
       assert.deepEqual(reads(line), [], line);
     }
+  });
+
+  it('names the credential name when the search runs anywhere but the folder the line starts in, which git finds a work tree in', () => {
+    const line = 'git grep -n teamrig-gh-';
+    for (const moved of [
+      `cd C:/x && ${line}`,
+      `(cd C:/x; ${line})`,
+      `pushd C:/x; ${line}`,
+      `cd C:/x; ${line}; cd C:/w`,
+      `cd "$X" && ${line}`,
+      `${line} && cd C:/x && ${line}`,
+    ]) {
+      assert.deepEqual(reads(moved), ['teamrig-gh-<owner>'], moved);
+    }
+    let asked: string | undefined;
+    const outside: SearchStart = { dir: CHECKOUT, inWorkTree: (dir) => ((asked = dir), false) };
+    assert.deepEqual(reads(line, 'bash', outside), ['teamrig-gh-<owner>'], 'a start folder outside any work tree');
+    assert.equal(asked, CHECKOUT, 'git is asked about the folder the line starts in');
+    assert.deepEqual(reads(line, 'bash', NO_SEARCH_START), ['teamrig-gh-<owner>'], 'no start folder known');
+    assert.deepEqual(reads(line, 'bash', { dir: undefined, inWorkTree: () => true }), ['teamrig-gh-<owner>'], 'a start folder only known when the line runs');
+  });
+
+  it('asks git nothing for a line with no credential name on it', () => {
+    const never: SearchStart = { dir: CHECKOUT, inWorkTree: () => assert.fail('git asked') };
+    assert.deepEqual(reads('git grep -n token', 'bash', never), []);
+    assert.deepEqual(reads('git grep -n keytar', 'bash', never), ['keytar'], 'a store API is named whatever runs');
   });
 
   it('still names the credential name when anything but a plain git grep of the repository runs on the line', () => {
@@ -168,7 +199,7 @@ describe('credentialReadFindings', () => {
     const line = `gh ${'gh git git-credential-x security secret-tool cmdkey vaultcmd keyring '.repeat(10_000)}x`;
     const runs = runsOf(line, { cwd: 'C:/w', home: 'C:/u', dialect: 'bash' });
     const started = performance.now();
-    assert.deepEqual(credentialReadFindings(line, runs), []);
+    assert.deepEqual(credentialReadFindings(line, runs, NO_SEARCH_START), []);
     const took = performance.now() - started;
     assert.ok(took < 2_000, `took ${Math.round(took)} ms`);
   });
