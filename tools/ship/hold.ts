@@ -27,6 +27,8 @@ export function holdHead(deps: HoldDeps): HeldHead {
   const untracked = new Set(untrackedIn(git));
   // A stash commit no ref names, as sync.ts sets the plan aside: the stash list is shared by every worktree of the clone.
   const saved = git('stash', 'create', 'ship.ts: the plan, held until the run commits it again');
+  // Named now, as sync.ts does: if a restore step before the apply throws, its error is what the run reports.
+  if (saved !== '') deps.log(`held the plan's uncommitted changes as ${saved} (git stash apply ${saved} brings them back)`);
   const restore = (): void => {
     // A mixed reset first: a file the run committed that was untracked at the start becomes untracked again instead of
     // being deleted by the hard reset, which then sets every tracked file back to the head's.
