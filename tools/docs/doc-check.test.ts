@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkDocs, describeProblems, headingAnchors, type DocFile } from './doc-check.ts';
+import { checkDocs, describeProblems, headingAnchors, tableCells, type DocFile } from './doc-check.ts';
 
 const FILES = new Set(['README.md', 'LICENSE', 'docs/how-it-works.md', 'docs/images/hero.svg', 'docs/a b.md']);
 const exists = (path: string): boolean => FILES.has(path);
@@ -16,6 +16,19 @@ describe('headingAnchors', () => {
   it('numbers a repeated heading and ignores headings inside code', () => {
     const anchors = headingAnchors('## Setup\n```sh\n# not a heading\n```\n## Setup\n## Setup ##\n');
     assert.deepEqual([...anchors], ['setup', 'setup-1', 'setup-2']);
+  });
+});
+
+describe('tableCells', () => {
+  it('splits at every pipe with no backslash before it, in a code span too, as GitHub does (#1828)', () => {
+    assert.equal(tableCells('| a | b | c |'), 3);
+    assert.equal(tableCells('a | b | c'), 3);
+    assert.equal(tableCells('  | a | b  '), 2);
+    assert.equal(tableCells('| `x \\| y` | z |'), 2);
+    assert.equal(tableCells('| `x | y` | z |'), 3);
+    assert.equal(tableCells('| `\\\\|` | b |'), 2, 'a backslash before a pipe escapes it, even an escaped one');
+    assert.equal(tableCells('| ünï | çödé |'), 2);
+    assert.equal(tableCells('|'), 1, 'one empty cell');
   });
 });
 
@@ -80,6 +93,26 @@ describe('checkDocs', () => {
       'README.md:1 an empty mermaid block',
       'README.md:4 a mermaid block opens with "flowchartLR", not one of: flowchart, graph, sequenceDiagram, stateDiagram-v2, stateDiagram, classDiagram, erDiagram, timeline, mindmap',
       'README.md:7 a mermaid block is never closed',
+    ]);
+  });
+
+  it('passes tables whose rows match their header, and counts them (#1828)', () => {
+    const report = checkDocs([readme('| a | b |\n|:--|--:|\n| `x \\| y` | 2 |\n| 3 | |\n\ntext | with | pipes\n\na | b\n- | -\n1 | 2\n')], exists);
+    assert.deepEqual(report.problems, []);
+    assert.equal(report.tables, 2);
+  });
+
+  it('reports a row with a cell count other than its header, with its line, until the table ends', () => {
+    assert.deepEqual(check(readme('# x\n| a | b | c |\n|---|---|---|\n| `meet | x` | y | z |\n| ok | ok | ok |\n| short | row |\nno pipe\n\n| after | the | blank |\n## h\n')), [
+      'README.md:4 a table row has 4 cell(s), its header 3: an unescaped | splits a cell (write \\| inside code too)',
+      'README.md:6 a table row has 2 cell(s), its header 3: an unescaped | splits a cell (write \\| inside code too)',
+      'README.md:7 a table row has 1 cell(s), its header 3: an unescaped | splits a cell (write \\| inside code too)',
+    ]);
+  });
+
+  it('reports a header whose delimiter row has another cell count, and ignores pipes in fenced code', () => {
+    assert.deepEqual(check(readme('| a | b |\n|---|---|---|\n| 1 | 2 |\n```\n| a | b |\n|---|\n| 1 | 2 | 3 |\n```\n')), [
+      'README.md:1 a table header has 2 cell(s) but its delimiter row 3, so GitHub draws no table',
     ]);
   });
 
