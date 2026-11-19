@@ -24,7 +24,7 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     await kit.run(['inbox', 'add', '--to', 'alpha', '--text', 'T7 is yours', '--session', 'lead']);
     const result = await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'alpha' }) });
     assert.equal(result.code, EXIT.ok);
-    assert.equal(result.stdout[0], 'teamrig: this tab is now the `alpha` session of team app (name `app-alpha`), from its Claude Code title; nothing was marked read.');
+    assert.equal(result.stdout[0], 'teamrig: this tab is now the `alpha` session of team app (name `app-alpha`), from its Claude Code title; binding it marked nothing read.');
     assert.match(result.stdout[1] ?? '', /^INBOX alpha, new in .*\n- 2030-01-08 10:00 UTC lead: T7 is yours$/);
     assert.equal(result.stdout.length, 2);
     assert.equal(await kit.files.read(RENAMES_PATH), undefined);
@@ -41,7 +41,7 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     await kit.run(['inbox', 'read', '--session', 'lead'], { env: { CLAUDE_CODE_SESSION_ID: '9f8e7d6c-1111-2222-3333-444455556666' } });
     const text = contextOf(await kit.run(['hook', 'session-start'], { stdin: prompt({ session_title: 'captain', source: 'startup' }) }));
     assert.ok(text.includes('You are the `lead` session of team `app` (name `captain`, roles: lead).'), text);
-    assert.ok(text.includes('This tab was bound to the `lead` session from its Claude Code title; nothing was marked read.'), text);
+    assert.ok(text.includes('This tab was bound to the `lead` session from its Claude Code title; binding it marked nothing read.'), text);
     assert.match((await kit.run(['inbox', 'status', '--session', 'lead'])).stdout[0] ?? '', /^lead 0 unread \(read to line 1 of 1/);
     assert.deepEqual((await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'captain' }) })).stdout, []);
   });
@@ -59,7 +59,7 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     assert.equal((await kit.files.read(HINTS_PATH))?.trim().split('\n').length, 2);
 
     const bound = await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'app-bravo' }) });
-    assert.deepEqual(bound.stdout, ['teamrig: this tab is now the `bravo` session of team app (name `app-bravo`), from its Claude Code title; nothing was marked read.']);
+    assert.deepEqual(bound.stdout, ['teamrig: this tab is now the `bravo` session of team app (name `app-bravo`), from its Claude Code title; binding it marked nothing read.']);
   });
 
   it('binds nothing when the title names a session of another team of the tree too', async () => {
@@ -202,7 +202,7 @@ describe('runCli: the prompt hook titles a bound tab after its session (T407)', 
     assert.equal(titledPromptOf(await kit.run(['hook', 'inbox-reminder'], { stdin: prompt() })).title, 'app-bravo');
     const cleared = prompt({ session_id: '9f8e7d6c-1111-2222-3333-444455556666', source: 'clear', session_title: 'app-bravo' });
     const text = contextOf(await kit.run(['hook', 'session-start'], { stdin: cleared }));
-    assert.ok(text.includes('This tab was bound to the `bravo` session from its Claude Code title; nothing was marked read.'), text);
+    assert.ok(text.includes('This tab was bound to the `bravo` session from its Claude Code title; binding it marked nothing read.'), text);
     assert.ok(text.includes('You are the `bravo` session of team `app`'), text);
   });
 
