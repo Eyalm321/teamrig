@@ -11,8 +11,17 @@ import type { ItemType } from '../register/events.ts';
 /** A new branch's name, which also names its folder: from a letter or digit, then letters, digits, `.`, `_`, `-` and `/`. */
 const BRANCH_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
+/**
+ * The longest new branch name. The worktree folder is named after the branch as one path component, which file systems
+ * cap at 255 bytes (BRANCH_NAME allows ASCII only, so a character is a byte); the cap also bounds the pattern check.
+ */
+const BRANCH_NAME_MAX = 255;
+
 /** Why `branch` cannot name a new branch and its folder, or undefined when it can; git refuses what this lets through. */
 export function branchNameProblem(branch: string): string | undefined {
+  if (branch.length > BRANCH_NAME_MAX) {
+    return `expected a branch name of at most ${BRANCH_NAME_MAX} characters, since it also names the worktree folder; this one has ${branch.length}`;
+  }
   const bad =
     !BRANCH_NAME.test(branch) || ['..', '//', '/.'].some((part) => branch.includes(part)) || ['/', '.', '.lock'].some((end) => branch.endsWith(end));
   return bad ? 'expected a branch name: letters, digits, ., _, - and /, from a letter or digit, without .., // or a part that starts with ., and not ending in /, . or .lock' : undefined;
