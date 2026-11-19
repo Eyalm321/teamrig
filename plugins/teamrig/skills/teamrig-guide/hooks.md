@@ -225,7 +225,8 @@ Read them there: each line is shown once per Claude Code session (recorded in `s
 shown whole is marked read with it, so no unread count keeps counting it. A first line over 1,500 characters is cut,
 a note names the command that prints it whole, and it stays unread, as does every line after it, until
 `teamrig inbox read --session web`. If the read mark cannot be written, the lines are still shown, with a line saying
-they stay unread.
+they stay unread. A tab bound to another session of the roster (its `$TEAMRIG_SESSION` names `web`, its marks another
+session) is shown `web`'s lines but marks none read, since a read mark would move the tab to `web`.
 
 ### Each prompt: the leader digest
 

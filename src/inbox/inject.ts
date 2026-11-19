@@ -1,7 +1,7 @@
 import type { TimeZone } from '../core/zone.ts';
 import { lineOnClock, type InboxDeps } from './inbox.ts';
 import { lineHash } from './line-hash.ts';
-import { indexMarks, MARK_VERSION, type InboxMark } from './marks.ts';
+import { boundElsewhereOf, indexMarks, MARK_VERSION, type InboxMark } from './marks.ts';
 import { cutWhenShown, INJECT_CAPS, newestShownOf, unshownOf, type InjectCaps } from './shown.ts';
 import { unreadOf } from './unread.ts';
 
@@ -104,13 +104,22 @@ export function injectionOf(input: InjectionInput, caps: InjectCaps = INJECT_CAP
  */
 export async function injectFor(
   deps: InboxDeps,
-  input: { readonly area: string; readonly claudeSession: string; readonly now: Date; readonly zone: TimeZone; readonly command: string },
+  input: {
+    readonly area: string;
+    readonly claudeSession: string;
+    readonly now: Date;
+    readonly zone: TimeZone;
+    readonly command: string;
+    /** The sessions on the team's roster, so a tab bound to one is never moved off it. */
+    readonly rosterIds: readonly string[];
+  },
 ): Promise<string | undefined> {
   const lines = await deps.inboxes.lines(input.area);
   if (lines === undefined) {
     return undefined;
   }
-  const { byArea } = indexMarks((await deps.marks.read()).marks);
+  const marks = (await deps.marks.read()).marks;
+  const { byArea } = indexMarks(marks);
   const shown = newestShownOf((await deps.shown.read()).marks, input.area, input.claudeSession);
   const injection = injectionOf({ ...input, path: deps.inboxes.pathOf(input.area), lines, read: byArea.get(input.area) ?? null, shown });
   if (injection === undefined) {
@@ -119,6 +128,12 @@ export async function injectFor(
   await deps.shown.append(injection.shown);
   if (injection.read === undefined) {
     return injection.text;
+  }
+  // A read mark carries the tab, and the newest mark binds it: a tab bound to another session (its env names this
+  // area, its marks the other) must not be moved by a hook, as `inbox read` refuses it too (T3081).
+  const bound = boundElsewhereOf(marks, input.claudeSession, input.area, (id) => input.rosterIds.includes(id));
+  if (bound !== undefined) {
+    return `${injection.text}\nThese lines stay unread: this tab is the \`${bound}\` session, so it marks nothing read for \`${input.area}\`.`;
   }
   try {
     await deps.marks.append(injection.read);
