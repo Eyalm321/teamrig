@@ -256,7 +256,9 @@ describe('teamrig owner decide (#1517)', () => {
     for (const args of [[], ['--option', '1', '--approve'], ['--approve', '--decline'], ['--option', 'two']]) {
       assert.equal((await kit.run(['owner', 'decide', 'T1', ...args])).code, EXIT.usage, args.join(' '));
     }
-    assert.equal((await kit.run(['owner', 'decide', 'T1', '--option', '1', '--session', 'lead'])).code, EXIT.usage);
+    // Main now reads --session on every command (as owner note's spec shows); an unknown name is refused, writing nothing.
+    assertRefused(await kit.run(['owner', 'decide', 'T1', '--option', '1', '--session', 'nobody']), /^REFUSED --session nobody names no session of team app/);
+    assert.equal(kit.files.get(EVENTS_PATH), before);
   });
 });
 
