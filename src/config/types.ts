@@ -254,8 +254,8 @@ export interface PushGuardConfig {
   readonly reviewPaths: readonly ReviewPath[];
   /**
    * Globs of script files an interpreter runs that the push guard trusts: it does not read their text for a push, so a
-   * team's own tool run (`node tools/ship/ship.ts`) or test run asks nothing. A glob with no slash names a file at any
-   * depth; one with a slash is read from the session's folder (or is absolute); case is ignored.
+   * team's own tool run (`node tools/ship/ship.ts`) or test run is never refused for its text. A glob with no slash
+   * names a file at any depth; one with a slash is read from the session's folder (or is absolute); case is ignored.
    */
   readonly trustedScripts: readonly string[];
 }
