@@ -116,6 +116,17 @@ describe('checkDocs', () => {
     ]);
   });
 
+  it('ends a table at a line that starts another block, and reads no table in an HTML comment or indented code', () => {
+    const ended = '| a | b |\n|---|---|\n| 1 | 2 |\n> a quote | here\n- a list | item | more\n'
+      + '\n| a | b |\n|---|---|\n1. ordered | x | y\n\n| a | b |\n|---|---|\n<details><summary>x</summary>\n\n| a | b |\n|---|---|\n***\n';
+    assert.deepEqual(check(readme(ended)), []);
+    const hidden = '<!--\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n-->\n<!-- one | line | -->\n\n    | a | b |\n    |---|---|\n    | 1 | 2 | 3 |\n';
+    assert.deepEqual(check(readme(hidden)), []);
+    assert.deepEqual(check(readme('<!-- c -->\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\nplain | row\n')), [
+      'README.md:4 a table row has 3 cell(s), its header 2: an unescaped | splits a cell (write \\| inside code too)',
+    ], 'a table after a closed comment, its plain row still in it');
+  });
+
   it('names a plain code block that is never closed', () => {
     assert.deepEqual(check(readme('# x\n```\nnpm ci\n')), ['README.md:2 a code block is never closed']);
   });
