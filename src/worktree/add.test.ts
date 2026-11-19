@@ -77,6 +77,18 @@ describe('createWorktree (T1305)', () => {
     }
   });
 
+  it('refuses a name longer than 255 characters, the most one folder name holds, before any change (#1433)', async () => {
+    const ports = world();
+    const branch = `feat/t1-${'a'.repeat(248)}`;
+    const { end } = await add(ports, { branch });
+    assert.deepEqual(end, {
+      kind: 'refused',
+      reason: `"${branch}": expected a branch name of at most 255 characters, since it also names the worktree folder; this one has 256`,
+    });
+    assert.deepEqual(ports.git.steps, []);
+    assert.equal(branchNameProblem(branch.slice(1)), undefined, 'a 255-character name');
+  });
+
   it("refuses a new branch off the team's branch pattern before any change, and takes it with enforce off (#1433)", async () => {
     const ports = world();
     const { end } = await add(ports, { branch: 't9-parser', branches: DEFAULT_BRANCHES });
