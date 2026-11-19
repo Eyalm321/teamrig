@@ -10,6 +10,7 @@ import { waitAnswerersOf } from './approval.ts';
 import type { SlicedGoal } from './focus.ts';
 import { NO_GOAL_TAGS } from './goals.ts';
 import { AFFECTS_FLAG, AFFECTS_USAGE, CARD_FLAGS, cardProblem, cardTexts, GATE_FLAG, gateOf, gateUsage, keptCard, OPTION_SEPARATOR, proofWordOf, RUN_FLAG, sameCard, SECURITY_FLAG, typedHandStep, WHY_ASK_FLAG, whyAskUsage, type DecisionCard } from './card.ts';
+import { cardDigest } from './card-digest.ts';
 import { holdsDescription } from './description-cut.ts';
 import { auditOf, HAND_STEP_KINDS, handStepFileProblem, shortSha256, type AuditPin } from './hand-step.ts';
 import { verdictIsCurrent, verdictReadOf, type SecurityVerdictPin } from './security-verdict.ts';
@@ -1108,13 +1109,23 @@ export class RegisterPolicy {
    * The owner's answer from the pane (#1517): a Decided ({@link decideFrom}) written as the owner, its note saying what
    * was chosen (`<owner> decided: option 2`, `approved`, `declined`) and then the owner's own words, if any.
    * Only on a task waiting on the owner; an option the card has, or an approval's answer on a task waiting on the
-   * owner's approval. A security-related card needs its current verdict, as on its move to the owner (securityGap),
-   * since it may have changed while on the owner (#1751 review).
+   * owner's approval. With `read`, the digest of the card the owner read (cardDigest), only while the card still has
+   * it, so an option number never lands on a card edited in between. A security-related card needs its current
+   * verdict, as on its move to the owner (securityGap), since it may have changed while on the owner (#1751 review).
    */
-  ownerDecide(task: Task, answer: OwnerAnswer, note: string | undefined): Verdict<DecideChange & OwnerChange> {
+  ownerDecide(task: Task, answer: OwnerAnswer, note: string | undefined, read?: string): Verdict<DecideChange & OwnerChange> {
     const by = this.config.register.ownerSource;
     if (!waitsOnOwner(task, by)) {
       return refuse(`${task.id} waits on no decision or approval of ${by}: only such a card is decided`);
+    }
+    if (read !== undefined) {
+      if (task.card === null) {
+        return refuse(`${task.id} has no card, so --read matches nothing: decide it without --read`);
+      }
+      const now = cardDigest(task.card);
+      if (read.toLowerCase() !== now) {
+        return refuse(`--read ${shortSha256(read.toLowerCase())} is not ${task.id}'s card as it stands (now ${shortSha256(now)}): its question, options or recommendation changed since it was read; read the card again and answer that`);
+      }
     }
     const gap = task.card === null ? undefined : this.securityGap(task, task.card);
     if (gap !== undefined) {

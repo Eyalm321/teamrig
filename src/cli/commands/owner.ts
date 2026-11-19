@@ -1,5 +1,6 @@
 import { formatAddress } from '../../core/address.ts';
 import { ENV, KIT_NAME } from '../../core/home.ts';
+import { isCardDigest } from '../../register/card-digest.ts';
 import type { Task } from '../../register/fold.ts';
 import { ownerAnswerWords, type OwnerAnswer } from '../../register/policy.ts';
 import type { OwnerNextPreview } from '../../register/register.ts';
@@ -188,13 +189,22 @@ function ownerAnswerOf(args: ParsedArgs): OwnerAnswer {
   return { kind: args.switches.has('approve') ? 'approve' : 'decline' };
 }
 
+/** The card digest `owner decide --read` was given (cardDigest), if any. */
+function readDigestOf(args: ParsedArgs): string | undefined {
+  const read = args.flags.get('read');
+  if (read !== undefined && !isCardDigest(read)) {
+    throw new UsageError(`--read takes the digest of the card that was read, 64 hex characters (cardDigest in teamrig's read entry), not "${read}"`);
+  }
+  return read;
+}
+
 /**
- * `owner decide <[team/]T<id>> --option <n>|--approve|--decline [--note ".."]`: the owner answers a card from the
+ * `owner decide <[team/]T<id>> --option <n>|--approve|--decline [--read <digest>] [--note ".."]`: the owner answers a card from the
  * pane's Decisions tab (#1517). Written as the owner (register.ownerSource), as a Decided (`update --decided`): the
  * task's wait on the owner goes and it is marked decided, its note saying what was chosen and the owner's own words.
  * The session gets an inbox line that wakes it to go on. Refused on a task not waiting on the owner, an option its
- * card lacks, an approval's answer on a task with no approval wait of the owner's, a security-related card without
- * its current verdict, and under CLAUDECODE.
+ * card lacks, an approval's answer on a task with no approval wait of the owner's, a `--read` digest the card no
+ * longer has, a security-related card without its current verdict, and under CLAUDECODE.
  */
 export async function ownerDecide(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   refuseUnderClaudeCode(runtime, 'decide');
@@ -203,7 +213,7 @@ export async function ownerDecide(args: ParsedArgs, runtime: CliRuntime): Promis
   const { team, names } = target;
   const owner = team.config.register.ownerSource;
   const note = args.flags.get('note');
-  const written = await team.register.ownerDecide(target.id, answer, note);
+  const written = await team.register.ownerDecide(target.id, answer, note, readDigestOf(args));
   const code = report(runtime, written, 'DECIDED', team, target.label);
   if (written.ok) {
     const { task } = written.value;

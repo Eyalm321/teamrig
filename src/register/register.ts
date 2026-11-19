@@ -355,8 +355,8 @@ export class Register {
   }
 
   /** The owner's answer to a card from the pane (#1517): a Decided written as the owner, as in ownerNote. */
-  ownerDecide(id: string, answer: OwnerAnswer, note: string | undefined): Promise<Verdict<WriteResult>> {
-    return this.write((snapshot, elsewhere) => onTask(snapshot, elsewhere, id, (task) => single(this.ownerEvent(task, this.deps.policy.ownerDecide(task, answer, note)))));
+  ownerDecide(id: string, answer: OwnerAnswer, note: string | undefined, read?: string): Promise<Verdict<WriteResult>> {
+    return this.write((snapshot, elsewhere) => onTask(snapshot, elsewhere, id, (task) => single(this.ownerEvent(task, this.deps.policy.ownerDecide(task, answer, note, read)))));
   }
 
   /** The owner's Later from the pane (#1517): a card put off to `until` (stored form), written as the owner, as in ownerNote. */
