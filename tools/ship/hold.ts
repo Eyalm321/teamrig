@@ -36,8 +36,9 @@ export function holdHead(deps: HoldDeps): HeldHead {
     git('reset', '--quiet', '--hard');
     const strays = untrackedIn(git).filter((path) => !untracked.has(path));
     // Literal: git reads a pathspec as a glob even after --, so a stray named `[n]ew.txt` would also clean `new.txt`,
-    // an untracked plan file that `stash create` did not save.
-    if (strays.length > 0) git('--literal-pathspecs', 'clean', '-fq', '--', ...strays);
+    // an untracked plan file that `stash create` did not save. Magic per path, as src/worktree/git.ts does: the global
+    // --literal-pathspecs flag dies when the environment sets GIT_GLOB_PATHSPECS or GIT_ICASE_PATHSPECS.
+    if (strays.length > 0) git('clean', '-fq', '--', ...strays.map((path) => `:(literal)${path}`));
     if (saved !== '') {
       try {
         git('stash', 'apply', '--quiet', saved);
