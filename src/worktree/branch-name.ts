@@ -124,7 +124,8 @@ interface EndRange {
 /**
  * Where each placeholder's word can end when it starts at `at`, as {@link taskBranchName} fills it: a branch type, the
  * task id in lowercase, an issue number, a slug (which ends only after a letter or digit, see `placeholderEnds`), a
- * session name (core/ids.ts).
+ * session name (core/ids.ts; its words run to any length here, though `ID_PATTERN` stops ids at 32 characters: looser,
+ * never stricter, so no name a pattern makes is refused).
  */
 const PLACEHOLDER_ENDS: { readonly [P in BranchPlaceholder]: (runs: NameRuns, at: number) => EndRange | undefined } = {
   type: (runs, at) => (runs.is(at, LOWER) ? { first: at + 1, last: runs.lowerOrDigits[at + 1] ?? at + 1 } : undefined),
