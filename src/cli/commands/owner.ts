@@ -193,7 +193,8 @@ function ownerAnswerOf(args: ParsedArgs): OwnerAnswer {
  * pane's Decisions tab (#1517). Written as the owner (register.ownerSource), as a Decided (`update --decided`): the
  * task's wait on the owner goes and it is marked decided, its note saying what was chosen and the owner's own words.
  * The session gets an inbox line that wakes it to go on. Refused on a task not waiting on the owner, an option its
- * card lacks, an approval's answer on a task with no approval wait of the owner's, and under CLAUDECODE.
+ * card lacks, an approval's answer on a task with no approval wait of the owner's, a security-related card without
+ * its current verdict, and under CLAUDECODE.
  */
 export async function ownerDecide(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   refuseUnderClaudeCode(runtime, 'decide');

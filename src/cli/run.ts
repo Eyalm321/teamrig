@@ -420,7 +420,8 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       from the pane: recorded as the owner's Decided (the wait on the owner goes, the task reads
       decided), its note naming the option or approved or declined, then --note; wakes the session;
       refused on a task not waiting on the owner, an option its card lacks, --approve or --decline
-      with no approval wait of the owner's, and where Claude Code sets $CLAUDECODE
+      with no approval wait of the owner's, a security card without its current verdict, and where
+      Claude Code sets $CLAUDECODE
   owner later <[team/]T<id>> --until <time> [--note ".."]   the owner puts a card off from the pane: a
       Later written as the owner's, so the card comes back then; tells the session without a wake;
       refused on a task not waiting on the owner, a time gone by, and where Claude Code sets $CLAUDECODE

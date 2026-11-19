@@ -2111,3 +2111,37 @@ describe('RegisterPolicy.setStatus: a set that would drop an approval (T3207)', 
     assert.equal(error(policy.setStatus(declined, 'alpha', { status: 'in-progress', note: 'adding tests' }, CTX)), 'allowed');
   });
 });
+
+describe("RegisterPolicy.ownerDecide: a security card needs its current verdict (#1751 review)", () => {
+  const policy = new RegisterPolicy(testConfig({ roles: { lead: 'lead', securityReviewer: 'bravo' } }));
+  const verdictOn = (card: DecisionCard): NonNullable<Task['securityVerdict']> => ({
+    text: 'Pass: read only',
+    read: { question: card.question, options: card.options, recommend: card.recommend },
+    by: 'bravo',
+    at: '2030-01-08T09:00:00.000Z',
+  });
+  const onOwner = (card: DecisionCard | null, securityVerdict: Task['securityVerdict'] = null): Task => ({ ...testTask({ status: 'waiting', waits: OWNER_DECISION, card }), securityVerdict });
+  const decide = (task: Task, read?: string) => policy.ownerDecide(task, { kind: 'option', option: 1 }, undefined, read);
+  const audit = 'its session has the card read (the security reviewer (bravo), with teamrig audit T1 --verdict "<what the review found>")';
+  const GATED: DecisionCard = { ...TEST_CARD, gate: 'permissions' };
+  const MARKED: DecisionCard = { ...TEST_OWNER_CARD, security: true };
+  const edited = (card: DecisionCard): DecisionCard => ({ ...card, recommend: 'Pro, the bigger launch' });
+
+  it('refuses a card on a security gate and a card marked --security while the task holds no verdict', () => {
+    assert.equal(error(decide(onOwner(GATED))), `T1's card asks owner about permissions, a security gate [securityGates], and has no security verdict: owner decides it only with one (core rule 9); ${audit}`);
+    assert.equal(error(decide(onOwner(MARKED))), `T1's card is marked --security and has no security verdict: owner decides it only with one (core rule 9); ${audit}`);
+  });
+
+  it('refuses each when the card changed on the owner after the verdict', () => {
+    const stale = `the security verdict bravo gave on T1's card read another question, options or recommendation: owner decides it only after a new verdict (core rule 9); ${audit}`;
+    assert.equal(error(decide(onOwner(edited(GATED), verdictOn(GATED)))), stale);
+    assert.equal(error(decide(onOwner(edited(MARKED), verdictOn(MARKED)))), stale);
+  });
+
+  it('decides each with its current verdict, and a card that needs none, as before', () => {
+    assert.equal(error(decide(onOwner(GATED, verdictOn(GATED)))), 'allowed');
+    assert.equal(error(decide(onOwner(MARKED, verdictOn(MARKED)))), 'allowed');
+    assert.equal(error(decide(onOwner(TEST_OWNER_CARD))), 'allowed', 'budget is no security gate by default');
+    assert.equal(error(decide(onOwner({ ...GATED, byDefault: 'Pro ships on the due date' }, verdictOn(GATED)))), 'allowed', 'the default is no part the verdict read');
+  });
+});
