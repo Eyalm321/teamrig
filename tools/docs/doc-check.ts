@@ -39,6 +39,14 @@ const HEADING = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/;
 const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
 /** A table's delimiter row, under its header: `| --- | :-: |`, each cell dashes with an optional colon at either end. */
 const DELIMITER_ROW = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
+/**
+ * A line that starts another block, which ends a table before it (GFM spec, tables): a quote, a list item, an HTML
+ * block, a thematic break. Headings and fences are read apart.
+ */
+const BLOCK_START = /^ {0,3}(?:>|[-+*](?:\s|$)|\d{1,9}[.)](?:\s|$)|<[A-Za-z/!?]|(?:[-*_][ \t]*){3,}$)/;
+/** Four spaces or a tab before a line make it indented code, never a table header. */
+const INDENTED_CODE = /^(?: {4}|\t)/;
+const COMMENT_OPEN = /^ {0,3}<!--/;
 
 interface Block {
   readonly language: string;
@@ -110,14 +118,17 @@ export function tableCells(row: string): number {
 /**
  * Each table's rows whose cell count differs from its header's: GitHub drops the extra cells of a longer row and
  * pads a shorter one, so a lost `\|` escape splits a cell with no error. A header whose delimiter row has another
- * count makes no table at all. A table runs from its header to the first blank line, heading or fenced block.
+ * count makes no table at all. A table runs from its header to the first blank line, heading, fenced block or line
+ * that starts another block; one inside an HTML comment or indented code is no table.
  */
 function tableProblems(prose: readonly Row[], report: (line: number, message: string) => void): number {
   let tables = 0;
+  const comments = commentLines(prose);
   for (let at = 1; at < prose.length; at += 1) {
     const header = prose[at - 1];
     const delimiter = prose[at];
     if (header === undefined || delimiter === undefined || delimiter.line !== header.line + 1) continue;
+    if (comments.has(header.line) || INDENTED_CODE.test(header.text)) continue;
     if (!DELIMITER_ROW.test(delimiter.text) || !delimiter.text.includes('|') || !header.text.includes('|')) continue;
     const cells = tableCells(header.text);
     const delimiterCells = tableCells(delimiter.text);
@@ -128,13 +139,26 @@ function tableProblems(prose: readonly Row[], report: (line: number, message: st
     tables += 1;
     for (let next = at + 1; next < prose.length; next += 1) {
       const row = prose[next];
-      if (row === undefined || row.line !== (prose[next - 1]?.line ?? 0) + 1 || row.text.trim() === '' || HEADING.test(row.text)) break;
+      if (row === undefined || row.line !== (prose[next - 1]?.line ?? 0) + 1 || row.text.trim() === '' || HEADING.test(row.text) || BLOCK_START.test(row.text)) break;
       const count = tableCells(row.text);
       if (count !== cells) report(row.line, `a table row has ${count} cell(s), its header ${cells}: an unescaped | splits a cell (write \\| inside code too)`);
       at = next;
     }
   }
   return tables;
+}
+
+/** The lines of each HTML comment that opens a line, from its `<!--` to the line holding its `-->`. */
+function commentLines(prose: readonly Row[]): ReadonlySet<number> {
+  const lines = new Set<number>();
+  let open = false;
+  for (const { line, text } of prose) {
+    if (!open && COMMENT_OPEN.test(text)) open = !text.slice(text.indexOf('<!--') + 4).includes('-->');
+    else if (!open) continue;
+    else if (text.includes('-->')) open = false;
+    lines.add(line);
+  }
+  return lines;
 }
 
 function targetsIn(row: string): string[] {
