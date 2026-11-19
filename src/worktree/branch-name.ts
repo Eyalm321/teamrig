@@ -63,32 +63,91 @@ export function branchPatternProblem(pattern: string): string | undefined {
   return problem === undefined ? undefined : `makes no branch name (${sample}): ${problem}`;
 }
 
+const LOWER = /[a-z]/;
+const DIGIT = /[0-9]/;
+const LOWER_OR_DIGIT = /[a-z0-9]/;
+const SESSION_CHAR = /[a-z0-9-]/;
+
+/** Where a run of `allowed` characters from `from` ends: `from` itself when there is none. */
+function runEnd(text: string, from: number, allowed: RegExp): number {
+  let at = from;
+  while (at < text.length && allowed.test(text.charAt(at))) {
+    at += 1;
+  }
+  return at;
+}
+
+/** Every end from `first` to `last`, both included; none when `first` is past `last`. */
+function endsBetween(first: number, last: number): readonly number[] {
+  return first > last ? [] : Array.from({ length: last - first + 1 }, (_, n) => first + n);
+}
+
+/** `first` matched at `at`, then any run of `rest`: every end after the first character. */
+function headThenRun(text: string, at: number, first: RegExp, rest: RegExp): readonly number[] {
+  return at < text.length && first.test(text.charAt(at)) ? endsBetween(at + 1, runEnd(text, at + 1, rest)) : [];
+}
+
+/** Lowercase words of letters and digits joined by single `-`s ({@link slugOf}): every end after a word's character. */
+function slugEnds(text: string, at: number): readonly number[] {
+  const ends: number[] = [];
+  let word = at;
+  while (word < text.length && LOWER_OR_DIGIT.test(text.charAt(word))) {
+    const end = runEnd(text, word, LOWER_OR_DIGIT);
+    ends.push(...endsBetween(word + 1, end));
+    if (text.charAt(end) !== '-') {
+      break;
+    }
+    word = end + 1;
+  }
+  return ends;
+}
+
 /**
- * What each placeholder matches in a branch name, as {@link taskBranchName} fills it: a branch type, the task id in
- * lowercase, an issue number, a slug of lowercase words joined by `-` ({@link slugOf}), a session name (core/ids.ts).
+ * Where each placeholder's word can end when it starts at `at`, as {@link taskBranchName} fills it: a branch type, the
+ * task id in lowercase, an issue number, a slug, a session name (core/ids.ts).
  */
-const PLACEHOLDER_MATCH: { readonly [P in BranchPlaceholder]: string } = {
-  type: '[a-z][a-z0-9]*',
-  id: 't[1-9][0-9]*',
-  issue: '[0-9]+',
-  slug: '[a-z0-9]+(?:-[a-z0-9]+)*',
-  session: '[a-z][a-z0-9-]*',
+const PLACEHOLDER_ENDS: { readonly [P in BranchPlaceholder]: (text: string, at: number) => readonly number[] } = {
+  type: (text, at) => headThenRun(text, at, LOWER, LOWER_OR_DIGIT),
+  id: (text, at) => (text.charAt(at) === 't' ? headThenRun(text, at + 1, /[1-9]/, DIGIT) : []),
+  issue: (text, at) => headThenRun(text, at, DIGIT, DIGIT),
+  slug: slugEnds,
+  session: (text, at) => headThenRun(text, at, LOWER, SESSION_CHAR),
 };
 
-/** The branch names `pattern` makes, its text outside placeholders kept as written. */
-function patternMatcher(pattern: string): RegExp {
-  let source = '';
+/** A pattern as the parts a name must hold in order: text kept as written, or a placeholder's word. */
+type PatternPart = { readonly text: string } | { readonly placeholder: BranchPlaceholder };
+
+function partsOf(pattern: string): readonly PatternPart[] {
+  const parts: PatternPart[] = [];
   let at = 0;
   for (const match of pattern.matchAll(PLACEHOLDER)) {
     const name = match[1] ?? '';
-    source += escapeRegExp(pattern.slice(at, match.index)) + (isPlaceholder(name) ? `(?:${PLACEHOLDER_MATCH[name]})` : escapeRegExp(match[0]));
+    parts.push({ text: pattern.slice(at, match.index) }, isPlaceholder(name) ? { placeholder: name } : { text: match[0] });
     at = match.index + match[0].length;
   }
-  return new RegExp(`^${source}${escapeRegExp(pattern.slice(at))}$`);
+  parts.push({ text: pattern.slice(at) });
+  return parts;
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * Whether `pattern` makes `branch`. It keeps the set of places in the name each part can end at, so it tries each split
+ * between neighbouring placeholders once: a regex backtracks through every split of them, which grows as the name's
+ * length to the power of their count (a long name that misses `{slug}-{slug}-{slug}` takes seconds).
+ */
+function patternMakes(pattern: string, branch: string): boolean {
+  let places: ReadonlySet<number> = new Set([0]);
+  for (const part of partsOf(pattern)) {
+    const next = new Set<number>();
+    for (const at of places) {
+      if ('placeholder' in part) {
+        PLACEHOLDER_ENDS[part.placeholder](branch, at).forEach((end) => next.add(end));
+      } else if (branch.startsWith(part.text, at)) {
+        next.add(at + part.text.length);
+      }
+    }
+    places = next;
+  }
+  return places.has(branch.length);
 }
 
 /** A team's branch patterns: `pattern`, then each branch type's own, each once. */
@@ -107,7 +166,7 @@ export function branchPatternRefusal(branch: string, branches: BranchesConfig): 
     return undefined;
   }
   const patterns = branchPatternsOf(branches);
-  if (patterns.some((pattern) => patternMatcher(pattern).test(branch))) {
+  if (patterns.some((pattern) => patternMakes(pattern, branch))) {
     return undefined;
   }
   const sample = fill(branches.pattern, { type: branches.itemTypes.task, id: 't12', issue: '933', slug: 'parser', session: 'web' });
