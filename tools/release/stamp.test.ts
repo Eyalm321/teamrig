@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { TempRepo } from '../lib/temp-repo.ts';
-import { holdsStamps, markersIn, NEXT_RELEASE, stampText, strayStamps } from './stamp.ts';
+import { NEXT_RELEASE } from '../../src/config/migrate.ts';
+import { holdsStamps, markersIn, stampText, strayStamps } from './stamp.ts';
 import { MANIFEST } from './target.ts';
 
 // Built from NEXT_RELEASE, so this spec holds no stamp a release would set.
