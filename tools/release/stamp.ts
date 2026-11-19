@@ -1,3 +1,5 @@
+import { NEXT_RELEASE } from '../../src/config/migrate.ts';
+
 /**
  * Release stamps (#1768): a config migration's `firstRelease` and a docs `(since <version>)` line name the release
  * that first ships them. The release pull request raises the version, so no author knows it when writing the change,
@@ -5,9 +7,6 @@
  * release workflow sets each one to the version of the release pull request it runs on (stamp-cli.ts), so the
  * merged release carries them into main.
  */
-
-/** What an author writes for a stamp whose release is not cut yet. */
-export const NEXT_RELEASE = 'next';
 
 /**
  * A stamp the tool sets, as written in each kind of file: `since next` in parentheses in a docs page or the schema, a
