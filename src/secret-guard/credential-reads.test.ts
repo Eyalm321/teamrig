@@ -109,7 +109,6 @@ describe('credentialReadFindings', () => {
       // A quoted glob reaches git as written, so the guard reads the word git gets.
       "git grep -e 'teamrig-gh-*'",
       'git grep teamrig-gh- -- "*.ts"',
-      'cd C:/w && git grep -n teamrig-gh-',
     ]) {
       assert.deepEqual(reads(line), [], line);
     }
@@ -124,9 +123,21 @@ describe('credentialReadFindings', () => {
       `cd C:/x; ${line}; cd C:/w`,
       `cd "$X" && ${line}`,
       `${line} && cd C:/x && ${line}`,
+      // Any folder or stack move on the line, even one that seems to come back to the start folder.
+      `cd C:/w && ${line}`,
+      `cd . && ${line}`,
+      `pushd C:/x; popd; ${line}`,
+      `pushd -n C:/x; popd; ${line}`,
+      `pushd -n C:/x; pushd; ${line}`,
+      `pushd C:/x; pushd C:/y; popd +1; popd; ${line}`,
+      `bash -c 'cd C:/w; ${line}'`,
     ]) {
       assert.deepEqual(reads(moved), ['teamrig-gh-<owner>'], moved);
     }
+    for (const moved of [`Push-Location -StackName s C:/x; Pop-Location; ${line}`, `Push-Location C:/x; Pop-Location -StackName s; ${line}`, `Set-Location C:/w; ${line}`]) {
+      assert.deepEqual(reads(moved, 'powershell'), ['teamrig-gh-<owner>'], moved);
+    }
+    assert.deepEqual(reads(line, 'powershell'), [], 'the same search in PowerShell, with no move');
     let asked: string | undefined;
     const outside: SearchStart = { dir: CHECKOUT, inWorkTree: (dir) => ((asked = dir), false) };
     assert.deepEqual(reads(line, 'bash', outside), ['teamrig-gh-<owner>'], 'a start folder outside any work tree');
