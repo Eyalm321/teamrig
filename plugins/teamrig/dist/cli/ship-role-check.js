@@ -139,13 +139,23 @@ export function toolRootsPath(tool) {
     const extension = posix.extname(tool);
     return `${extension === '' ? tool : tool.slice(0, -extension.length)}.roots.json`;
 }
-/** A roots file's shape: `{ "roots": ["src/cli/main.ts", "package.json"] }`, each path from the checkout's top. */
-function isRootsFile(value) {
-    return typeof value === 'object' && value !== null && 'roots' in value && Array.isArray(value.roots) && value.roots.every((root) => typeof root === 'string');
-}
+const isPathList = (value) => Array.isArray(value) && value.every((path) => typeof path === 'string');
 /**
- * The roots a roots file names, as paths in the checkout; undefined when it is no JSON of that shape, or a root is
- * absolute or leaves the checkout, so the caller cannot tell what the tool runs.
+ * A roots file's shape: `{ "roots": ["src/cli/main.ts", "package.json"], "staticOnly": ["src/cli/run.ts"] }`, each path
+ * from the checkout's top, `staticOnly` optional.
+ */
+function isRootsFile(value) {
+    return (typeof value === 'object' &&
+        value !== null &&
+        'roots' in value &&
+        isPathList(value.roots) &&
+        (!('staticOnly' in value) || isPathList(value.staticOnly)));
+}
+/** A path from the checkout's top: not the top itself, not absolute, not leaving it. */
+const inCheckout = (path) => path !== '.' && !path.startsWith('../') && !posix.isAbsolute(path) && !/^[A-Za-z]:/.test(path);
+/**
+ * What a roots file names, as paths in the checkout; undefined when it is no JSON of that shape, or a path is absolute
+ * or leaves the checkout, so the caller cannot tell what the tool runs.
  */
 export function toolRootsOf(text) {
     let value;
@@ -159,16 +169,17 @@ export function toolRootsOf(text) {
         return undefined;
     }
     const roots = value.roots.map((root) => posix.normalize(root));
-    return roots.some((root) => root === '.' || root.startsWith('../') || posix.isAbsolute(root) || /^[A-Za-z]:/.test(root)) ? undefined : roots;
+    const staticOnly = (value.staticOnly ?? []).map((path) => posix.normalize(path));
+    return [...roots, ...staticOnly].every(inCheckout) ? { roots, staticOnly } : undefined;
 }
 /**
  * The repository paths a module at `path` loads by a relative specifier: an import (`from './x.ts'`, `import('../y.ts')`)
  * or a file it reads beside it (`new URL('./repos.json', import.meta.url)`), so a data file the tool runs on is its code
- * too. Read from the module's code, never its comments or strings (see {@link moduleSpecifiersOf}); undefined when the
- * code cannot be read apart from its text.
+ * too, its `import('…')` calls left out with `dynamic: false`. Read from the module's code, never its comments or
+ * strings (see {@link moduleSpecifiersOf}); undefined when the code cannot be read apart from its text.
  */
-export function relativeImportsOf(text, path) {
-    const specifiers = moduleSpecifiersOf(text);
+export function relativeImportsOf(text, path, dynamic = true) {
+    const specifiers = moduleSpecifiersOf(text, { dynamic });
     return specifiers
         ?.filter((specifier) => specifier.startsWith('./') || specifier.startsWith('../'))
         .map((specifier) => posix.normalize(posix.join(posix.dirname(path), specifier)));
@@ -183,10 +194,11 @@ export function relativeImportsOf(text, path) {
 export function toolCodeAt(git, top, ref, tool) {
     const rootsPath = toolRootsPath(tool);
     const rootsRead = git.filesAt(top, ref, [rootsPath]);
-    const roots = rootsRead === undefined ? undefined : toolRootsOf(rootsRead.get(rootsPath) ?? '{"roots":[]}');
-    if (roots === undefined) {
+    const named = rootsRead === undefined ? undefined : toolRootsOf(rootsRead.get(rootsPath) ?? '{"roots":[]}');
+    if (named === undefined) {
         return undefined;
     }
+    const { roots, staticOnly } = named;
     const seen = new Set([rootsPath]);
     // One git read per level of imports, never one per file (T4035): a tool's code runs to hundreds of files, and the
     // start check of every queued ship reads it twice.
@@ -202,7 +214,7 @@ export function toolCodeAt(git, top, ref, tool) {
         const next = [];
         for (const path of fresh) {
             const text = texts.get(path);
-            const imports = text === undefined ? undefined : MODULE_FILE.test(path) ? relativeImportsOf(text, path) : [];
+            const imports = text === undefined ? undefined : MODULE_FILE.test(path) ? relativeImportsOf(text, path, !staticOnly.includes(path)) : [];
             if (imports === undefined) {
                 return undefined;
             }
