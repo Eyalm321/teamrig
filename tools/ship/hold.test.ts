@@ -61,6 +61,7 @@ describe('holdHead', () => {
     held.restore();
     assert.equal(readFileSync(join(repo.dir, 'new.txt'), 'utf8'), 'new, untracked\n');
     assert.equal(repo.has('[n]ew.txt'), false);
+    assert.match(logs[0] ?? '', /^held the plan's uncommitted changes as [0-9a-f]{40} \(git stash apply [0-9a-f]{40} brings them back\)$/);
   });
 
   it('with nothing uncommitted, puts back only the head', () => {
