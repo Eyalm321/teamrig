@@ -2,10 +2,79 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_BRANCHES } from '../config/defaults.ts';
 import type { BranchesConfig } from '../config/types.ts';
-import { type BranchTask, type BranchWords, branchNameFor, branchPatternProblem, isBranchType, slugOf, taskBranchName } from './branch-name.ts';
+import {
+  type BranchTask,
+  type BranchWords,
+  branchNameFor,
+  branchPatternProblem,
+  branchPatternRefusal,
+  isBranchType,
+  slugOf,
+  taskBranchName,
+} from './branch-name.ts';
 import { branchTaskOf } from './owner.ts';
 
 const WORDS: BranchWords = { type: 'feat', id: 't12', issue: '933', slug: 'issue-forms', session: 'web' };
+
+describe('branchPatternRefusal (#1433)', () => {
+  it('takes a new branch the default pattern makes, a ship retry suffix included', () => {
+    for (const branch of ['feat/t12-parser', 'fix/t9-login-loop', 'chore/t3200-a-b-c', 'feat/t12-parser-2', 'docs/t7-x1']) {
+      assert.equal(branchPatternRefusal(branch, DEFAULT_BRANCHES), undefined, branch);
+    }
+  });
+
+  it('refuses a new branch in another style, naming the pattern and an example', () => {
+    for (const branch of ['t12-parser', 'my-fix', 'feat/t12', 'feature/T12-parser', 'feat/t012-parser', 'feat/t12-Parser', 'feat/t12_parser', 'Feat/t12-parser', 'x/feat/t12-a']) {
+      assert.equal(
+        branchPatternRefusal(branch, DEFAULT_BRANCHES),
+        `"${branch}" does not match the branch pattern {type}/{id}-{slug} (delivery.branches), such as feat/t12-parser; delivery.branches.enforce false lets any name through`,
+        branch,
+      );
+    }
+  });
+
+  it("takes a branch type's own pattern, the issue and the session, and names every pattern when refusing", () => {
+    const branches: BranchesConfig = { ...DEFAULT_BRANCHES, pattern: '{session}/{id}-gh{issue}-{slug}', typePatterns: { release: 'release/{id}', docs: 'docs/{id}-{slug}' } };
+    for (const branch of ['web/t12-gh933-forms', 'team-oss/t4-gh1-a', 'release/t5', 'docs/t6-readme']) {
+      assert.equal(branchPatternRefusal(branch, branches), undefined, branch);
+    }
+    assert.equal(
+      branchPatternRefusal('feat/t12-parser', branches),
+      '"feat/t12-parser" does not match any of the branch patterns {session}/{id}-gh{issue}-{slug}, release/{id}, docs/{id}-{slug} (delivery.branches), such as web/t12-gh933-parser; delivery.branches.enforce false lets any name through',
+    );
+    assert.match(branchPatternRefusal('release/t5-x', branches) ?? '', /does not match/);
+    assert.match(branchPatternRefusal('web/t12-ghx-a', branches) ?? '', /does not match/);
+  });
+
+  it('keeps text outside placeholders as written, regex characters included', () => {
+    const branches: BranchesConfig = { ...DEFAULT_BRANCHES, pattern: 'wip.{type}/{id}-{slug}' };
+    assert.equal(branchPatternRefusal('wip.feat/t1-a', branches), undefined);
+    assert.match(branchPatternRefusal('wipxfeat/t1-a', branches) ?? '', /does not match/);
+  });
+
+  it('lets any name through with enforce off', () => {
+    const branches: BranchesConfig = { ...DEFAULT_BRANCHES, enforce: false };
+    for (const branch of ['t12-parser', 'my-fix', 'feature/T12-parser']) {
+      assert.equal(branchPatternRefusal(branch, branches), undefined, branch);
+    }
+  });
+
+  it('takes every branch taskBranchName names', () => {
+    const branches: BranchesConfig = { ...DEFAULT_BRANCHES, typePatterns: { release: 'release/{id}' }, classes: { Improvements: 'chore' } };
+    for (const title of ['Fix T12 login loop!', 'a', '日本語 only', 'Über-long title that goes past the slug cap of forty characters for sure']) {
+      const tasks: readonly [BranchTask, string | undefined][] = [
+        [{ id: 'T42', title, owner: 'web', ref: null, itemType: 'task', workClass: 'Roadmap' }, undefined],
+        [{ id: 'T42', title, owner: 'web', ref: null, itemType: 'bug', workClass: 'Improvements' }, undefined],
+        [{ id: 'T42', title, owner: 'web', ref: null, itemType: 'task', workClass: 'Roadmap' }, 'release'],
+        [{ id: 'T42', title, owner: 'web', ref: null, itemType: 'task', workClass: 'Roadmap' }, 'docs'],
+      ];
+      for (const [task, type] of tasks) {
+        const named = taskBranchName(task, branches, type);
+        assert.equal(named.kind === 'name' ? branchPatternRefusal(named.branch, branches) : 'refused', undefined, `${title} ${type ?? ''}`);
+      }
+    }
+  });
+});
 
 describe('branchPatternProblem', () => {
   it('takes the default pattern and patterns with the id starting a part', () => {
