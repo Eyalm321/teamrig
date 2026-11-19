@@ -567,8 +567,9 @@ process. A line that only mentions one of these words is refused as well (`grep 
 Grep tool instead, which runs no shell. One exception: a line whose every program is a `git grep` of the repository may
 name a teamrig credential (`git grep -n teamrig-gh-`), since it searches tracked files and reads no store. The
 program word must be a bare `git`, and options on both sides of `grep` are allow-lists spelled in full (git takes any
-unique prefix of a long option): before it only `--no-pager` and `-P` (no `-C <dir>`: run it from the checkout, with
-no `cd` or `pushd` before it on the line, from a folder git finds a work tree in); after
+unique prefix of a long option): before it only `--no-pager` and `-P` (no `-C <dir>`: run it from the checkout, on a
+line with no `cd`, `pushd`, `popd` or `Set-Location` anywhere, even one that comes back, from a folder git finds a work
+tree in); after
 it read-only matching and output options (`-n -i -w -v -l -c -e -A -B -C --count --name-only --cached --max-depth` and
 the like). Anything else (`--no-index`, `--untracked`, `-O`, `--textconv` or an abbreviation of one), a word the shell
 expands (`$X`, `"${X}"`, an unquoted glob or `~`: quote a pattern as `-e 'name*'`), arguments fed from stdin (`xargs`), an
