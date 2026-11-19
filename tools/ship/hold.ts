@@ -33,7 +33,9 @@ export function holdHead(deps: HoldDeps): HeldHead {
     git('reset', '--quiet', head);
     git('reset', '--quiet', '--hard');
     const strays = untrackedIn(git).filter((path) => !untracked.has(path));
-    if (strays.length > 0) git('clean', '-fq', '--', ...strays);
+    // Literal: git reads a pathspec as a glob even after --, so a stray named `[n]ew.txt` would also clean `new.txt`,
+    // an untracked plan file that `stash create` did not save.
+    if (strays.length > 0) git('--literal-pathspecs', 'clean', '-fq', '--', ...strays);
     if (saved !== '') {
       try {
         git('stash', 'apply', '--quiet', saved);
