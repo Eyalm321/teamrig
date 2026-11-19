@@ -3768,13 +3768,15 @@ NEXT T14 open, p2, pinned, owner web, from lead | Saved carts survive a logout
 ### teamrig owner decide
 
 The owner answers a decision card from the pane's Decisions tab (`teamrig owner decide <[team/]T<id>> --option
-<n>|--approve|--decline [--note ".."]`). It is recorded as the owner's Decided, as `update --decided` records an
+<n>|--approve|--decline [--read <digest>] [--note ".."]`). It is recorded as the owner's Decided, as `update --decided` records an
 answer given at a meeting: the task's wait on the owner goes and the task reads decided, its note naming the option
 chosen by number (`option 2`: the card keeps its text), `approved` or `declined`, then the owner's `--note`. The
 session gets an inbox line, quoting the option's text, that wakes it to go on as decided. It refuses a task not waiting
 on the owner, an option number the card lacks, `--approve` or `--decline` on a task with no approval wait of the
-owner's, and a `--note` longer than the room `register.maxText` leaves after that start (the refusal names the room;
-`owner later` judges its note the same way). It writes as the owner, so the exec guard
+owner's, a `--read` digest the card no longer has, a card on a security gate or marked `--security` whose security
+verdict is missing or was given on another question, options or recommendation (the rule its move to the owner
+follows, as a card can change while it sits on the owner), and a `--note` longer than the room `register.maxText`
+leaves after that start (the refusal names the room; `owner later` judges its note the same way). It writes as the owner, so the exec guard
 refuses it from an agent's tool call, and it refuses itself under `$CLAUDECODE`, as `owner note` does.
 
 Flags:
@@ -3782,6 +3784,10 @@ Flags:
 - `--option <n>`: the card option the owner chose, numbered from 1 as the card prints them.
 - `--approve`: the owner's yes to an approval wait of the owner's.
 - `--decline`: the owner's no to an approval wait of the owner's.
+- `--read <digest>`: the digest of the card the owner read, so the answer lands only on that card: SHA-256, in hex,
+  over `JSON.stringify([question, options, recommend])`; the pane computes it with `cardDigest` from teamrig's read
+  entry. An edit to the question, an option or the recommendation since the read is refused, so an option number
+  never picks another card's option.
 - `--note "<text>"`: the owner's own words, kept after the answer.
 
 Example:
