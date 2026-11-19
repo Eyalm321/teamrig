@@ -64,11 +64,15 @@ describe('branchPatternRefusal (#1433)', () => {
 
   it('answers a long miss at once, however many placeholders that take a - sit side by side', () => {
     const branches: BranchesConfig = { ...DEFAULT_BRANCHES, pattern: `${Array(6).fill('{slug}').join('-')}/{id}` };
-    const branch = `${'ab-'.repeat(80)}ab/x`;
-    const started = performance.now();
-    assert.match(branchPatternRefusal(branch, branches) ?? '', /does not match/);
-    // A backtracking regex takes seconds here at 120 characters and grows as the name's length to the sixth power.
-    assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)} ms`);
+    // A backtracking regex takes seconds at 120 characters, growing as the length to the sixth power; a matcher that
+    // lists every end of every start takes seconds at 10,000.
+    for (const words of [80, 3_400]) {
+      const branch = `${'ab-'.repeat(words)}ab/x`;
+      const started = performance.now();
+      assert.match(branchPatternRefusal(branch, branches) ?? '', /does not match/);
+      assert.ok(performance.now() - started < 1000, `${branch.length} characters took ${Math.round(performance.now() - started)} ms`);
+    }
+    assert.equal(branchPatternRefusal(`${'ab-'.repeat(3_400)}ab/t1`, branches), undefined, 'a long name it makes');
   });
 
   it('lets any name through with enforce off', () => {
