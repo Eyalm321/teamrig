@@ -63,6 +63,58 @@ export function branchPatternProblem(pattern: string): string | undefined {
   return problem === undefined ? undefined : `makes no branch name (${sample}): ${problem}`;
 }
 
+/**
+ * What each placeholder matches in a branch name, as {@link taskBranchName} fills it: a branch type, the task id in
+ * lowercase, an issue number, a slug of lowercase words joined by `-` ({@link slugOf}), a session name (core/ids.ts).
+ */
+const PLACEHOLDER_MATCH: { readonly [P in BranchPlaceholder]: string } = {
+  type: '[a-z][a-z0-9]*',
+  id: 't[1-9][0-9]*',
+  issue: '[0-9]+',
+  slug: '[a-z0-9]+(?:-[a-z0-9]+)*',
+  session: '[a-z][a-z0-9-]*',
+};
+
+/** The branch names `pattern` makes, its text outside placeholders kept as written. */
+function patternMatcher(pattern: string): RegExp {
+  let source = '';
+  let at = 0;
+  for (const match of pattern.matchAll(PLACEHOLDER)) {
+    const name = match[1] ?? '';
+    source += escapeRegExp(pattern.slice(at, match.index)) + (isPlaceholder(name) ? `(?:${PLACEHOLDER_MATCH[name]})` : escapeRegExp(match[0]));
+    at = match.index + match[0].length;
+  }
+  return new RegExp(`^${source}${escapeRegExp(pattern.slice(at))}$`);
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** A team's branch patterns: `pattern`, then each branch type's own, each once. */
+export function branchPatternsOf(branches: BranchesConfig): readonly string[] {
+  return [...new Set([branches.pattern, ...Object.values(branches.typePatterns)])];
+}
+
+/**
+ * Why `branch` may not be made as a new branch, or undefined when it may (T1433): while `delivery.branches.enforce` is
+ * on, its name must be one of the team's patterns makes, so a project never mixes branch styles. Only a new branch is
+ * checked; branches already there keep their names, and every task-from-branch read stays owner.ts `branchTaskOf`,
+ * whose rule is the one {@link branchPatternProblem} holds every pattern's `{id}` to.
+ */
+export function branchPatternRefusal(branch: string, branches: BranchesConfig): string | undefined {
+  if (!branches.enforce) {
+    return undefined;
+  }
+  const patterns = branchPatternsOf(branches);
+  if (patterns.some((pattern) => patternMatcher(pattern).test(branch))) {
+    return undefined;
+  }
+  const sample = fill(branches.pattern, { type: branches.itemTypes.task, id: 't12', issue: '933', slug: 'parser', session: 'web' });
+  const names = patterns.length === 1 ? `the branch pattern ${patterns[0]}` : `any of the branch patterns ${patterns.join(', ')}`;
+  return `"${branch}" does not match ${names} (delivery.branches), such as ${sample}; delivery.branches.enforce false lets any name through`;
+}
+
 /** The branch `pattern` names for `words`; refused when it uses a word the task lacks, or makes no branch name. */
 export function branchNameFor(pattern: string, words: BranchWords): BranchName {
   const patternProblem = branchPatternProblem(pattern);
