@@ -792,7 +792,7 @@ describe('parseConfig', () => {
 
   it('names new branches by Conventional Branch when delivery.branches is absent (T2690)', () => {
     const { config } = parseConfig(ROSTER);
-    assert.deepEqual(config.delivery.branches, { pattern: '{type}/{id}-{slug}', typePatterns: {}, itemTypes: { task: 'feat', bug: 'fix' }, classes: {}, slugMax: 40 });
+    assert.deepEqual(config.delivery.branches, { pattern: '{type}/{id}-{slug}', typePatterns: {}, itemTypes: { task: 'feat', bug: 'fix' }, classes: {}, slugMax: 40, enforce: true });
   });
 
   it("keeps the team's branch pattern, per-type patterns, type maps and slug cap, item types over the defaults", () => {
@@ -802,6 +802,7 @@ describe('parseConfig', () => {
       itemTypes: { bug: 'bugfix' },
       classes: { Improvements: 'chore', 'Tech debt': 'refactor' },
       slugMax: 24,
+      enforce: false,
     };
     const { config, issues } = parseConfig({ ...ROSTER, delivery: { branches } });
     assert.deepEqual(issues, []);

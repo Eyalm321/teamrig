@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { DEFAULT_BRANCHES } from '../config/defaults.ts';
 import { FakeHooks } from '../testing/fake-hooks.ts';
 import { FakeWorktreeFiles, FakeWorktreeGit, type FakeGitAnswers } from '../testing/fake-worktrees.ts';
 import { createWorktree, MAIN_CHECKOUT_ENV, type AddEnd, type AddRequest } from './add.ts';
@@ -74,6 +75,21 @@ describe('createWorktree (T1305)', () => {
     for (const branch of ['t12-parser', 'feature/T12.x_y', 'a.b/c-d']) {
       assert.equal(branchNameProblem(branch), undefined, branch);
     }
+  });
+
+  it("refuses a new branch off the team's branch pattern before any change, and takes it with enforce off (#1433)", async () => {
+    const ports = world();
+    const { end } = await add(ports, { branch: 't9-parser', branches: DEFAULT_BRANCHES });
+    assert.deepEqual(end, {
+      kind: 'refused',
+      reason:
+        '"t9-parser" does not match the branch pattern {type}/{id}-{slug} (delivery.branches), such as feat/t12-parser; delivery.branches.enforce false lets any name through: give a name that does, or --task <T id> to name it from its task',
+    });
+    assert.deepEqual(ports.git.steps, []);
+    const on = world();
+    assert.equal((await add(on, { branch: 'feat/t9-parser', branches: DEFAULT_BRANCHES })).end.kind, 'added');
+    const off = world();
+    assert.equal((await add(off, { branch: 't9-parser', branches: { ...DEFAULT_BRANCHES, enforce: false } })).end.kind, 'added');
   });
 
   it("fails a fetch with nothing made, and a git worktree add with git's reason", async () => {
