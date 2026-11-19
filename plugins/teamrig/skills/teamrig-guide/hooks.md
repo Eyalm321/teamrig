@@ -81,9 +81,9 @@ The injected context holds:
 3. **The tree of teams**, when the team has a parent or children: whom to escalate to, and for a lead with
    sub-teams, how to read and hand them tasks.
 4. **Notes**: a config with problems or from a newer teamrig; a recorded rename; a tab bound by its title:
-   ``This tab was bound to the `web` session from its Claude Code title; nothing was marked read.``, or, after a
+   ``This tab was bound to the `web` session from its Claude Code title; binding it marked nothing read.``, or, after a
    `/clear` in a tab whose title names no session, by the Claude Code process the session refreshed in (for 24 hours):
-   ``This tab was bound to the `web` session: /clear kept the Claude Code process that session refreshed in; nothing was marked read.``
+   ``This tab was bound to the `web` session: /clear kept the Claude Code process that session refreshed in; binding it marked nothing read.``
    A tab `$TEAMRIG_SESSION` names is bound the same way at every start, a `/clear` too, with no note, so the task pane
    keeps showing its session; only a failure gives a note, and the tab's first `inbox read` then binds it.
 5. **The team's own `rules.md`**, when it exists. In a sub-team, the `rules.md` of each team above comes first, the
@@ -261,7 +261,7 @@ a title bracketing another team binds none of this team's sessions).
 The hook then knows it as `inbox read` would, marks nothing read, and says so once:
 
 ```text
-teamrig: this tab is now the `web` session of team shop (name `shop-web`), from its Claude Code title; nothing was marked read.
+teamrig: this tab is now the `web` session of team shop (name `shop-web`), from its Claude Code title; binding it marked nothing read.
 ```
 
 A tab it cannot bind gets one line per Claude Code session saying how:
