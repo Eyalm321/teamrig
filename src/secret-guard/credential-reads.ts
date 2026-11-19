@@ -151,8 +151,9 @@ export const NO_SEARCH_START: SearchStart = { dir: undefined, inWorkTree: () => 
  * True when the line runs only repository searches (`repoSearch`) and nothing else: no command that starts no
  * program (a shell variable set alone), none whose program the walker cannot name, no shell fed from a pipe, and no
  * environment set for what it starts (`NAME=value git`, `env NAME=value git`), since the environment can name a
- * program git starts. Each search runs where the line starts (no `cd`, `pushd` or subshell move before it), and that
- * folder lies inside a git work tree, asked last as it starts git.
+ * program git starts. Each search runs where the line starts, on a line that moves no folder or folder stack at all
+ * (no `cd`, `pushd`, `popd` or `Set-Location`, even one that seems to come back), so no misread of a move can place
+ * a search elsewhere, and that folder lies inside a git work tree, asked last as it starts git.
  */
 function onlyRepoSearches(runs: LineRuns, start: SearchStart): boolean {
   const dir = start.dir;
@@ -160,6 +161,7 @@ function onlyRepoSearches(runs: LineRuns, start: SearchStart): boolean {
     dir !== undefined &&
     runs.programs.length > 0 &&
     runs.programs.every((run) => repoSearch(run) && run.dir === dir) &&
+    runs.moves.length === 0 &&
     runs.bare.length === 0 &&
     runs.opaque.length === 0 &&
     runs.fedShells.length === 0 &&

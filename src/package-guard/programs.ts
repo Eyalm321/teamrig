@@ -139,6 +139,8 @@ export interface LineRuns {
    * stays in `bare`.
    */
   readonly envEdits: EnvEdits[];
+  /** The words of each command that moves the shell's folder or its folder stack (`cd`, `pushd`, `popd`, `Set-Location` and the rest), which start no program. */
+  readonly moves: (readonly ShellWord[])[];
 }
 
 export interface ProgramsContext {
@@ -168,7 +170,7 @@ const PIPE_END = /(?:^|[^|])\|&?[\n(]*$/;
 
 /** What `command` runs, each in the order it runs. */
 export function runsOf(command: string, context: ProgramsContext): LineRuns {
-  const runs: LineRuns = { programs: [], bare: [], opaque: [], fedShells: [], foreignShells: [], envEdits: [] };
+  const runs: LineRuns = { programs: [], bare: [], opaque: [], fedShells: [], foreignShells: [], envEdits: [], moves: [] };
   visitScript(staticWord(command), context.dialect, new Location(context.cwd, context.home), 0, TOP, runs, SCREEN, false);
   return runs;
 }
@@ -255,6 +257,7 @@ function visitCommand(
   runs: LineRuns,
 ): Visited | undefined {
   if (location.apply(command.words, dialect)) {
+    runs.moves.push(command.words);
     return undefined;
   }
   const launched = launch(command.words, dialect, inlet.text);
