@@ -49,6 +49,20 @@ describe('holdHead', () => {
     assert.match(logs.at(-1) ?? '', /^the branch is back on [0-9a-f]{9}, the head this run started from, with the plan uncommitted on it$/);
   });
 
+  it('cleans a stray whose name is a glob as that one file, leaving the untracked plan file it would match', () => {
+    // `[n]ew.txt` rather than `*`, which Windows refuses as a file name; both match new.txt as a glob.
+    repo.write('a.txt', 'a changed, uncommitted\n');
+    repo.write('new.txt', 'new, untracked\n');
+    const held = holdHead(deps);
+    repo.write('[n]ew.txt', 'a file main adds\n');
+    repo.git('add', '--', ':(literal)[n]ew.txt');
+    repo.git('commit', '-q', '-m', 'main adds a file named like a glob');
+
+    held.restore();
+    assert.equal(readFileSync(join(repo.dir, 'new.txt'), 'utf8'), 'new, untracked\n');
+    assert.equal(repo.has('[n]ew.txt'), false);
+  });
+
   it('with nothing uncommitted, puts back only the head', () => {
     const head = repo.git('rev-parse', 'HEAD').trim();
     const held = holdHead(deps);
