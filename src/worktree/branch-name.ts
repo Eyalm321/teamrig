@@ -67,51 +67,62 @@ const LOWER = /[a-z]/;
 const DIGIT = /[0-9]/;
 const LOWER_OR_DIGIT = /[a-z0-9]/;
 const SESSION_CHAR = /[a-z0-9-]/;
+const NONZERO_DIGIT = /[1-9]/;
 
-/** Where a run of `allowed` characters from `from` ends: `from` itself when there is none. */
-function runEnd(text: string, from: number, allowed: RegExp): number {
-  let at = from;
-  while (at < text.length && allowed.test(text.charAt(at))) {
-    at += 1;
-  }
-  return at;
-}
-
-/** Every end from `first` to `last`, both included; none when `first` is past `last`. */
-function endsBetween(first: number, last: number): readonly number[] {
-  return first > last ? [] : Array.from({ length: last - first + 1 }, (_, n) => first + n);
-}
-
-/** `first` matched at `at`, then any run of `rest`: every end after the first character. */
-function headThenRun(text: string, at: number, first: RegExp, rest: RegExp): readonly number[] {
-  return at < text.length && first.test(text.charAt(at)) ? endsBetween(at + 1, runEnd(text, at + 1, rest)) : [];
-}
-
-/** Lowercase words of letters and digits joined by single `-`s ({@link slugOf}): every end after a word's character. */
-function slugEnds(text: string, at: number): readonly number[] {
-  const ends: number[] = [];
-  let word = at;
-  while (word < text.length && LOWER_OR_DIGIT.test(text.charAt(word))) {
-    const end = runEnd(text, word, LOWER_OR_DIGIT);
-    ends.push(...endsBetween(word + 1, end));
-    if (text.charAt(end) !== '-') {
-      break;
-    }
-    word = end + 1;
+/** For each place in `text`, where the run of `allowed` characters from it ends: the place itself when none starts there. */
+function runEnds(text: string, allowed: RegExp): Int32Array {
+  const ends = new Int32Array(text.length + 1);
+  ends[text.length] = text.length;
+  for (let at = text.length - 1; at >= 0; at -= 1) {
+    ends[at] = allowed.test(text.charAt(at)) ? (ends[at + 1] ?? at) : at;
   }
   return ends;
 }
 
+/** What the matcher reads of a branch name, worked out once per name in passes from its end. */
+class NameRuns {
+  readonly text: string;
+  readonly digits: Int32Array;
+  readonly lowerOrDigits: Int32Array;
+  readonly sessionChars: Int32Array;
+  /** How far a slug from each place can reach: words of letters and digits joined by single `-`s ({@link slugOf}). */
+  readonly slugReach: Int32Array;
+
+  constructor(text: string) {
+    this.text = text;
+    this.digits = runEnds(text, DIGIT);
+    this.lowerOrDigits = runEnds(text, LOWER_OR_DIGIT);
+    this.sessionChars = runEnds(text, SESSION_CHAR);
+    this.slugReach = new Int32Array(text.length + 1);
+    for (let at = text.length; at >= 0; at -= 1) {
+      const word = this.lowerOrDigits[at] ?? at;
+      const joined = word > at && text.charAt(word) === '-' && this.is(word + 1, LOWER_OR_DIGIT);
+      this.slugReach[at] = joined ? (this.slugReach[word + 1] ?? word) : word;
+    }
+  }
+
+  is(at: number, allowed: RegExp): boolean {
+    return at < this.text.length && allowed.test(this.text.charAt(at));
+  }
+}
+
+/** The ends a placeholder's word can have from one start: every place from `first` to `last`, both included. */
+interface EndRange {
+  readonly first: number;
+  readonly last: number;
+}
+
 /**
  * Where each placeholder's word can end when it starts at `at`, as {@link taskBranchName} fills it: a branch type, the
- * task id in lowercase, an issue number, a slug, a session name (core/ids.ts).
+ * task id in lowercase, an issue number, a slug (which ends only after a letter or digit, see `patternMakes`), a
+ * session name (core/ids.ts).
  */
-const PLACEHOLDER_ENDS: { readonly [P in BranchPlaceholder]: (text: string, at: number) => readonly number[] } = {
-  type: (text, at) => headThenRun(text, at, LOWER, LOWER_OR_DIGIT),
-  id: (text, at) => (text.charAt(at) === 't' ? headThenRun(text, at + 1, /[1-9]/, DIGIT) : []),
-  issue: (text, at) => headThenRun(text, at, DIGIT, DIGIT),
-  slug: slugEnds,
-  session: (text, at) => headThenRun(text, at, LOWER, SESSION_CHAR),
+const PLACEHOLDER_ENDS: { readonly [P in BranchPlaceholder]: (runs: NameRuns, at: number) => EndRange | undefined } = {
+  type: (runs, at) => (runs.is(at, LOWER) ? { first: at + 1, last: runs.lowerOrDigits[at + 1] ?? at + 1 } : undefined),
+  id: (runs, at) => (runs.text.charAt(at) === 't' && runs.is(at + 1, NONZERO_DIGIT) ? { first: at + 2, last: runs.digits[at + 2] ?? at + 2 } : undefined),
+  issue: (runs, at) => (runs.is(at, DIGIT) ? { first: at + 1, last: runs.digits[at] ?? at + 1 } : undefined),
+  slug: (runs, at) => (runs.is(at, LOWER_OR_DIGIT) ? { first: at + 1, last: runs.slugReach[at] ?? at + 1 } : undefined),
+  session: (runs, at) => (runs.is(at, LOWER) ? { first: at + 1, last: runs.sessionChars[at + 1] ?? at + 1 } : undefined),
 };
 
 /** A pattern as the parts a name must hold in order: text kept as written, or a placeholder's word. */
@@ -129,25 +140,50 @@ function partsOf(pattern: string): readonly PatternPart[] {
   return parts;
 }
 
+/** The places a placeholder's word can end at, from any of `places`: each start marks one range, one pass reads them all. */
+function placeholderEnds(runs: NameRuns, placeholder: BranchPlaceholder, places: Uint8Array): Uint8Array {
+  const length = runs.text.length;
+  const marks = new Int32Array(length + 2);
+  for (let at = 0; at <= length; at += 1) {
+    const range = places[at] === 1 ? PLACEHOLDER_ENDS[placeholder](runs, at) : undefined;
+    if (range !== undefined && range.first <= range.last) {
+      marks[range.first] = (marks[range.first] ?? 0) + 1;
+      marks[range.last + 1] = (marks[range.last + 1] ?? 0) - 1;
+    }
+  }
+  const ends = new Uint8Array(length + 1);
+  let open = 0;
+  for (let end = 0; end <= length; end += 1) {
+    open += marks[end] ?? 0;
+    // A slug's range spans its joining `-`s, where no slug ends.
+    ends[end] = open > 0 && (placeholder !== 'slug' || runs.text.charAt(end - 1) !== '-') ? 1 : 0;
+  }
+  return ends;
+}
+
 /**
- * Whether `pattern` makes `branch`. It keeps the set of places in the name each part can end at, so it tries each split
- * between neighbouring placeholders once: a regex backtracks through every split of them, which grows as the name's
- * length to the power of their count (a long name that misses `{slug}-{slug}-{slug}` takes seconds).
+ * Whether `pattern` makes `branch`. It keeps the places in the name each part can end at, each part read in one pass
+ * over the name: a regex backtracks through every split between neighbouring placeholders that both take a `-`, which
+ * grows as the name's length to the power of their count (a long name that misses `{slug}-{slug}-{slug}` takes seconds).
  */
 function patternMakes(pattern: string, branch: string): boolean {
-  let places: ReadonlySet<number> = new Set([0]);
+  const runs = new NameRuns(branch);
+  let places: Uint8Array = new Uint8Array(branch.length + 1);
+  places[0] = 1;
   for (const part of partsOf(pattern)) {
-    const next = new Set<number>();
-    for (const at of places) {
-      if ('placeholder' in part) {
-        PLACEHOLDER_ENDS[part.placeholder](branch, at).forEach((end) => next.add(end));
-      } else if (branch.startsWith(part.text, at)) {
-        next.add(at + part.text.length);
+    if ('placeholder' in part) {
+      places = placeholderEnds(runs, part.placeholder, places);
+      continue;
+    }
+    const next = new Uint8Array(branch.length + 1);
+    for (let at = 0; at + part.text.length <= branch.length; at += 1) {
+      if (places[at] === 1 && branch.startsWith(part.text, at)) {
+        next[at + part.text.length] = 1;
       }
     }
     places = next;
   }
-  return places.has(branch.length);
+  return places[branch.length] === 1;
 }
 
 /** A team's branch patterns: `pattern`, then each branch type's own, each once. */
