@@ -259,7 +259,7 @@
     "dist/cli/secret-hook-check.js": "10d0a90d05ba29326d2d0078792b94745950e699d671fb160d0ff469f1bba616",
     "dist/cli/settled-install.js": "9cc4d1dc2961f3d09aed5eecc81495c9aa9f4dba76072af25a0d4af7793e8c36",
     "dist/cli/ship-approval.js": "be803198ed3fe1ae8f94fbd2ad346c9e1fc05c2e20d7b8ce476877258bdcf588",
-    "dist/cli/ship-role-check.js": "2ba1eb622b62cd3acd0f4172a21ba0b132eac5c758924770cf9c7b9663382553",
+    "dist/cli/ship-role-check.js": "051e2dbccfef6c900bd2caef4334cf154dcf3e227779b327638b4a6af8db2fcb",
     "dist/cli/skill-listing.js": "40e2ddf4ad89f122eed63347fb018cce419e652806caae1ce558f1a1a733a9ae",
     "dist/cli/stats-github.js": "508361b6f30e4d55bb5ee3d1254a5b08b95b32ff2c847df6cb185ec3c52f4b99",
     "dist/cli/stats-use.js": "3f348295cdb7eed19d38cd116d5ac7d0fec604051d135fa5a17440cadedadb98",
