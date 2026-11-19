@@ -25,6 +25,9 @@ lets `teamrig merge` take that base, head and tree only.
 
 Approve only when every line holds:
 
+- Still relevant: main has not changed the code it touches since it was written, no later change already fixed or
+  replaced it, and landing it now undoes no newer work. A stale one you decline, saying what changed, so it is
+  re-scoped or dropped, never landed as written.
 - Its own, finished change: the requester's task and branch, never another session's work, as only the session
   that made a change merges it.
 - Its tests are green, the run named in the note, and new behaviour comes with new tests.
