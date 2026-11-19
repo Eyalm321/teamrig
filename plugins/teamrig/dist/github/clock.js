@@ -158,7 +158,7 @@ export function lateText(clock, now, zone) {
 /** How many refs a grouped line names before it gives the rest as a count (#1475). */
 const GROUPED_REFS = 3;
 /** When a clock's answer target falls. */
-function dueAt(clock) {
+export function dueAt(clock) {
     return clock.since + targetMs(clock.kind);
 }
 /** The first GROUPED_REFS of `clocks` as `named` words them, and ` and N more` for the rest. */
