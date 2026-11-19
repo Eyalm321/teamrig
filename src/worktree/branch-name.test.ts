@@ -52,6 +52,25 @@ describe('branchPatternRefusal (#1433)', () => {
     assert.match(branchPatternRefusal('wipxfeat/t1-a', branches) ?? '', /does not match/);
   });
 
+  it('splits a name between placeholders that both take a -, in any way that fits', () => {
+    const branches: BranchesConfig = { ...DEFAULT_BRANCHES, pattern: '{slug}-{session}/{id}-{slug}' };
+    for (const branch of ['a-web/t1-b', 'a-b-c-team-oss/t1-b-c', 'a1-w-/t1-x']) {
+      assert.equal(branchPatternRefusal(branch, branches), undefined, branch);
+    }
+    for (const branch of ['a/t1-b', '-a-web/t1-b', 'a--web/t1-b', 'a-1web/t1-b']) {
+      assert.match(branchPatternRefusal(branch, branches) ?? '', /does not match/, branch);
+    }
+  });
+
+  it('answers a long miss at once, however many placeholders that take a - sit side by side', () => {
+    const branches: BranchesConfig = { ...DEFAULT_BRANCHES, pattern: `${Array(6).fill('{slug}').join('-')}/{id}` };
+    const branch = `${'ab-'.repeat(80)}ab/x`;
+    const started = performance.now();
+    assert.match(branchPatternRefusal(branch, branches) ?? '', /does not match/);
+    // A backtracking regex takes seconds here at 120 characters and grows as the name's length to the sixth power.
+    assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)} ms`);
+  });
+
   it('lets any name through with enforce off', () => {
     const branches: BranchesConfig = { ...DEFAULT_BRANCHES, enforce: false };
     for (const branch of ['t12-parser', 'my-fix', 'feature/T12-parser']) {
