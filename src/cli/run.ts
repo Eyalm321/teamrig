@@ -374,7 +374,7 @@ export const COMMAND_REST: CommandRest = new Set(Object.entries(COMMANDS).flatMa
 /** The table a line is read with, and each command's effect: what `/teamrig` plans a line from (src/slash/plan.ts). */
 export const COMMAND_TABLE: CommandTable = { flags: COMMAND_FLAGS, switches: COMMAND_SWITCHES, renamed: RENAMED, rest: COMMAND_REST, effects: COMMAND_EFFECTS };
 
-export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session})
+export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session}; every command takes --session <id|name> and --team <team>)
   team create <team> --sessions <id,id> [--lead <id>] [--project <dir>] [--parent <team>] [--dry-run]
       writes the team config, ties the project folder to the team (the lead defaults to lead) and
       starts a root team's lead on its first task, setting the team up; --parent hangs it under
@@ -1152,6 +1152,11 @@ export async function runCli(given: readonly string[], runtime: CliRuntime): Pro
       throw new UsageError(`unknown command "${args.command}"`);
     }
     refuseSettingsWrite(args.command, args.switches, runtime);
+    if (args.common.size > 0) {
+      // Loaded only then, as it reads the team's config: a hook passes neither flag and loads only its own code.
+      const common = await import('./common-flags.ts');
+      await common.checkCommonFlags(args, runtime);
+    }
     if (spec.effect === 'write' && spec.bindsTab !== true) {
       // A write runs only as the tab's own session, whatever --session says (T3082); a tab's binding has its own rule.
       await (await tabSessionCommands()).refuseAnotherTabSession(args, runtime);
