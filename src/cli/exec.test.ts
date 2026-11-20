@@ -53,7 +53,7 @@ class ExecTeam {
     this.webhook = webhook;
     this.pinned = !pinned;
     this.options = {
-      self: { ...quietWorld().self, execArgv },
+      self: { ...quietWorld().self, node: NODE_RUNTIME.path, execArgv },
       platform: 'win32',
       probe: probeOf('C:/nodejs/node.exe'),
       exec: { spawner: this.spawner, checkout: new FakeCheckout(), runtime: this.runtime },
@@ -152,7 +152,16 @@ describe('runCli: exec request, a privileged command asked for review (T755)', (
     const team = new ExecTeam();
     assertRefused(await team.request(execDraft({ argv: ['python', 'fix.py'] })), /argv\[0\] "python" is not a file on the exec PATH \(exec\.path: C:\/nodejs\)/);
     const bare = new ExecTeam(TEAM);
-    assertRefused(await bare.request(), /argv\[0\] "node" is not a file on the exec PATH \(exec\.path names no folder\)/);
+    assertRefused(await bare.request(execDraft({ argv: ['python', 'fix.py'] })), /argv\[0\] "python" is not a file on the exec PATH \(exec\.path names no folder\)/);
+  });
+
+  it("starts a bare node as the client's own runtime, never one on the exec PATH (#870)", async () => {
+    const team = new ExecTeam({ ...EXEC_TEAM, exec: { path: ['C:/other'] } });
+    assertOk(await team.request());
+    assert.match(outputOf(await team.run('status', 'R1')), /run: \["node","tools\/fix-models.ts","--apply"\] \(starts C:\\nodejs\\node\.exe\)/);
+    assert.match(outputOf(await team.run('status', 'R1')), /dry run: \["node","tools\/fix-models.ts"\] \(starts C:\\nodejs\\node\.exe\)/);
+    assertOk(await team.run('dry-run', 'R1'));
+    assert.equal(team.spawner.asks[0]?.program, 'C:\\nodejs\\node.exe');
   });
 });
 

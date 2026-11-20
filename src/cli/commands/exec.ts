@@ -46,6 +46,8 @@ interface ExecTeam {
   /** The folders reviewed programs come from (exec.path), joined as a PATH value. */
   readonly execPath: string;
   readonly search: PathSearchDeps;
+  /** The Node.js program this client runs under, which a request's bare `node` starts (#870). */
+  readonly node: string;
   readonly scanner: SecretScanner;
 }
 
@@ -73,6 +75,7 @@ function execTeamOf(runtime: CliRuntime, kit: Kit, config: KitConfig): ExecTeam 
     audit: new AuditLog(kit.paths.execAudit, files, lock, clock),
     execPath,
     search: { env: { PATH: execPath }, platform, probe: runtime.probe },
+    node: runtime.self.node,
     scanner: new SecretScanner(config.register.secretPatterns),
   };
 }
@@ -231,7 +234,7 @@ async function requestFileJson(runtime: CliRuntime, path: string): Promise<unkno
 /** The file `argv[0]` starts, found on the exec PATH; a refusal names the folders searched. */
 async function programOf(field: string, argv: readonly string[], team: ExecTeam): Promise<string> {
   const [argv0 = ''] = argv;
-  const program = await resolveProgram(argv0, team.search);
+  const program = await resolveProgram(argv0, team.search, team.node);
   if (program === undefined) {
     const folders = team.config.exec.path.length === 0 ? 'exec.path names no folder' : `exec.path: ${team.config.exec.path.join(', ')}`;
     throw new RefusedError(`${field}[0] "${argv0}" is not a file on the exec PATH (${folders})`);
@@ -316,7 +319,7 @@ export async function nodePin(args: ParsedArgs, runtime: CliRuntime): Promise<Ex
 function executorOf(team: ExecTeam, runtime: CliRuntime): Executor {
   return new Executor({
     audit: team.audit,
-    binding: { checkout: runtime.exec.checkout, search: team.search },
+    binding: { checkout: runtime.exec.checkout, search: team.search, node: team.node },
     spawner: runtime.exec.spawner,
     credentials: environmentCredentials(runtime.env, runtime.platform),
     verifier: new UnsignedReviews(),

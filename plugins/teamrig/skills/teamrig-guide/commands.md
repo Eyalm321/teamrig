@@ -2081,7 +2081,7 @@ Checks a request file and logs it as the next `R<n>`; nothing runs yet. The file
 - `kind`: `db-write`, `route`, `pod-exec`, `cluster-write` or `external-write`.
 - `task`: the register task it serves (`T12`); `target`: what it changes, in words (`local app.items`).
 - `argv`: the command as a list, started with no shell; `argv[0]` is a program name on the exec PATH (`exec.path`)
-  or an absolute path. No inline code (`node -e`, `python -c`): a write runs a committed script.
+  or an absolute path. A bare `node` starts the runtime the client runs under, the pinned one, never a PATH lookup. No inline code (`node -e`, `python -c`): a write runs a committed script.
 - `cwd`: an absolute path. `binding`: `{repo, commit, lockSha256}`, the repository's absolute path, the full commit
   sha and the lockfile's SHA-256; a `pod-exec` binds `{image}`, an image pinned by digest.
 - `envNames`: the variables the run gets, by name; `readEnvNames`: the read-only ones the dry run gets. A
