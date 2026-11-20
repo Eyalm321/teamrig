@@ -47,9 +47,17 @@ export type OnOutput = (stream: 'out' | 'err', chunk: Buffer) => void;
  * Hands on the run's output and kills it with every process it started once it prints nothing for `idleMs` (0: never); settles
  * when the run has closed and any kill is done, so a hung run never holds the host past its silence limit. When the
  * limit passes on a busy host (`cpu` finds no room), the run gets another `idleMs`, up to `BUSY_STRETCH` limits in
- * all; output while the host is read starts the limit again.
+ * all; output while the host is read starts the limit again. With `started`, the limit runs only from the first output
+ * after which it says yes: a run that waits its turn in the host queue first is timed from when its step starts.
  */
-export function watchSilence(child: WatchedChild, idleMs: number, kill: TreeKill, onOutput: OnOutput, cpu: SilenceHostCpu): Promise<SilenceEnd> {
+export function watchSilence(
+  child: WatchedChild,
+  idleMs: number,
+  kill: TreeKill,
+  onOutput: OnOutput,
+  cpu: SilenceHostCpu,
+  started: () => boolean = () => true,
+): Promise<SilenceEnd> {
   return new Promise((resolve, reject) => {
     let killed: Promise<void> | undefined;
     let closed = false;
@@ -85,10 +93,13 @@ export function watchSilence(child: WatchedChild, idleMs: number, kill: TreeKill
         },
       );
     };
-    // An `idleMs` of 0 never stops the run: no timer is set, so only its own close ends the watch.
-    const arm = (): NodeJS.Timeout | undefined => (idleMs > 0 ? setTimeout(onIdle, idleMs) : undefined);
+    // An `idleMs` of 0 never stops the run, and nor does a run not yet started: no timer is set, so only output that
+    // starts it, or its own close, moves the watch on.
+    let running = started();
+    const arm = (): NodeJS.Timeout | undefined => (idleMs > 0 && running ? setTimeout(onIdle, idleMs) : undefined);
     let timer = arm();
     const heard = (): void => {
+      running ||= started();
       if (killed === undefined) {
         heardCount += 1;
         silentMs = 0;

@@ -184,6 +184,15 @@ describe('teamrig test', () => {
     assert.equal(shell.ran[1]?.command, `${QUEUE} --what 'test: npm test' --session alpha -- 'npm test'`);
   });
 
+  it("times a queued run's silence from its step's start line, and a bare run's from its start (#1532)", async () => {
+    const { kit, shell } = harness();
+    await kit.run(['test', '--', 'npm test'], { shell });
+    assert.equal(shell.ran[0]?.idleFrom, 'running: test: npm test', "the queue's wait for its turn is not timed");
+    const bare = new FakeShell();
+    await new CliHarness(TEAM, null).run(['test', '--', 'npm test'], { shell: bare });
+    assert.equal(bare.ran[0]?.idleFrom, undefined);
+  });
+
   it("runs bare when the team's config cannot be read, as the queue could not read it either", async () => {
     const kit = new CliHarness('{ not json');
     const shell = new FakeShell();
