@@ -12,6 +12,7 @@ import type { ParsedArgs } from '../args.ts';
 import { sessionRef, shellWordsOf } from '../inputs.ts';
 import { openKit, rosterOf, teamFolders } from '../kit.ts';
 import { EXIT, type CliRuntime, type ExitCode, type SelfLocation } from '../runtime.ts';
+import { STEP_RUNNING } from './queue.ts';
 
 /** Where a run's log goes, whose it is, and how much of its failures is printed. */
 interface LogPlace {
@@ -80,7 +81,12 @@ export function runsOneSpecFile(words: readonly string[]): boolean {
 export function queuedWords(self: SelfLocation, words: readonly string[], session: string | null): string[] {
   const size = runsOneSpecFile(words) ? ['--small'] : [];
   const owner = session === null ? [] : ['--session', session];
-  return [self.node, self.script, 'queue', '--kind', 'test', ...size, '--what', `test: ${labelOf(words)}`, ...owner, '--', ...words];
+  return [self.node, self.script, 'queue', '--kind', 'test', ...size, '--what', queuedWhat(words), ...owner, '--', ...words];
+}
+
+/** The step's name in the host queue, which its start line (`running: <what>`) names too. */
+function queuedWhat(words: readonly string[]): string {
+  return `test: ${labelOf(words)}`;
 }
 
 /** Runs the command; when it cannot start, the log (holding the command line) says why before the error goes on. */
@@ -97,7 +103,8 @@ async function runLogged(runtime: CliRuntime, request: ShellRequest, log: string
  * `teamrig test -- <command ...>`: runs a test command in the shell (in a team through the host queue, `queuedWords`), writes all it printed to a
  * numbered log (the session's newest 20 are kept) and prints one PASS or FAIL line, then each failing
  * test within `tests.maxFailureChars`, so a long test run costs the model a few lines. A run that prints
- * nothing for `tests.idleStopSeconds` is stopped with every process it started and fails (#1532). Exit 0 when
+ * nothing for `tests.idleStopSeconds` (a queued one from its step's start) is stopped with every process it started
+ * and fails (#1532). Exit 0 when
  * the command passed, 1 otherwise.
  */
 export async function test(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
@@ -107,7 +114,9 @@ export async function test(args: ParsedArgs, runtime: CliRuntime): Promise<ExitC
   const log = await reserveLog(runtime.files, place.dir, place.session, commandHeader(command));
   const run = place.queued ? commandLine(queuedWords(runtime.self, words, place.session), runtime.platform) : command;
   const started = runtime.clock.now();
-  const result = await runLogged(runtime, { command: run, cwd: runtime.cwd, env: withoutCredentials(runtime.env, place.passEnv), idleMs: place.idleStopSeconds * 1000 }, log);
+  // A queued run is timed from its step's start line: its wait for its turn in the queue prints nothing for long spells.
+  const idleFrom = place.queued ? { idleFrom: `${STEP_RUNNING}${queuedWhat(words)}` } : {};
+  const result = await runLogged(runtime, { command: run, cwd: runtime.cwd, env: withoutCredentials(runtime.env, place.passEnv), idleMs: place.idleStopSeconds * 1000, ...idleFrom }, log);
   const tookMs = runtime.clock.now() - started;
   const output = cleanOutput(result.output);
   await runtime.files.append(log, logBody(output, result.end));

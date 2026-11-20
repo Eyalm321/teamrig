@@ -17,6 +17,11 @@ export interface ShellRequest {
   readonly env: Env;
   /** Past this long with no output the command is stopped with every process it started; 0 never stops it. */
   readonly idleMs: number;
+  /**
+   * Output that starts the `idleMs` limit: until the command prints it, its silence is not timed. The host queue's line
+   * for the step starting, so a queued run's wait for its turn is never taken for a hang; none times it from the start.
+   */
+  readonly idleFrom?: string;
 }
 
 export interface ShellResult {
@@ -142,7 +147,9 @@ export function nodeShellRunner(
         }
       }
       try {
-        const end = await watchSilence(child, request.idleMs, kill, (_stream, chunk) => chunks.push(String(chunk)), cpu);
+        const { idleFrom } = request;
+        const started = idleFrom === undefined ? undefined : (): boolean => chunks.join('').includes(idleFrom);
+        const end = await watchSilence(child, request.idleMs, kill, (_stream, chunk) => chunks.push(String(chunk)), cpu, started);
         return { end: end.kind === 'idle' ? end : endOf(end.code, end.signal), output: chunks.join('') };
       } finally {
         if (grouped) {

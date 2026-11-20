@@ -160,6 +160,17 @@ describe('nodeShellRunner idle stop (#1532)', () => {
     assert.equal(await gone(pid, 5_000), true, 'the process the command started is ended with it');
   });
 
+  it('times nothing before the idleFrom output, then stops a command silent after it (a queued run waiting its turn)', async () => {
+    const command = script(
+      'queued.mjs',
+      "process.stdout.write('waiting for the host lock\\n');\nsetTimeout(() => { process.stdout.write('12:00:00 UTC running: test: npm test\\n'); setInterval(() => {}, 1000); }, 2500);\n",
+    );
+    const idleMs = 1_000;
+    const { end, output } = await nodeShellRunner(process.platform, kill, calm).run({ command, cwd: DIR, env: ENV, idleMs, idleFrom: 'running: test: npm test' });
+    assert.ok(output.includes('running: test: npm test'), `the wait past idleMs is not taken for a hang: ${output}`);
+    assert.deepEqual(end, { kind: 'idle', silentMs: idleMs });
+  });
+
   it('never stops a silent command when idleMs is 0', async () => {
     const command = script('quiet.mjs', 'setTimeout(() => { process.exitCode = 4; }, 300);\n');
     assert.deepEqual(await nodeShellRunner(process.platform, kill, calm).run({ command, cwd: DIR, env: ENV, idleMs: 0 }), { end: { kind: 'exited', code: 4 }, output: '' });
