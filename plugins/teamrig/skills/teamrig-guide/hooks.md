@@ -356,7 +356,8 @@ space in both) and the command `teamrig queue` or `teamrig test` runs after its 
 before that `--` leaves where the command starts unread, so the guard asks), but it does not see a push inside a
 script or program the command runs, `gh pr merge`,
 git extensions, or pushes run outside Claude Code. It is a guard against mistakes, not a sandbox: protect the
-branch on your git host too.
+branch on your git host too. A program that runs a command where the guard cannot read it (`ssh`, `tmux`,
+`screen`, `watch`, `at`, `crontab`, `docker`/`kubectl exec`) asks when the command it is handed names a push.
 
 ## Before a shell command: the commit guard
 
