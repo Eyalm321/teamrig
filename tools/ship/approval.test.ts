@@ -5,7 +5,7 @@ import { EXIT, RefusedError } from '../../src/cli/runtime.ts';
 import { mergeStandingOf, type MergeStanding } from '../../src/cli/ship-approval.ts';
 import { CLAUDE_SESSION, CliHarness, TEAM_HOME } from '../../src/testing/cli-harness.ts';
 import { TempRepo } from '../lib/temp-repo.ts';
-import { changePatch, clearMerge, clearMergeFrom, mergeClearance, type MergeReads, shipWritesOf, type StandingOf, teamrigShipWritesOf, type TabCallerOf, taskOfBranch, type WorkCommit, workChanges, workCommitsOf } from './approval.ts';
+import { changePatch, clearMerge, clearMergeFrom, clearTaskMerge, clearTaskMergeFrom, mergeClearance, type MergeReads, shipWritesOf, type StandingOf, teamrigShipWritesOf, type TabCallerOf, taskOfBranch, type WorkCommit, workChanges, workCommitsOf } from './approval.ts';
 import { profileFor, readProfiles } from './repos.ts';
 import { TEAMRIG_RELEASE_MANIFEST, TEAMRIG_RELEASE_STAMPS, TEAMRIG_SHIP_VERSION_FILES, TEAMRIG_VERSION_FILES } from './version-bump.ts';
 
@@ -177,6 +177,27 @@ describe('clearMerge', () => {
     });
     await assert.rejects(clearMerge(caller, broken, 't1-cli', HEAD, HEAD), /disk gone/);
   });
+
+  it('clearTaskMerge clears on the task the caller names, for a branch that names none, such as the release pull request (T4645)', async () => {
+    const asked: string[] = [];
+    const reads = readsOf(async (_team, _session, taskId) => {
+      asked.push(taskId);
+      return approvedBy(HEAD);
+    });
+    assert.deepEqual(await clearTaskMerge(caller, reads, 'T1', HEAD, HEAD), { kind: 'approved', by: 'lead' });
+    assert.deepEqual(asked, ['T1']);
+    assert.match(reasonOf(await clearTaskMerge({ ...caller, claudeSession: '' }, reads, 'T1', HEAD, HEAD)), /CLAUDE_CODE_SESSION_ID/);
+    assert.match(reasonOf(await clearTaskMerge(caller, fixed(await standing(await waitingKit())), 'T1', HEAD, HEAD)), /T1 \(waiting\) holds no approval of lead/);
+  });
+
+  it('clearTaskMergeFrom reads the caller, team and tab from the env, as clearMergeFrom does', async () => {
+    const kit = await waitingKit(['--note', HEAD]);
+    const marks = join(TEAM_HOME, 'state', 'inbox-marks.jsonl');
+    await kit.files.append(marks, `${JSON.stringify({ v: 1, area: 'alpha', line: 0, at: '2030-01-08T09:00:00.000Z', claudeSession: CLAUDE_SESSION, lastLineHash: null })}\n`);
+    const env = { TEAMRIG_SESSION: 'alpha', TEAMRIG_TEAM: 'app', CLAUDE_CODE_SESSION_ID: CLAUDE_SESSION };
+    assert.deepEqual(await clearTaskMergeFrom(env, kit.runtime())('T1', HEAD, HEAD), { kind: 'approved', by: 'lead' });
+    assert.match(reasonOf(await clearTaskMergeFrom({ ...env, TEAMRIG_SESSION: 'bravo' }, kit.runtime())('T1', HEAD, HEAD)), /not bound to bravo alone/);
+  });
 });
 
 describe('shipWritesOf: how an approval reads the paths a ship writes again (T2914 F1)', () => {
@@ -204,6 +225,15 @@ describe('shipWritesOf: how an approval reads the paths a ship writes again (T29
   it("teamrigShipWritesOf, which the ship and the merge both read work by, knows the shipped repos.json's every path (T4298)", () => {
     const { regenerated } = profileFor(readProfiles(), 'GeneralA6/teamrig');
     assert.deepEqual(teamrigShipWritesOf(regenerated), shipWritesOf(regenerated, TEAMRIG_SHIP_VERSION_FILES, TEAMRIG_RELEASE_STAMPS));
+  });
+
+  it("teamrigShipWritesOf knows another repo's plugin manifest by its shape, and still refuses any other file (T4821)", () => {
+    const pane = 'plugins/teamrig-pane/.claude-plugin/plugin.json';
+    const { versionFiles } = teamrigShipWritesOf([pane, TEAMRIG_RELEASE_MANIFEST.path]);
+    assert.deepEqual(versionFiles.map((file) => file.path), [pane, TEAMRIG_RELEASE_MANIFEST.path]);
+    assert.equal(versionFiles[0]?.pattern.exec(manifest('0.77.0'))?.[2], '0.77.0');
+    assert.throws(() => teamrigShipWritesOf(['plugins/teamrig-pane/hooks/hooks.json']), /regenerated path plugins\/teamrig-pane\/hooks\/hooks\.json is no folder/);
+    assert.throws(() => teamrigShipWritesOf(['plugins/teamrig-pane/nested/.claude-plugin/plugin.json']), /is no folder the build rebuilds/);
   });
 });
 
