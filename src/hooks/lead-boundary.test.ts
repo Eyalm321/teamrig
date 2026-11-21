@@ -2,8 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ToolUse } from '../budget/line.ts';
 import { promptLine, replyLine, resultsLine, transcript } from '../testing/transcript-lines.ts';
-import { leadNudgeLine, leadStopLine, leadTallyOf, leadWorkOf, OwnPaths, taskOwnersOf, tasksSearched, TeamFolders, type LeadPaths, type SubTeamPlace } from './lead-boundary.ts';
+import { commandNormalized, leadNudgeLine, leadStopLine, leadTallyOf, leadWorkOf, OwnPaths, taskOwnersOf, tasksSearched, TeamFolders, type LeadPaths, type SubTeamPlace } from './lead-boundary.ts';
+import { shippedTranscripts } from '../testing/shipped-transcripts.ts';
 import { turnTasksOf, turnToolsOf } from './loop-nudge.ts';
+
+const reader = shippedTranscripts();
 
 const TEAM_HOME = '~/.teamrig/teams/app';
 const OWN = new OwnPaths([TEAM_HOME, '~/ops/lead', '~/ops/board/lead.md', '~/.claude/projects/*/memory'], 'D:\\team\\lee');
@@ -204,6 +207,34 @@ describe('the lead boundary', () => {
     assert.deepEqual(tasksSearched([own, other], unknown), ['T1', 'T2'], 'the register is read for their owners');
   });
 
+  it('resolves . and .. in a path before placing it (GeneralA6/teamrig#1278)', () => {
+    assert.equal(
+      leadWorkOf(tool('Edit', { path: '~/.teamrig/teams/app/tasks/T1/../../../outside/a.ts' }), PATHS),
+      'edit',
+      'a path through the lead own task folder that steps back out is outside the team',
+    );
+    assert.deepEqual(
+      TEAM.researchOf('~/.teamrig/teams/app/tasks/T1/../../notes/alpha/board.md'),
+      { name: 'notes/alpha', owner: 'alpha' },
+      'a path through the lead own task folder that steps back out places the file it reaches',
+    );
+    assert.equal(
+      leadWorkOf(tool('Edit', { path: '~/ops/lead/../lead/agenda.md' }), PATHS),
+      undefined,
+      'a path that steps out and back into the lead own folder stays quiet',
+    );
+  });
+
+  it('keeps a URL whole, since a scheme is no path to step through (GeneralA6/teamrig#1278)', () => {
+    assert.equal(commandNormalized('curl https://example.com/x', 'D:/team/lee'), 'curl https://example.com/x');
+    assert.equal(commandNormalized('rg --glob=https://example.com//x', 'D:/team/lee'), 'rg --glob=https://example.com//x');
+  });
+
+  it('keeps a .. in the word that spells it, not the word before (GeneralA6/teamrig#1278)', () => {
+    assert.equal(commandNormalized('cd ~/ops/lead && cat ../../x', 'D:/team/lee'), 'cd d:/team/lee/ops/lead && cat ../../x');
+    assert.equal(OWN.named('cd ~/ops/lead && cat ../../x'), true, 'the command still names the lead own folder');
+  });
+
   it('names the tasks whose folders a turn searches, each once, before their owners are known (T1467)', () => {
     const turn = [
       tool('Grep', { path: '~/.teamrig/teams/app/tasks/T1' }, 'k1'),
@@ -266,8 +297,8 @@ describe('the lead boundary', () => {
     const at = '2030-01-08T10:00:00.000Z';
     const reply = replyLine({ id: 'm1', requestId: 'r1', at, usage: { cacheRead: 1 }, tools: [{ id: 't1', name: 'Read', path: 'C:/app/a.ts' }] });
     const text = transcript([promptLine(at, 'see T9'), reply, promptLine(at, 'T12 asks: does T7 hold? T12 again, not T0 or XT5'), reply]);
-    assert.deepEqual(turnTasksOf(text, false), ['T12', 'T7']);
-    assert.deepEqual(turnTasksOf(transcript([promptLine(at), reply]), false), []);
+    assert.deepEqual(turnTasksOf(reader, text, false), ['T12', 'T7']);
+    assert.deepEqual(turnTasksOf(reader, transcript([promptLine(at), reply]), false), []);
   });
 
   it('reads the turn calls with their paths from the transcript, adding the current call', () => {
@@ -277,7 +308,7 @@ describe('the lead boundary', () => {
       replyLine({ id: 'm1', requestId: 'r1', at, usage: { cacheRead: 1 }, tools: [{ id: 't1', name: 'Edit', path: 'C:/app/a.ts' }] }),
       resultsLine(at, [{ id: 't1', text: 'ok' }]),
     ]);
-    const turn = turnToolsOf(text, false, tool('Read', { path: 'C:/app/b.ts' }, 't2'));
+    const turn = turnToolsOf(reader, text, false, tool('Read', { path: 'C:/app/b.ts' }, 't2'));
     assert.deepEqual(
       turn.map((call) => [call.name, call.path]),
       [

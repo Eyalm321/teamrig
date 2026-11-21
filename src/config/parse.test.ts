@@ -580,9 +580,9 @@ describe('parseConfig', () => {
   });
 
   it('reads a service role whose commands come from the table and whose holders are sessions of the team (T2984)', () => {
-    const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close', 'issue comment'] } } });
+    const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close'] } } });
     assert.deepEqual(issues, []);
-    assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close', 'issue comment'] } });
+    assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close'] } });
   });
 
   it('fails the load on an unknown command, a holder off the roster or a misspelt key, and leaves the role out (T2984 C3)', () => {
@@ -615,6 +615,13 @@ describe('parseConfig', () => {
     assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close'] } });
   });
 
+  it('grants no retired command name such as issue comment, with a warning, and keeps the rest (#1478, T3169)', () => {
+    const { config, issues, warnings } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close', 'issue comment'] } } });
+    assert.deepEqual(issues, []);
+    assert.deepEqual(paths(warnings), ['serviceRoles.github.commands[1]']);
+    assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close'] } });
+  });
+
   it('leaves out a role whose every command is unknown, with a warning and no issue, so it grants nothing (#1478)', () => {
     const { config, issues, warnings } = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue land'] } } });
     assert.deepEqual(issues, []);
@@ -626,8 +633,8 @@ describe('parseConfig', () => {
     const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'queue merge'] } } });
     assert.deepEqual(issues, []);
     assert.deepEqual(config.serviceRoles, { ship: { holders: 'team', commands: ['queue ship', 'queue merge'] } });
-    const mixed = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'issue comment'] } } });
-    assert.match(mixed.issues[0]?.message ?? '', /every session issue comment,/);
+    const mixed = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'issue close'] } } });
+    assert.match(mixed.issues[0]?.message ?? '', /every session issue close,/);
   });
 
   it('refuses "team" holders for a command that acts as whoever runs it (T2984 C4)', () => {
