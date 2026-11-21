@@ -304,11 +304,11 @@ const PIPE_TERMINATOR = /^\|&?\n*$/;
 const CODE_VARIABLES = /^(?:PROMPT_COMMAND|BASH_ENV|ENV|PS[0124])(?:\[[^\]]*\])?\+?=/;
 /**
  * A file whose text a later shell or git runs: a shell's startup file or a folder of them (`~/.bashrc.d/`,
- * `/etc/profile.d/`, fish's config), a git or husky hook, a systemd user unit, an autostart entry, direnv's
+ * `/etc/profile.d/`, fish's config and autoloaded functions), a git hook (of a bare `repo.git` too) or a husky one, a systemd user unit, an autostart entry, direnv's
  * `.envrc`. Only these folders count, so a project's own `src/hooks/` is data.
  */
 const LATER_CODE_FILE =
-  /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|mkshrc|envrc)|profile|bash\.bashrc|environment|fish\/config\.fish)$|(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|fish\/conf\.d|\.git\/hooks|\.husky|systemd\/user|(?:\.config|xdg)\/autostart)\//;
+  /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|mkshrc|envrc)|profile|bash\.bashrc|environment|fish\/config\.fish)$|(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|fish\/(?:conf\.d|functions)|\.husky|systemd\/user|(?:\.config|xdg)\/autostart)\/|\.git\/hooks\//;
 /** A redirection that writes its file: `>`, `>>`, `>|`, `&>`, `&>>`, with a descriptor number or not. */
 const WRITE_REDIRECTION = /^(?:\d*|&)>[>|]?$/;
 
