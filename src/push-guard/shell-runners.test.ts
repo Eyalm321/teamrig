@@ -69,6 +69,27 @@ const HANDS_X: readonly string[] = [
   'podman machine ssh X',
   "make -E 'all:; git push origin main'",
   `awk '{system($0)}' <<< X`,
+  // ssh config lines that name a command, run on this host or the other end
+  'ssh -o ProxyCommand=X localhost true',
+  `ssh -o 'ProxyCommand git pu""sh origin main' localhost true`,
+  'ssh -oLocalCommand=X -o PermitLocalCommand=yes localhost true',
+  'ssh -vo KnownHostsCommand=X host',
+  'ssh host -o RemoteCommand=X',
+  `ssh -o 'Match exec "git push origin main"' host`,
+  'scp -o ProxyCommand=X a host:b',
+  // a crontab's schedule is not its command
+  `crontab - <<< '* * * * * git pu""sh origin main'`,
+  `crontab <<< '@reboot git push origin main'`,
+  // expect's script is Tcl
+  `expect -c 'spawn git pu""sh origin main; interact'`,
+  `expect <<< 'spawn git push origin main'`,
+  // a static echo piped into a runner hands it that text
+  `echo 'git pu""sh origin main' | at now`,
+  `echo 'git pu""sh origin main' | ssh localhost`,
+  // a value with a variable in it
+  'export PROMPT_COMMAND="$PROMPT_COMMAND; git push origin main"',
+  'alias g="git push origin main $Y"',
+  'echo X > .husky/pre-push',
 ];
 
 /** Shapes that stay as they were: X is data, or the program runs something else. */
@@ -93,6 +114,12 @@ const UNCHANGED: readonly (readonly [string, string])[] = [
   ["kubectl exec p -- cat /var/log/push.log", 'pass'],
   ["ssh host 'cat push-notes.md'", 'pass'],
   ["echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc", 'pass'],
+  ["ssh -o ProxyCommand='ssh -W %h:%p bastion' host uptime", 'pass'],
+  ["crontab <<< '0 3 * * * /usr/bin/backup'", 'pass'],
+  ["expect -c 'spawn ssh host; interact'", 'pass'],
+  ["echo uptime | ssh localhost", 'pass'],
+  // a project's own hooks folder is data
+  ["cat > src/hooks/x.test.ts <<'EOF'\ngit push origin main\nEOF", 'pass'],
 ];
 
 describe('findGitInvocations: programs that run a command the guard cannot read', () => {
