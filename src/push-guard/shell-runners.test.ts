@@ -90,6 +90,8 @@ const HANDS_X: readonly string[] = [
   'export PROMPT_COMMAND="$PROMPT_COMMAND; git push origin main"',
   'alias g="git push origin main $Y"',
   'echo X > .husky/pre-push',
+  'echo X > ~/.config/fish/functions/git.fish',
+  'echo X > /srv/repo.git/hooks/post-receive',
 ];
 
 /** Shapes that stay as they were: X is data, or the program runs something else. */
