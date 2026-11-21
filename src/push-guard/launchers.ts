@@ -534,8 +534,10 @@ class LaunchReader {
     if (name === 'runuser' && read.user !== undefined) {
       return read.operands.length === 0 ? NOTHING : { kind: 'next', words: read.operands };
     }
-    // The words after the user are the shell's own arguments: `su root -- -c X` runs `sh -c X`.
-    return read.operands.length > 1 ? { kind: 'next', words: [staticWord('sh'), ...read.operands.slice(1)] } : NOTHING;
+    // The words after the user are the shell's own arguments: `su root -- -c X` runs `sh -c X`. A leading `-`
+    // operand asks for a login shell and comes before the user.
+    const operands = read.operands[0]?.text === '-' ? read.operands.slice(1) : read.operands;
+    return operands.length > 1 ? { kind: 'next', words: [staticWord('sh'), ...operands.slice(1)] } : NOTHING;
   }
 
   /** The index of the first operand among `args` as a `+` getopt with `table` reads them; undefined on an option it lacks. */
