@@ -90,7 +90,7 @@ describe('roles grant, revoke and list', () => {
     for (const call of [
       ['roles', 'grant', 'github', '--holder', 'bravo', '--commands', 'issue close', '--yes'],
       ['roles', 'revoke', 'github', '--holder', 'alpha', '--yes'],
-      ['roles', 'grant', 'docs', '--holder', 'bravo', '--commands', 'issue comment'],
+      ['roles', 'grant', 'docs', '--holder', 'bravo', '--commands', 'issue close'],
     ]) {
       assert.match(refusal(await kit.run(call)), /nothing written: serviceRoles\.github\.commands\[1\]: "issue delete" is no command this teamrig knows.*this tab would drop it/, call.join(' '));
     }
