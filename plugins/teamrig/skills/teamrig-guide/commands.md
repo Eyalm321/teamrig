@@ -757,8 +757,9 @@ window has reached 80% [budget.fiveHourWarnPct] or rises fast enough to fill bef
 session stalls until that reset; it is raised once a window, and a plan with no such window never shows it,
 RESET-EXPIRING: a reset grant in [budget.resets] with uses left expires within 14 days, and one not spent by then is
 lost; it is raised once a grant and again after each use, LOG-SIZE: a file of the team's `state` or `inbox` folder
-has reached 3 MiB, near the 4 MiB the task pane reads of a file at once, past which the pane stops reading it; it is
-raised once a file, GH-LATE: a GitHub issue or pull request has waited past its answer target
+has reached 3 MiB, near the 4 MiB the task pane reads of a file at once, past which the pane stops reading it, with
+that file's remedy (compact for the register and the hooks' aged logs, none yet for an inbox); it is raised once a
+file, GH-LATE: a GitHub issue or pull request has waited past its answer target
 (security 4 h, bug, pull request or a comment on an issue a task tracks 24 h, else 72 h) for an answer of ours, and
 its session, told at the target, a second window as long as the target and at most 24 h (at once when the lead
 answers it or its session is not on the team), by the clocks the last writing `teamrig issue sync` kept; one GH-LATE
@@ -1285,7 +1286,7 @@ Imports GitHub issues into the task list, inbound only. For each repository in `
 issues and those closed in the last `github.closedDays` days (14 by default) through the GitHub CLI, `gh`. It only
 ever lists issues: it never creates, edits, comments on, labels, assigns or closes anything on GitHub, and a task
 added with `teamrig add` stays in the task list and never goes to GitHub. Only commands run by hand write:
-`teamrig issue migrate` opens issues, `teamrig issue comment`, `teamrig issue edit` and `teamrig issue close`
+`teamrig issue migrate` opens issues, `teamrig issue reply`, `teamrig issue edit` and `teamrig issue close`
 comment on, rewrite and close them, and `teamrig issue links` links them as the task tree does;
 `teamrig issue similar` lists likely duplicates from the task list alone.
 Its old name, gh sync, is refused with this one (exit 64). Setup, tokens and every failure's fix:
@@ -1348,7 +1349,7 @@ unmerged, or one that starts to conflict with its base, to fail its checks, or g
 and with [github.activity] on one whose checks pass after failing or running; each is told once, never again while
 it lasts, and the first read of a repository only marks what is there. It goes to the owner of the task the pull
 request's branch names (`t<id>-...`) when an author inside the repository pushed that branch to the repository
-itself, else to `[github.watcher]` (unset: the first holder of a service role holding `issue comment`, else the
+itself, else to `[github.watcher]` (unset: the first holder of a service role holding `issue close`, else the
 lead). With [github.activity] on, an unwoken copy also goes to the owner of the task holding the pull request or a
 same-repository issue it closes, and to each session following it (`teamrig follow`). A run by hand prints a
 `PULL NEWS <session>` line per session and keeps nothing; `--auto` posts it. Titles are outside input, quoted as data.
@@ -1534,42 +1535,80 @@ NO ROW 1 live task(s) no row names: T44
 PREVIEW nothing was written; teamrig issue migrate <file> --yes opens the issues and sets each task's ref
 ```
 
-### teamrig issue comment
+### teamrig issue reply
 
-Posts one comment on an issue or pull request of the team's repositories, named as `owner/name#number`. A security
-hole is never its subject: that goes only to private reporting ([security skill](../security/SKILL.md#a-security-hole)). GitHub is
-the only host so far: the repository must be in `github.repos`, and the comment goes through `gh api` with the
-token saved for the owner as `teamrig-gh-<owner>`, never the `gh auth login` account (an `ACCESS` line names it).
-The token needs Issues and Pull requests: Read and write. It refuses, posting nothing, a caller not on the team, a
-target that is not `owner/name#number`, a repository not in `github.repos`, and a body that is empty, past 65,536
-characters, looks like it holds a secret, holds private data (a path inside a home folder, an e-mail address, an
-IPv4 address or an internal host name: the refusal names the shape, never the text), or names a task id (`T12`: ids
-are the team's own, so link issues by `#number`). A saved token the store cannot read stops it, never the `gh` login in its place. `TEAMRIG_GITHUB=off`
-prints an `OFF` line and posts nothing. It prints `COMMENTED <target>`, or `FAILED <target>: <reason>` with the fix
-(a token without the permission, an issue not there). Exit 1 when it failed, 2 when refused, else 0.
+A maintainer's reply on an issue or pull request of the team's repositories, named as `owner/name#number`, that
+takes the thread's state with its words, so a thread never says more than it shows: a "Picking this up" comment on an
+issue still `status:open`, unassigned, with its pull request unlinked, is the case it ends. It is the only way a
+session posts a comment; `teamrig issue close --comment` posts one as it closes. A security hole is never its
+subject: that goes only to private reporting ([security skill](../security/SKILL.md#a-security-hole)).
+
+It reads first and, on a refusal, writes nothing: the thread, the `--pr` (an open pull request of the same
+repository) and each `--assign` login. Then, in this order:
+
+1. `--status` sets the task holding the issue, through `teamrig set` with its own gates (`--note`, `--evidence`,
+   `--skill`, `--followups`, `--waits` and `--proof` go to it); a status may be given as the label shows it, such as
+   `'in review'` for verifying. A `set` that refuses stops the reply before GitHub.
+2. The issue's status label and assignee as the register now holds them (the same plan as `teamrig issue sync
+   --push`), and the `--assign` logins.
+3. `--pr`: a `Closes #<n>` line added to the pull request's body when no line there closes the issue (GitHub links
+   them by it), and the issue's labels it lacks, but for `status:` and `design`.
+4. `--followup`: a new issue for the part left over, its body from `--followup-body-file` with a `Split from #<n>.`
+   line; the comment gets a `Follow-up: #<k>` line.
+5. The comment, last.
+
+The first failure stops it with `FAILED <target>: <reason>; it already <what was done>; the comment was not posted`,
+so words never run ahead of the state. An issue no task holds is refused (`teamrig issue sync` adds the task). A pull
+request shows no status of its own: a reply on one takes no `--status` or `--pr` and needs labels on it first
+(`teamrig issue label`).
+
+GitHub is the only host so far: the repository must be in `github.repos`, and every write goes through `gh api` with
+the token saved for the owner as `teamrig-gh-<owner>`, never the `gh auth login` account (an `ACCESS` line names
+it). The token needs Issues and Pull requests: Read and write. It refuses, writing nothing, a caller not on the
+team, a target that is not `owner/name#number`, a repository not in `github.repos`, and a text (the body file, the
+follow-up's title and body) that is empty, past 65,536 characters, looks like it holds a secret, holds private data
+(a path inside a home folder, an e-mail address, an IPv4 address or an internal host name: the refusal names the
+shape, never the text), or names a task id (`T12`: ids are the team's own, so link issues by `#number`). The text
+comes from a file, so a reply of many lines survives the shell; a file the secret guard keeps is never read. No
+saved token, or one the store cannot read, stops it, never the `gh` login in its place. `TEAMRIG_GITHUB=off` prints
+an `OFF` line and writes nothing. Exit 1 when it failed, 2 when refused, else 0.
 
 Flags:
 
 - `--session <id|name>`: the caller, a session of the team.
-- `--body <text>`: the comment, required.
+- `--body-file <path>`: the comment, required.
+- `--status <status>`: the status the task holding the issue gets, as `teamrig set` takes it or as the label shows it.
+- `--note <text>`: passed to `teamrig set`, as are the five below; each is refused without `--status`.
+- `--evidence <text>`: the evidence `teamrig set` takes on done.
+- `--skill <name|none>`: the skill `teamrig set` takes on done.
+- `--followups <tasks|none>`: the tasks it leaves, which `teamrig set` takes on verifying and done.
+- `--waits <on>`: what it waits on, for `teamrig set` on waiting.
+- `--proof <text>`: the proof `teamrig set` takes on verifying.
+- `--pr <n>`: the open pull request of the same repository that answers the issue.
+- `--followup <title>`: the title of the issue to open for the part left over.
+- `--followup-body-file <path>`: that issue's body.
+- `--assign <login,...>`: logins to assign, each read first as one the repository may assign.
 
 Example:
 
 ```sh
-teamrig issue comment acme/web#7 --body "Fixed in #9, thank you."
+teamrig issue reply acme/web#7 --body-file reply.md --status 'in review' --followups none --pr 9
 ```
 
 Output:
 
 ```text
 ACCESS acme: writes with the token saved as teamrig-gh-acme
+SET acme/web#7 T12 verifying: add status:in review, take off status:in progress
+LINKED acme/web#9: its body now closes #7
+LABELED acme/web#9: "bug"
 COMMENTED acme/web#7
 ```
 
 ### teamrig issue edit
 
 Replaces the body (the description) of one issue or pull request of the team's repositories with the text of a file,
-with the same access and checks as `teamrig issue comment`: the text is refused, changing nothing, when it is empty,
+with the same access and checks as `teamrig issue reply`: the text is refused, changing nothing, when it is empty,
 past 65,536 characters, looks like it holds a secret, holds private data or names a task id. The title, state,
 labels and assignees stay, and GitHub keeps the old body in the issue's edit history. The text comes from a file, as
 a full description runs to many lines a shell argument would mangle; a byte-order mark at its start is dropped, and a
@@ -1598,7 +1637,7 @@ EDITED acme/web#7: its body is now 1832 characters
 ### teamrig issue close
 
 Closes one issue or pull request of the team's repositories (a pull request closes unmerged), first posting
-`--comment` when given, with the same access and checks as `teamrig issue comment`. When the comment fails nothing
+`--comment` when given, with the same access and checks as `teamrig issue reply`. When the comment fails nothing
 is closed. When the close fails after the comment was posted, the `FAILED` line says the comment is posted: rerun
 `teamrig issue close` without `--comment`. Exit 1 when it failed, 2 when refused, else 0.
 
@@ -1629,20 +1668,22 @@ CLOSED acme/web#12
 ### teamrig issue label
 
 Adds labels to and takes labels off one issue or pull request of the team's repositories, with the same access as
-`teamrig issue comment`. `--add` and `--remove` are comma-separated lists; give at least one, and no label in both.
+`teamrig issue reply`. `--add` and `--remove` are comma-separated lists; give at least one, and no label in both.
 Each label to add must already be one of the repository's, read before any change, so a typo never makes a new
-label: make it on the host first. Two kinds are made where the repository lacks them, each with a `MADE` line:
-`design`, the label of a design issue (talk about how something should work, not work to take until agreed), and a
+label: make it on the host first. Three kinds are made where the repository lacks them, each with a `MADE` line:
+`design`, the label of a design issue (talk about how something should work, not work to take until agreed); a
 label the repository's own `.github/labels.json` defines, made with that file's colour and description (the file is
-read from the default branch, once, only when such a label is missing). Labels to add go in one call, then each label to remove comes off in turn; the
+read from the default branch, once, only when such a label is missing); and an area label `[github.areaOwners]`
+names, made in teamrig's one area colour and description unless that file defines it. Labels to add go in one call,
+then each label to remove comes off in turn; the
 first failure stops it, and a `FAILED` line after a change says what it already did. Exit 1 when it failed, 2 when
 refused, else 0.
 
 Flags:
 
 - `--session <id|name>`: the caller, a session of the team.
-- `--add <label,...>`: the labels to add, each already one of the repository's, `design`, or one its
-  `.github/labels.json` defines.
+- `--add <label,...>`: the labels to add, each already one of the repository's, `design`, one its
+  `.github/labels.json` defines, or one `[github.areaOwners]` names.
 - `--remove <label,...>`: the labels to take off.
 
 Example:
@@ -1688,7 +1729,7 @@ SIMILAR acme/web#31 (T412): 2 of 18 mirrored issues at or above 0.35 (github.sim
 ### teamrig issue assign
 
 Gives one issue or pull request of the team's repositories to its takers, with the same access as `teamrig issue
-comment`: use it once someone says they take the item, such as a commenter asking for it. `--add` and `--remove` are
+reply`: use it once someone says they take the item, such as a commenter asking for it. `--add` and `--remove` are
 comma-separated lists of GitHub logins (a leading `@` is dropped); give at least one, no login in both, and at most 3
 logins in all. Before any change it reads the item's labels and each login to add: an add to a design issue (one
 labelled `design`, talk not yet agreed) is refused, as no one takes design talk until it is agreed and the label
@@ -1722,7 +1763,7 @@ ASSIGNED acme/web#12: octocat
 Run in a clone of the pull request's repository, it fetches the pull request's head (a fork's too) and the newest
 base from `origin`, then prints each file the two conflict on, without a merge: no local branch, file or index of the
 clone changes, and nothing is written to GitHub. Use it to tell an outside author which files to rebase, in a
-comment through `teamrig issue comment`, or to see what to redo before re-shipping a team pull request on the newest
+comment through `teamrig issue reply`, or to see what to redo before re-shipping a team pull request on the newest
 base under a new branch name. A folder whose `origin` is another repository, or not on GitHub, fails before any
 fetch. Exit 1 when it failed, 2 when refused, else 0, for a clean merge too.
 
@@ -2296,7 +2337,7 @@ DRY RUN nothing is written
 TEAM front under shop: lead web (shop-web); sessions web (shop-web), ui (shop-ui)
 WOULD CREATE /home/you/.teamrig/teams/front/config.json:
 {
-  "configVersion": 8,
+  "configVersion": 9,
   "team": {
     "id": "front",
     "parent": "shop"
@@ -2754,11 +2795,11 @@ NOTE backend has an inbox line: lead took back the sessions you led (importer, s
 Service roles (`teamrig roles grant`, `revoke` and `list`) let a named session run a few teamrig commands for an outside
 service past every permission check, from its own tab only: the team's `serviceRoles` config [serviceRoles] maps
 each role to its holders and its commands. The commands come from teamrig's table, each a reviewed shape
-(`issue close`, `issue comment`, `issue migrate`, `queue ship`, `queue merge`); a name outside it fails the config
+(`issue close`, `issue migrate`, `queue ship`, `queue merge`); a name outside it fails the config
 load. `team` holds a role for every session only where each command checks its caller itself, as a ship or merge
 does (it runs only on the session's own task branch); the others name their sessions. `hook route-allow` lets the
-holder's own tab run them with no permission check, up to `prompts.serviceRoleDailyCap` closes, comments and migrate
-runs a role in 24 hours
+holder's own tab run them with no permission check, up to `prompts.serviceRoleDailyCap` closes and migrate runs
+a role in 24 hours
 ([the service-role allow](hooks.md#before-a-shell-command-the-service-role-allow)). See also
 [the service-role guard](hooks.md#before-a-write-or-a-shell-command-the-service-role-guard).
 
@@ -2770,7 +2811,7 @@ config goes into the backups folder and `serviceRoles` is rewritten; the next ca
 `roles grant <role> --holder <id|name|team> [--commands <a,b>]` creates the role (it needs `--commands`), or adds
 the holder and any new commands to it. It refuses a grant that changes nothing. Its preview and its result add a
 `REACH` line for each command of the role, saying what it acts on: GitHub numbers issues and pull requests as one,
-so `issue close` and `issue comment` reach every pull request of `github.repos` too, an outside author's included.
+so `issue close` reaches every pull request of `github.repos` too, an outside author's included.
 
 Flags:
 
@@ -2781,15 +2822,14 @@ Flags:
 Example:
 
 ```sh
-teamrig roles grant github --holder backend --commands "issue close,issue comment" --yes
+teamrig roles grant github --holder backend --commands "issue close" --yes
 ```
 
 Output:
 
 ```text
-GRANTED github: held by backend; runs issue close, issue comment; the old config is at ~/.teamrig/teams/shop/backups/config.roles-grant.json
+GRANTED github: held by backend; runs issue close; the old config is at ~/.teamrig/teams/shop/backups/config.roles-grant.json
 REACH issue close: closes any issue or pull request of github.repos, an outside author's too (a pull request closes unmerged), posting its --comment first
-REACH issue comment: posts a comment on any issue or pull request of github.repos, an outside author's too
 ```
 
 ### teamrig roles revoke
@@ -2830,7 +2870,7 @@ teamrig roles list
 Output:
 
 ```text
-github: held by backend; runs issue close, issue comment
+github: held by backend; runs issue close
 ```
 
 ### teamrig rules
@@ -4350,7 +4390,7 @@ Output:
 
 ```text
 ARCHIVE events.jsonl (3 event(s), 548 B) as archive/events-000001.jsonl
-SNAPSHOT snapshot.jsonl: 3 event(s), 733 B, covering segments 1-1; folded from the history (3 event(s))
+SNAPSHOT snapshot.jsonl: 0 task line(s), 3 event(s), 791 B, covering segments 1-1; folded from the history (3 event(s))
 TASKS 2 kept (2 unchanged, 0 changed), 0 retired now, 0 before
 HISTORY 2 task(s) from 3 event(s): the working set holds every active one as the history does
 TAIL events.jsonl starts again with the rotation marker (67 B)
@@ -7069,8 +7109,8 @@ write and the count or dry run to show the owner first, and under `ask` (the def
 ### teamrig hook exec-guard
 
 Before a Bash or PowerShell call, refuses a `teamrig exec approve`, `refuse` or `escalate` run as anyone but the
-tab's own session, and any `exec` call while the installed teamrig client differs from what its build
-hashed. See [Hooks and permissions](hooks.md#before-a-shell-command-the-exec-guard).
+tab's own session, any `exec` call while the installed teamrig client differs from what its build
+hashed, and a raw `gh` write on a repository in `github.repos`, or one it cannot place. See [Hooks and permissions](hooks.md#before-a-shell-command-the-exec-guard).
 
 Flags: none.
 
