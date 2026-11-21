@@ -142,7 +142,7 @@ export class FakeSessionProcesses implements SessionProcesses {
     if (this.badLineages.count > 0) {
       this.badLineages.count -= 1;
       const own = this.running.get(pid);
-      return this.badLineages.how === 'failed' ? undefined : own === undefined ? [] : [own];
+      return this.badLineages.how === 'failed' ? { kind: 'failed', why: 'ps timed out after 20000 ms' } : { kind: 'listed', lineage: own === undefined ? [] : [own] };
     }
     const chain: ProcessInfo[] = [];
     for (let info = this.running.get(pid); info !== undefined && !chain.includes(info); info = this.running.get(info.parentPid)) {
