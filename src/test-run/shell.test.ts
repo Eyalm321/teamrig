@@ -119,7 +119,9 @@ describe('nodeShellRunner', () => {
         "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }).unref();\nprocess.exitCode = 3;\n",
     );
     const started = Date.now();
-    const result = await nodeShellRunner(200).run({ command, cwd: DIR, env: ENV });
+    // The orphan outlives the test and keeps its working folder busy; on Windows that folder cannot be removed
+    // until it exits, so it runs in the system temp folder, not in DIR, which after() removes.
+    const result = await nodeShellRunner(200).run({ command, cwd: tmpdir(), env: ENV });
     assert.ok(Date.now() - started < 4_000, `ended ${Date.now() - started} ms after the start, not when the orphan let go`);
     assert.deepEqual(result, { end: { kind: 'exited', code: 3 }, output: 'before\n', heldOpen: true });
   });
