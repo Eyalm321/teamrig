@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import type { ShellEnd } from '../core/shell-end.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { MemoryFiles } from '../testing/memory-files.ts';
 import { commandHeader, endLine, HELD_OPEN_LINE, KEPT_LOGS, LiveLog, pruneLogs, reserveLog } from './logs.ts';
-import type { ShellEnd } from './shell.ts';
 
 const DIR = '/kit/teams/app/state/logs';
 
