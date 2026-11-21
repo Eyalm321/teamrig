@@ -54,6 +54,8 @@ describe('rereadingCommands', () => {
     assert.deepEqual(rereads('perl x | bash'), ['perl:n', 'bash:y']);
     assert.deepEqual(rereads('perl x | sort $(perl y) | dd of=f'), ['perl:y', 'perl:y', 'sort:y', 'dd:y']);
     assert.deepEqual(rereads('perl x || sort > f'), ['perl:n', 'sort:y']);
+    assert.deepEqual(rereads('perl x | head; sort > f'), ['perl:n', 'head:n', 'sort:y']);
+    assert.deepEqual(rereads('perl x | for a in b; do read l; done'), ['perl:y', 'for:y', 'do:y', 'done:y']);
     assert.deepEqual(rereads('(perl x; perl y) | tee f'), ['perl:y', 'perl:y', 'tee:y']);
     assert.deepEqual(rereads('f() { perl x; }; f > out'), ['f:y', '{:y', '}:y', 'f:y']);
     assert.deepEqual(rereads('perl x; exec 2> log'), ['perl:y', 'exec:y']);
@@ -72,7 +74,7 @@ describe('writesFile', () => {
 describe('editsInPlace', () => {
   it('reads -i in sed, perl and ruby option clusters, gawk -i inplace, and a word only known when it runs', () => {
     // Every word counts, a script's own arguments too: the safe side for a guard.
-    for (const line of ['sed -i s/a/b/ f', 'sed -Ei.bak s/a/b/ f', 'sed --in-place=.b s/a/b/ f', 'gsed -n -i p f', 'perl -pi -e 1 f', 'perl -0pi.bak -e 1 f', 'perl -pie 1 f', 'ruby -i -pe 1 f', 'gawk -i inplace 1 f', 'awk --include=inplace 1 f', 'sed $OPTS s/a/b/ f', 'perl -e 1 -- -i', 'sed --i s/a/b/ f', 'sed --in-pl=.b s/a/b/ f', 'gawk --incl=inplace 1 f', 'gawk -i inplace.awk 1 f', 'gawk -iinplace 1 f', 'gawk -i /usr/share/awk/inplace.awk 1 f', 'gawk $OPTS 1 f']) {
+    for (const line of ['sed -i s/a/b/ f', 'sed -Ei.bak s/a/b/ f', 'sed --in-place=.b s/a/b/ f', 'gsed -n -i p f', 'perl -pi -e 1 f', 'perl -0pi.bak -e 1 f', 'perl -pie 1 f', 'ruby -i -pe 1 f', 'gawk -i inplace 1 f', 'awk --include=inplace 1 f', 'sed $OPTS s/a/b/ f', 'perl -e 1 -- -i', 'sed --i s/a/b/ f', 'sed --in-pl=.b s/a/b/ f', 'gawk --incl=inplace 1 f', 'gawk -i inplace.awk 1 f', 'gawk -iinplace 1 f', 'gawk -i /usr/share/awk/inplace.awk 1 f', 'gawk $OPTS 1 f', "sed -I '' s/a/b/ f", 'sed -nI p f', 'perl -di -pe 1 f', 'ruby -di -pe 1 f']) {
       assert.equal(inPlace(line), true, line);
     }
     for (const line of ['sed -e s/i/j/ f', 'sed -n s/a/b/p f', 'sed -fi.sed f', 'perl -ple 1 f', 'perl -Mstrict -e 1', 'ruby -e 1', 'awk 1 f', 'grep -i x f', 'sed "s/$a/b/" f', 'sed --debug s/a/b/ f', 'sed -- -x f', 'gawk -i ord 1 f', 'gawk --incl=ord 1 f']) {
