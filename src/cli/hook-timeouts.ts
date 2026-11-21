@@ -3,8 +3,8 @@ import { GUARD_LIMIT_MS } from './guard-runner.ts';
 /**
  * Each `hook <name>` command's time limit, in ms: what Claude Code gives it in plugins/teamrig/hooks/hooks.json (for a
  * guard that runs through guard-main.js, the runner's own shorter GUARD_LIMIT_MS, which blocks the call at its end), or
- * what the plugin's mod gives the hooks its hands run (src/mod/*-hand.ts); null for one run with no limit. The one place that knows them (#737): hook-timeouts.test.ts holds hooks.json and the hands to it, and
- * that every `hook` command has one.
+ * what the plugin's mod gives the hooks its hands run (src/mod/*-hand.ts). The one place that knows them (#737):
+ * hook-timeouts.test.ts holds hooks.json and the hands to it, and that every `hook` command has one.
  */
 export const HOOK_TIMEOUT_MS: Readonly<Record<string, number | null>> = {
   'push-guard': GUARD_LIMIT_MS,
