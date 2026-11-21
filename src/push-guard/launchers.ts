@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { longOption, OPTION_TABLES, shortArgument, type OptionArgument, type OptionTable } from './option-tables.ts';
 import { splitEnvString } from './program-split.ts';
 import { assignedWords, isExpressionHead, parseShell, type ShellDialect, type ShellWord } from './tokenizer.ts';
 
@@ -90,6 +91,8 @@ interface WrapperSpec {
   readonly emptyEnv?: readonly string[];
   /** True when the program also gets arguments from stdin. */
   readonly stdinArgs?: boolean;
+  /** True when a `-NUM` word is an option, such as nice's `-5`. */
+  readonly numericOption?: boolean;
 }
 
 /** PowerShell: an assignment target in the env drive, `$env:NAME` or `${env:NAME}`, naming the variable. */
@@ -110,7 +113,7 @@ const WRAPPERS: ReadonlyMap<string, WrapperSpec> = new Map<string, WrapperSpec>(
   ['nocorrect', {}],
   ['call', {}],
   ['time', { valued: ['-o', '-f', '--output', '--format'] }],
-  ['nice', { valued: ['-n', '--adjustment'] }],
+  ['nice', { valued: ['-n', '--adjustment'], numericOption: true }],
   ['ionice', { valued: ['-c', '-n', '-p', '-P', '-u', '--class', '--classdata', '--pid', '--pgid', '--uid'] }],
   [
     'env',
@@ -143,40 +146,20 @@ const WRAPPERS: ReadonlyMap<string, WrapperSpec> = new Map<string, WrapperSpec>(
     },
   ],
   ['wsl', { valued: ['-d', '--distribution', '-u', '--user', '--shell-type', '--distribution-id'], chdir: ['--cd'] }],
-  // Programs that run the command after their options, in another
-  // namespace, root, privilege set or systemd unit (#118).
-  ['nsenter', { valued: ['-t', '--target', '-S', '--setuid', '-G', '--setgid', '-Z'] }],
-  ['chroot', { valued: ['--userspec', '--groups'], leading: 1 }],
-  [
-    'unshare',
-    {
-      valued: ['--map-user', '--map-group', '--map-users', '--map-groups', '--propagation', '--setgroups', '-S', '--setuid', '-G', '--setgid', '-R', '--root', '--monotonic', '--boottime'],
-      chdir: ['-w', '--wd'],
-    },
-  ],
-  [
-    'setpriv',
-    {
-      valued: ['--reuid', '--regid', '--ruid', '--euid', '--rgid', '--egid', '--groups', '--inh-caps', '--ambient-caps', '--bounding-set', '--securebits', '--selinux-label', '--apparmor-profile', '--pdeathsig', '--landlock-access', '--landlock-rule'],
-    },
-  ],
-  [
-    'systemd-run',
-    {
-      valued: [
-        ...['-u', '--unit', '-p', '--property', '--description', '--slice', '-E', '--setenv', '-M', '--machine', '-H', '--host', '--uid', '--gid', '--nice', '--service-type'],
-        ...['--on-active', '--on-boot', '--on-startup', '--on-unit-active', '--on-unit-inactive', '--on-calendar', '--timer-property', '--path-property', '--socket-property'],
-      ],
-      chdir: ['--working-directory'],
-    },
-  ],
-  ['runuser', { valued: ['-u', '--user', '-g', '--group', '-G', '--supp-group', '-w', '--whitelist-environment', '-s', '--shell'] }],
-  ['flock', { valued: ['-w', '--timeout', '-E', '--conflict-exit-code'], leading: 1 }],
-  // Tracers and schedulers that run the command after their options (and a CPU mask or priority).
-  ['strace', { valued: ['-o', '--output', '-e', '-p', '--attach', '-s', '--string-limit', '-u', '--user', '-E', '--env', '-a', '-b', '-I', '-O', '-S', '-P', '-X'] }],
-  ['ltrace', { valued: ['-o', '--output', '-e', '-p', '-s', '-u', '-n', '--indent', '-a', '--align', '-A', '-D', '-F', '-l', '--library', '-L', '-w', '-x'] }],
+  // Programs that run the command after their options, in another namespace, root, privilege set or systemd
+  // unit, and tracers and schedulers (after a CPU mask or priority). In bash their options are read by their
+  // own tables (see OPTION_TABLES); a spec here names only what changes how they start.
+  ['nsenter', {}],
+  ['chroot', { leading: 1 }],
+  ['unshare', { chdir: ['-w', '--wd'] }],
+  ['setpriv', {}],
+  ['systemd-run', { chdir: ['--working-directory'] }],
+  ['runuser', {}],
+  ['flock', { leading: 1 }],
+  ['strace', {}],
+  ['ltrace', {}],
   ['taskset', { leading: 1, inspect: ['-p', '--pid'] }],
-  ['chrt', { valued: ['-T', '--sched-runtime', '-P', '--sched-period', '-D', '--sched-deadline'], leading: 1, inspect: ['-p', '--pid', '-m', '--max'] }],
+  ['chrt', { leading: 1, inspect: ['-p', '--pid', '-m', '--max'] }],
 ]);
 
 /**
@@ -272,28 +255,62 @@ function assignmentOf(word: ShellWord): Assignment {
   return { name: word.text.slice(0, equals), value: { text: word.text.slice(equals + 1), dynamic: word.dynamic } };
 }
 
+/** The `-c` / `--command` / `--session-command` options of su, runuser and script: a command line a shell runs. */
+const COMMAND_OPTIONS: ReadonlySet<string> = new Set(['-c', '--command', '--session-command']);
+
 /**
- * The value of a `-c` / `--command` option among `args` (a short
- * cluster such as `-qc` takes the next word), undefined when there is none, null when its value is missing.
+ * su, runuser or script's words as their getopt reads them, which takes options anywhere before `--`: the last
+ * `-c` command line (null when its value is missing), the `-u` user (runuser), and the operands in order.
+ * Undefined when a word is an option the program does not have.
  */
-function commandOption(args: readonly ShellWord[]): ShellWord | null | undefined {
-  for (const [index, arg] of args.entries()) {
-    const text = arg.text;
+function permutedOptions(table: OptionTable, args: readonly ShellWord[]): { command?: ShellWord | null; user?: ShellWord; operands: ShellWord[] } | undefined {
+  const read: { command?: ShellWord | null; user?: ShellWord; operands: ShellWord[] } = { operands: [] };
+  const take = (option: string, value: ShellWord | null): void => {
+    if (COMMAND_OPTIONS.has(option)) {
+      read.command = value;
+    } else if ((option === '-u' || option === '--user') && value !== null) {
+      read.user = value;
+    }
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index] ?? staticWord('');
+    const text = word.text;
     if (text === '--') {
-      return undefined;
+      read.operands.push(...args.slice(index + 1));
+      break;
     }
-    if (text === '--command' || text === '--session-command') {
-      return args[index + 1] ?? null;
-    }
-    if (text.startsWith('--command=') || text.startsWith('--session-command=')) {
-      return { text: text.slice(text.indexOf('=') + 1), dynamic: arg.dynamic };
-    }
-    if (/^-[A-Za-z]+$/.test(text) && text.includes('c')) {
-      const at = text.indexOf('c');
-      return at === text.length - 1 ? (args[index + 1] ?? null) : { text: text.slice(at + 1), dynamic: arg.dynamic };
+    if (/^--[^-]/.test(text)) {
+      const equals = text.indexOf('=');
+      const found = longOption(table, (equals === -1 ? text : text.slice(0, equals)).slice(2));
+      if (found.kind !== 'known') {
+        return undefined;
+      }
+      if (equals !== -1 && found.argument !== 'none') {
+        take(`--${found.name}`, { text: text.slice(equals + 1), dynamic: word.dynamic });
+      } else if (found.argument === 'required') {
+        index += 1;
+        take(`--${found.name}`, args[index] ?? null);
+      }
+    } else if (text.startsWith('-') && text !== '-') {
+      for (let at = 1; at < text.length; at += 1) {
+        const argument = shortArgument(table, text.charAt(at));
+        if (argument === undefined) {
+          return undefined;
+        }
+        if (argument !== 'none') {
+          const rest = at + 1 < text.length ? { text: text.slice(at + 1), dynamic: word.dynamic } : undefined;
+          if (rest === undefined && argument === 'required') {
+            index += 1;
+          }
+          take(`-${text.charAt(at)}`, rest ?? (argument === 'required' ? (args[index] ?? null) : null));
+          break;
+        }
+      }
+    } else {
+      read.operands.push(word);
     }
   }
-  return undefined;
+  return read;
 }
 
 /** Joins words into one command line; for cmd a word with spaces or separators is quoted, as the caller's process start would. */
@@ -424,11 +441,9 @@ class LaunchReader {
 
   private named(name: string, args: readonly ShellWord[], head: ShellWord): Step {
     // A `-c` command line, `find -exec`, and `trap`'s handler.
-    if (this.dialect === 'bash' && COMMAND_OPTION_PROGRAMS.has(name)) {
-      const command = commandOption(args);
-      if (command !== undefined) {
-        return command === null ? { kind: 'opaque', reason: `${name} -c runs a command line only known when it runs`, gated: true } : this.script(command, 'bash', false);
-      }
+    const commanded = this.dialect === 'bash' && COMMAND_OPTION_PROGRAMS.has(name) ? this.commandOption(name, args) : undefined;
+    if (commanded !== undefined) {
+      return commanded;
     }
     const found = this.dialect === 'bash' && name === 'find' ? this.findExec(args) : undefined;
     if (found !== undefined) {
@@ -447,7 +462,7 @@ class LaunchReader {
     const wrapper = WRAPPERS.get(name);
     if (wrapper !== undefined) {
       this.called = true;
-      return this.wrapper(wrapper, args);
+      return this.wrapper(name, wrapper, args);
     }
     if (POSIX_SHELLS.has(name)) {
       return this.posixShell(args);
@@ -476,6 +491,82 @@ class LaunchReader {
       return this.teamrig(args, head);
     }
     return { kind: 'program', program: head, args, env: this.env, chdirs: this.chdirs, stdinArgs: this.stdinArgs, runner: this.runner, captured: this.captured };
+  }
+
+  /**
+   * The command su, runuser, flock or script runs from its words, or undefined to read the program as usual (a
+   * flock that runs a program, a script that runs none). su and runuser hand a `-c` line, else the words after the
+   * user, to the user's shell; `runuser -u user cmd` runs `cmd`; flock takes `-c` only as the word after its lock
+   * file, so a later `-c` belongs to the program it runs.
+   */
+  private commandOption(name: string, args: readonly ShellWord[]): Step | undefined {
+    const table = OPTION_TABLES.get(name);
+    if (table === undefined) {
+      return undefined;
+    }
+    const missing: Step = { kind: 'opaque', reason: `${name} -c runs a command line only known when it runs`, gated: true };
+    if (name === 'flock') {
+      const lockFile = this.firstOperand(table, args);
+      if (lockFile === undefined) {
+        return { kind: 'opaque', reason: 'flock gets an option the guard does not know, so the program it runs is unclear', gated: true };
+      }
+      const option = args[lockFile + 1]?.text;
+      if (option !== '-c' && option !== '--command') {
+        return undefined;
+      }
+      const command = args[lockFile + 2];
+      return command === undefined ? missing : this.script(command, 'bash', false);
+    }
+    const read = permutedOptions(table, args);
+    if (read === undefined) {
+      return { kind: 'opaque', reason: `${name} gets an option the guard does not know, so the command it runs is unclear`, gated: true };
+    }
+    if (read.command === null) {
+      return missing;
+    }
+    if (read.command !== undefined) {
+      // runuser refuses -u with -c; the guard reads both rather than guess which one runs.
+      return name === 'runuser' && read.user !== undefined ? { kind: 'opaque', reason: 'runuser gets both -u and -c', gated: true } : this.script(read.command, 'bash', false);
+    }
+    if (name === 'script') {
+      return undefined;
+    }
+    if (name === 'runuser' && read.user !== undefined) {
+      return read.operands.length === 0 ? NOTHING : { kind: 'next', words: read.operands };
+    }
+    // The words after the user are the shell's own arguments: `su root -- -c X` runs `sh -c X`.
+    return read.operands.length > 1 ? { kind: 'next', words: [staticWord('sh'), ...read.operands.slice(1)] } : NOTHING;
+  }
+
+  /** The index of the first operand among `args` as a `+` getopt with `table` reads them; undefined on an option it lacks. */
+  private firstOperand(table: OptionTable, args: readonly ShellWord[]): number | undefined {
+    for (let index = 0; index < args.length; index += 1) {
+      const text = args[index]?.text ?? '';
+      if (text === '--') {
+        return index + 1;
+      }
+      if (/^--[^-]/.test(text)) {
+        const found = longOption(table, text.split('=')[0]?.slice(2) ?? '');
+        if (found.kind !== 'known') {
+          return undefined;
+        }
+        index += found.argument === 'required' && !text.includes('=') ? 1 : 0;
+      } else if (text.startsWith('-') && text !== '-') {
+        for (let at = 1; at < text.length; at += 1) {
+          const argument = shortArgument(table, text.charAt(at));
+          if (argument === undefined) {
+            return undefined;
+          }
+          if (argument !== 'none') {
+            index += argument === 'required' && at + 1 === text.length ? 1 : 0;
+            break;
+          }
+        }
+      } else {
+        return index;
+      }
+    }
+    return args.length;
   }
 
   /**
@@ -534,9 +625,15 @@ class LaunchReader {
     return this.stdin === undefined || this.stdinArgs ? STDIN_SCRIPT : this.script(this.stdin, dialect, false);
   }
 
-  /** Reads a wrapper's options, getopt style, and returns the words of the program it runs. */
-  private wrapper(spec: WrapperSpec, args: readonly ShellWord[]): Step {
+  /**
+   * Reads a wrapper's options, getopt style, and returns the words of the program it runs. A program with an
+   * {@link OPTION_TABLES} entry is read by its own table: a long option by its unique prefix, and an option the
+   * table lacks is a doubt, as its value word could be taken for the program.
+   */
+  private wrapper(name: string, spec: WrapperSpec, args: readonly ShellWord[]): Step {
     this.stdinArgs ||= spec.stdinArgs === true;
+    const table: OptionTable | undefined = this.dialect === 'bash' ? OPTION_TABLES.get(name) : undefined;
+    const unknown: Step = { kind: 'opaque', reason: `${name} gets an option the guard does not know, so the program it runs is unclear`, gated: true };
     const has = (list: readonly string[] | undefined, option: string): boolean => list?.includes(option) === true;
     const takesValue = (option: string): boolean => has(spec.valued, option) || has(spec.chdir, option) || has(spec.split, option);
     let leading = spec.leading ?? 0;
@@ -560,11 +657,22 @@ class LaunchReader {
       if (/^--[^-]/.test(text)) {
         const equals = text.indexOf('=');
         option = equals === -1 ? text : text.slice(0, equals);
-        running ||= has(spec.runs, option);
-        if (takesValue(option)) {
-          value = equals === -1 ? args[(index += 1)] : { text: text.slice(equals + 1), dynamic: word.dynamic };
+        let argument: OptionArgument = takesValue(option) ? 'required' : 'none';
+        if (table !== undefined) {
+          const found = longOption(table, option.slice(2));
+          if (found.kind !== 'known') {
+            return unknown;
+          }
+          option = `--${found.name}`;
+          argument = found.argument;
         }
-      } else if (text.startsWith('-')) {
+        running ||= has(spec.runs, option);
+        if (equals !== -1 && argument !== 'none') {
+          value = { text: text.slice(equals + 1), dynamic: word.dynamic };
+        } else if (argument === 'required') {
+          value = args[(index += 1)];
+        }
+      } else if (text.startsWith('-') && !(spec.numericOption === true && /^-\d+$/.test(text))) {
         for (let at = 1; at < text.length; at += 1) {
           const short = `-${text.charAt(at)}`;
           if (has(spec.inspect, short)) {
@@ -572,12 +680,19 @@ class LaunchReader {
           }
           this.emptied ||= has(spec.emptyEnv, short);
           running ||= has(spec.runs, short);
-          if (takesValue(short)) {
+          const argument = table === undefined ? (takesValue(short) ? 'required' : 'none') : shortArgument(table, text.charAt(at));
+          if (argument === undefined) {
+            return unknown;
+          }
+          if (argument !== 'none') {
+            const rest = at + 1 < text.length ? { text: text.slice(at + 1), dynamic: word.dynamic } : undefined;
             option = short;
-            value = at + 1 < text.length ? { text: text.slice(at + 1), dynamic: word.dynamic } : args[(index += 1)];
+            value = rest ?? (argument === 'required' ? args[(index += 1)] : undefined);
             break;
           }
         }
+      } else if (spec.numericOption === true && /^-\d+$/.test(text)) {
+        continue;
       } else if (spec.assignments === true && isAssignment(text)) {
         this.env.push(assignmentOf(word));
         continue;
@@ -605,7 +720,7 @@ class LaunchReader {
           return { kind: 'opaque', reason: split.reason, gated: true };
         }
         // GNU env puts the split words in place of -S and reads its options on from there, so they may hold more.
-        return this.wrapper(spec, [...split.words, ...args.slice(index + 1)]);
+        return this.wrapper(name, spec, [...split.words, ...args.slice(index + 1)]);
       }
     }
     if (!running) {

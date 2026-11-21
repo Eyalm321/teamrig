@@ -90,6 +90,61 @@ describe('findGitInvocations: programs that run a word or the command after thei
     assert.deepEqual(found.doubts, []);
   });
 
+  it('reads -c as each program reads it: attached, after a valued letter, before the first operand, by prefix', () => {
+    const G = 'git push origin main';
+    const shapes = [
+      `flock /tmp/l git -c a.b=c ${G.slice(4)}`,
+      `flock -n /tmp/l git -C . -c a.b=c ${G.slice(4)}`,
+      `runuser -ucarl ${G}`,
+      `script -c'${G}' /dev/null`,
+      `script -qc'${G}' /dev/null`,
+      `script -Tcx -c ${X} /dev/null`,
+      `su -c'${G}' u`,
+      `su --comm ${X} u`,
+      `su -- root -c ${X}`,
+      `su root -- -c ${X}`,
+    ];
+    for (const shape of shapes) {
+      assert.equal(outcome(shape), 'PUSH', shape);
+    }
+    assert.equal(outcome('flock /tmp/l gcc -c x.c'), 'pass');
+    // runuser's getopt takes this -c as its own, and refuses it beside -u.
+    assert.equal(outcome(`runuser -u u git -c x=y ${G.slice(4)}`), 'DOUBT');
+    assert.equal(outcome(`runuser -u u -- ${G}`), 'PUSH');
+  });
+
+  it('reads a wrapper long option by its unique prefix, and asks on one it does not know', () => {
+    const G = 'git push origin main';
+    const shapes = [
+      `nsenter -t 1 -Z ${G}`,
+      `nsenter -t 1 -W/x ${G}`,
+      `nsenter --tar 1 ${G}`,
+      `unshare --map-u 0 ${G}`,
+      `setpriv --reu 1000 ${G}`,
+      `chroot --user u / ${G}`,
+      `flock --time 5 /tmp/l ${G}`,
+      `systemd-run --uni x ${G}`,
+      `systemd-run --capsule x ${G}`,
+      `strace --trace execve ${G}`,
+      `strace --signal none ${G}`,
+      `strace --outp f ${G}`,
+      `strace -U name ${G}`,
+      `ltrace --out f ${G}`,
+      `runuser --us u ${G}`,
+      `timeout --sig KILL 5 ${G}`,
+      `sudo --us u ${G}`,
+      `nice --no-such-option 5 ${G}`,
+      `nice -5 ${G}`,
+      `timeout -v --sig KILL 5 ${G}`,
+    ];
+    for (const shape of shapes) {
+      assert.notEqual(outcome(shape), 'pass', shape);
+    }
+    for (const shape of ['nsenter --mount git status', 'timeout --preserve-status 5 make', 'strace --follow-forks ls', 'sudo --non-interactive ls']) {
+      assert.equal(outcome(shape), 'pass', shape);
+    }
+  });
+
   it('doubts a find that runs more than one command, and a -c command only known when it runs', () => {
     assert.equal(outcome(`find . -exec true ';' -exec sh -c ${X} ';'`), 'DOUBT');
     assert.equal(outcome('su -c "$CMD"'), 'DOUBT');
