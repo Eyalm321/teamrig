@@ -1,5 +1,8 @@
 import { ASSIGNMENT_LIKE, NAME, SETS_NAME, setsNamesUnseen, unquotedBindingName } from './setters.ts';
-import type { ShellCommand, ShellParse, ShellWord, WordPart } from './tokenizer.ts';
+import type { Redirection, ShellCommand, ShellParse, ShellWord, WordPart } from './tokenizer.ts';
+
+/** A heredoc's operator, `<<` or `<<-` with any descriptor; its target is the delimiter, never expanded. */
+const HEREDOC_OPERATOR = /^\d*<<-?$/;
 
 /**
  * bash keywords that can set a variable in a way this module does not follow (`case`, a function, a `[[ =~ ]]`
@@ -57,20 +60,26 @@ interface Bound {
   readonly at: readonly number[];
 }
 
-/** A command whose program a variable names: its index and its words after any keyword that starts it. */
+/**
+ * A command whose program a variable names: its index, its words after any keyword that starts it, and the
+ * {@link LineBindings.cut} it sets when it turns out to set variables unseen.
+ */
 interface Deferred {
   readonly index: number;
   readonly words: readonly ShellWord[];
+  readonly cut: number;
 }
 
 /**
- * What a line binds: each bound name, every name it assigns in any form, and the commands whose program a
- * variable names, checked once those resolve.
+ * What a line binds: each bound name, every name it assigns in any form, the commands whose program a
+ * variable names, checked once those resolve, and the cut: the first command a program that may set
+ * variables unseen can reach, from which nothing resolves (the number of commands when there is none).
  */
 interface LineBindings {
   readonly bound: ReadonlyMap<string, Bound>;
   readonly assigned: ReadonlySet<string>;
   readonly deferred: readonly Deferred[];
+  readonly cut: number;
 }
 
 /**
@@ -79,12 +88,17 @@ interface LineBindings {
  * it. A word with a variable left unresolved stays as it was; a resolved word has no parts, and is dynamic only
  * where the value holds a variable only known when it runs. `home` is the folder HOME names when the line
  * starts, given where the caller knows it: then `$HOME`, and a value's leading `~`, which bash expands to it,
- * resolve too while the line assigns HOME nowhere.
+ * resolve too while the line assigns HOME nowhere. Redirection targets resolve the same way, so `cat > $S/x`
+ * writes to the same file as `cat > /s/x` once `S=/s` (see {@link LiteralBindings.resolveRedirection}).
  */
 export function resolveLiteralVariables(parsed: ShellParse, home?: string): readonly ShellCommand[] {
   return (parsed.readings ?? [parsed]).flatMap((reading) => {
     const bindings = LiteralBindings.read(reading, home);
-    return reading.commands.map((command, index) => ({ ...command, words: bindings.resolveWords(command.words, index) }));
+    return reading.commands.map((command, index) => ({
+      ...command,
+      words: bindings.resolveWords(command.words, index),
+      redirections: command.redirections.map((redirection) => bindings.resolveRedirection(redirection, index)),
+    }));
   });
 }
 
@@ -95,40 +109,60 @@ export function resolveLiteralVariables(parsed: ShellParse, home?: string): read
  * variables (in quotes, for `export`), and only for a name the line sets nowhere else, or always to the same
  * text. A name also assigned in any other form (`NAME=x cmd`, `NAME+=`, `{NAME}>`, a value with a substitution
  * or any other tilde, a `for` loop's variable, a binding inside a compound command or after `!`) is not
- * resolved; anything that can set variables unseen (see {@link UNSAFE_KEYWORDS}, {@link setsNamesUnseen}, a program a variable names that
- * is not known or is one of those, array elements, IFS, and what {@link ShellParse.bindingsUnclear} flags)
- * leaves the whole line unresolved. A value holds at a later command only when that command surely runs after
- * the statement, in the same shell or in a subshell started after it; a variable in a value gives what it held
- * when the statement ran, and HOME, which the line never assigns, what the shell started with.
+ * resolved. A program that can set variables unseen (see {@link UNSAFE_KEYWORDS} and {@link setsNamesUnseen}, or a program a variable names
+ * that is not known or is one of those) leaves every command from it on unresolved, or from the start of the
+ * outermost compound command holding it, which may run it again before an earlier command of its body; the
+ * commands before it ran first, so it cannot change what they read. Array elements, IFS, and what
+ * {@link ShellParse.bindingsUnclear} flags leave the whole line unresolved. A value holds at a later command
+ * only when that command surely runs after the statement, in the same shell or in a subshell started after it;
+ * a variable in a value gives what it held when the statement ran, and HOME, which the line never assigns, what
+ * the shell started with.
  */
 class LiteralBindings {
   private readonly commands: readonly ShellCommand[];
   private readonly bound: ReadonlyMap<string, Bound>;
   /** The values names the line never assigns hold from its start: HOME, when the caller knows it. */
   private readonly inherited: ReadonlyMap<string, string>;
+  /** The first command where nothing resolves; see {@link LineBindings.cut}. */
+  private readonly cut: number;
 
-  private constructor(commands: readonly ShellCommand[], bound: ReadonlyMap<string, Bound>, inherited: ReadonlyMap<string, string>) {
+  private constructor(commands: readonly ShellCommand[], bound: ReadonlyMap<string, Bound>, inherited: ReadonlyMap<string, string>, cut: number) {
     this.commands = commands;
     this.bound = bound;
     this.inherited = inherited;
+    this.cut = cut;
   }
 
   static read(parsed: ShellParse, home: string | undefined): LiteralBindings {
-    const none = new LiteralBindings(parsed.commands, new Map(), new Map());
     const line = parsed.bindingsUnclear ? undefined : boundNames(parsed.commands);
     if (line === undefined) {
-      return none;
+      return new LiteralBindings(parsed.commands, new Map(), new Map(), 0);
     }
     // A Windows home goes to bash with forward slashes, which keep an unquoted `$HOME` from reading as a pattern.
     const inherited = home === undefined || line.assigned.has('HOME') ? new Map<string, string>() : new Map([['HOME', home.replaceAll('\\', '/')]]);
-    const bindings = new LiteralBindings(parsed.commands, line.bound, inherited);
-    const unseen = line.deferred.some(({ index, words }) => expandedSetsVariablesUnseen(bindings.resolveWords(words, index)));
-    return unseen ? none : bindings;
+    const bindings = new LiteralBindings(parsed.commands, line.bound, inherited, line.cut);
+    // In line order: each one before the first that sets variables unseen resolves with every binding before it.
+    const unseen = line.deferred.find(({ index, words }) => expandedSetsVariablesUnseen(bindings.resolveWords(words, index)));
+    return unseen === undefined ? bindings : new LiteralBindings(parsed.commands, line.bound, inherited, Math.min(line.cut, unseen.cut));
   }
 
   /** The words of command `index` with their variables replaced by the values that hold there. */
   resolveWords(words: readonly ShellWord[], index: number): readonly ShellWord[] {
     return words.flatMap((word) => this.resolve(word, index));
+  }
+
+  /**
+   * `redirection` at command `index` with its target resolved, when bash expands it to one word. A heredoc's
+   * delimiter stays as written, as bash never expands it; a target that splits into more words, which bash
+   * refuses as an ambiguous redirect, or that does not resolve, stays as it was.
+   */
+  resolveRedirection(redirection: Redirection, index: number): Redirection {
+    const { target } = redirection;
+    if (target === undefined || HEREDOC_OPERATOR.test(redirection.operator)) {
+      return redirection;
+    }
+    const [only, ...more] = this.resolve(target, index);
+    return only === undefined || more.length > 0 ? redirection : { ...redirection, target: only };
   }
 
   /** The words `word` becomes at command `index`, or `word` itself when a variable in it does not resolve. */
@@ -151,6 +185,9 @@ class LiteralBindings {
 
   /** The value `name` holds at command `index`; a variable in it gives what it held when its statement ran. */
   private valueAt(name: string, index: number): readonly ValuePiece[] | undefined {
+    if (index >= this.cut) {
+      return undefined;
+    }
     const inherited = this.inherited.get(name);
     if (inherited !== undefined) {
       return [{ kind: 'text', text: inherited }];
@@ -310,24 +347,34 @@ class Fields {
 }
 
 /**
- * Each name the line binds to one value, with the statements that bind it, and the commands whose program a
- * variable names; undefined when the line can set variables unseen.
+ * Each name the line binds to one value before its cut, with the statements that bind it, and the commands
+ * whose program a variable names; undefined when the line can set variables unseen in a way no cut bounds:
+ * a keyword out of place, a compound left open, or an array element or IFS set before the cut.
  */
 function boundNames(commands: readonly ShellCommand[]): LineBindings | undefined {
   const statements = new Map<string, { readonly value: readonly ValuePart[]; readonly at: number }[]>();
   const tainted = new Set<string>();
   const deferred: Deferred[] = [];
   const compounds = new Compounds();
+  let lineCut = commands.length;
   for (const [index, command] of commands.entries()) {
     const entered = compounds.enter(command, (name) => tainted.add(name));
     if (entered === undefined) {
       return undefined;
     }
+    if (index >= lineCut) {
+      // Nothing from the cut on resolves, so what it sets cannot change a value that does; its keywords still count.
+      continue;
+    }
     const { words, followed } = entered;
+    // A compound command may run what it holds again, before the commands of its body ahead of it.
+    const outermost = compounds.outermostOpener;
+    const cut = outermost === undefined ? index + 1 : commands.indexOf(outermost);
     if (programIsVariable(words)) {
-      deferred.push({ index, words });
+      deferred.push({ index, words, cut });
     } else if (setsVariablesUnseen(words)) {
-      return undefined;
+      lineCut = cut;
+      continue;
     }
     const statement = bindingStatement(words, command.redirections.length > 0);
     for (const binding of statement ?? []) {
@@ -359,7 +406,7 @@ function boundNames(commands: readonly ShellCommand[]): LineBindings | undefined
       bound.set(name, { value, at: list.map((statement) => statement.at) });
     }
   }
-  return { bound, assigned: new Set([...statements.keys(), ...tainted]), deferred };
+  return { bound, assigned: new Set([...statements.keys(), ...tainted]), deferred, cut: lineCut };
 }
 
 /**
@@ -420,6 +467,11 @@ class Compounds {
   /** True when every compound the line opened has closed. */
   get closed(): boolean {
     return this.open.length === 0;
+  }
+
+  /** The command whose keyword opened the outermost compound still open, if any. */
+  get outermostOpener(): ShellCommand | undefined {
+    return this.open[0]?.opener;
   }
 
   /**

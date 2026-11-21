@@ -1,10 +1,11 @@
-import { recordField, stringField, type JsonRecord } from '../core/guards.ts';
+import { isRecord, recordField, stringField, type JsonRecord } from '../core/guards.ts';
 import {
   isAssigneeRead,
   isIssueAssigneeRead,
   isCommentsRead,
   COMMENTS_PAGE,
   isUserRead,
+  isViewerRead,
   isIssueAssign,
   isIssueUnassign,
   isIssueBodyEdit,
@@ -17,6 +18,7 @@ import {
   isJobLogRead,
   isLabelAdd,
   isFileLabelCreate,
+  isAreaLabelCreate,
   isLabelCreate,
   isLabelFileRead,
   isLabelRead,
@@ -36,6 +38,7 @@ import {
   type WatchPath,
 } from '../github/gh.ts';
 import { nodesOf } from '../github/issues.ts';
+import { FAKE_VIEWER } from './fake-issue-host.ts';
 import { CLOSED_ISSUES_QUERY, ISSUE_FIELDS_QUERY, ISSUE_LINKS_QUERY, ISSUE_PAGE_SIZE, OPEN_ISSUES_QUERY, OPEN_PULLS_QUERY, PULL_PAGE_SIZE, PULL_REQUESTS_QUERY, RAW_FIELD } from '../github/queries.ts';
 
 /** What a test sets on an issue; the rest takes a plain default. */
@@ -112,6 +115,20 @@ export function ghIssue(repo: string, number: number, spec: IssueSpec = {}): Jso
     comments: { nodes: spec.comments ?? [] },
     closedByPullRequestsReferences: { totalCount: spec.linkedPulls ?? 0 },
   };
+}
+
+/**
+ * A held issue (ghIssue's GraphQL shape) as GitHub's REST issue read prints it: its id 1000 + the number, the state
+ * in lowercase, labels and assignees as lists of records, and a null body for an empty one.
+ */
+function heldIssueRest(issue: JsonRecord, number: number): JsonRecord {
+  const nodesOf = (key: string): unknown[] => {
+    const field = issue[key];
+    const nodes = isRecord(field) ? field['nodes'] : undefined;
+    return Array.isArray(nodes) ? nodes : [];
+  };
+  const body = stringField(issue, 'body') ?? '';
+  return { id: 1000 + number, number, state: (stringField(issue, 'state') ?? 'OPEN').toLowerCase(), labels: nodesOf('labels'), assignees: nodesOf('assignees'), body: body === '' ? null : body };
 }
 
 /** A timeline item: `actor`, an account of `kind`, put `label` on the issue at `at`. */
@@ -330,6 +347,7 @@ export class FakeGh implements GhRunner {
   private readonly participants = new Map<string, readonly string[]>();
   private readonly spellings = new Map<string, string>();
   private userAnswer: GhResult | undefined;
+  private viewerAnswer: GhResult | undefined;
   private commentsAnswer: GhResult | undefined;
   private readonly jobLogs = new Map<number, string>();
   /** REST posts by `<repo> <list>`, and reviews by `<repo>#<number>`. */
@@ -479,6 +497,12 @@ export class FakeGh implements GhRunner {
     return this;
   }
 
+  /** From now on, every read of the user the token belongs to (`gh api user`) ends as given; until then, it is FAKE_VIEWER. */
+  answersViewerRead(result: GhResult): this {
+    this.viewerAnswer = result;
+    return this;
+  }
+
   /** From now on, a comment on, a body edit or the close of, a label added to or taken off, an assignee or a link added to an issue, and a label made, end as given. */
   failsWrite(result: GhResult): this {
     this.writeFailure = result;
@@ -519,7 +543,7 @@ export class FakeGh implements GhRunner {
     if (isLabelRead(request.args)) {
       return this.labelRead(request.args[1] ?? '');
     }
-    if (isLabelCreate(request.args)) {
+    if (isLabelCreate(request.args) || isAreaLabelCreate(request.args)) {
       return this.writeFailure ?? this.labelCreate(request.args);
     }
     if (isLabelFileRead(request.args)) {
@@ -538,6 +562,9 @@ export class FakeGh implements GhRunner {
     }
     if (isUserRead(request.args)) {
       return this.userRead(request.args[1] ?? '');
+    }
+    if (isViewerRead(request.args)) {
+      return this.viewerAnswer ?? { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ login: FAKE_VIEWER, type: 'User' }), stderr: '' };
     }
     if (isCommentsRead(request.args)) {
       return this.commentsAnswer ?? this.commentsRead(request.args);
@@ -742,9 +769,9 @@ export class FakeGh implements GhRunner {
       return canned;
     }
     const held = (this.issues.get(`${owner}/${name}`) ?? []).find((issue) => String(issue['number']) === number);
-    return held !== undefined
-      ? { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ id: 1000 + Number(number), number: Number(number), labels: nodesOf(recordField(held, 'labels')).flatMap((label) => { const named = stringField(label, 'name'); return named === undefined ? [] : [{ name: named }]; }) }), stderr: '' }
-      : { end: { kind: 'exited', code: 1 }, stdout: '', stderr: 'gh: Not Found (HTTP 404)\n' };
+    return held === undefined
+      ? { end: { kind: 'exited', code: 1 }, stdout: '', stderr: 'gh: Not Found (HTTP 404)\n' }
+      : { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify(heldIssueRest(held, Number(number))), stderr: '' };
   }
 
   /**

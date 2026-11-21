@@ -10,19 +10,22 @@ import { waitAnswerersOf } from './approval.ts';
 import type { SlicedGoal } from './focus.ts';
 import { NO_GOAL_TAGS } from './goals.ts';
 import { AFFECTS_FLAG, AFFECTS_USAGE, CARD_FLAGS, cardProblem, cardTexts, GATE_FLAG, gateOf, gateUsage, keptCard, OPTION_SEPARATOR, proofWordOf, RUN_FLAG, sameCard, SECURITY_FLAG, typedHandStep, WHY_ASK_FLAG, whyAskUsage, type DecisionCard } from './card.ts';
+import { holdsDescription } from './description-cut.ts';
 import { auditOf, HAND_STEP_KINDS, handStepFileProblem, shortSha256, type AuditPin } from './hand-step.ts';
 import { verdictIsCurrent, verdictReadOf, type SecurityVerdictPin } from './security-verdict.ts';
 import { ITEM_TYPES, sizeProblem, type ApprovalVerdict, type ItemType, type TaskFieldName, type TaskFields, type TaskPrep } from './events.ts';
 import { droppedApproval, isRepark, taskNumber, type RegisterState, type Task } from './fold.ts';
 import { commitsNamed } from './head-sha.ts';
-import { ACTIVE_STATUSES, FOLLOWUP_STATUSES, GITHUB_SOURCE, ISSUE_REF_PREFIX, isTopPriority, priorityText, SESSION_NAME, WAIT_STATUSES, type TaskStatus } from './model.ts';
+import { ACTIVE_STATUSES, FOLLOWUP_STATUSES, GITHUB_SOURCE, hasIssueOrReason, isIssueRef, isTopPriority, priorityText, SESSION_NAME, WAIT_STATUSES, type TaskStatus } from './model.ts';
 import { ITEM_TYPE_TRAITS, traitsOf } from './item-types.ts';
 import { waitsOnOwner } from './owner-waits.ts';
 import { asksReview, missedTaskIds, reviewGap, reviewGapText, reviewProblem, reviewTexts, type ProblemReview } from './review.ts';
 import { loopFix, needPath, NO_TASKS_ELSEWHERE, pathText, type TasksElsewhere } from './tree.ts';
 import { dueStartHolds, dueVerifyHold, heldStart, startHolds, WATCH_USAGE } from './verify.ts';
-import { isPeerWait, isReady, sameWait, sameWaits, waitContext, waitSpelling, type PersonWait, type PersonWaitKind, type WaitReason } from './waits.ts';
+import { isPeerWait, isReady, sameWait, sameWaits, unfinishedAfter, waitContext, waitSpelling, type PersonWait, type PersonWaitKind, type WaitReason } from './waits.ts';
 import { wipHold } from './wip.ts';
+import { MIGRATE_COMMAND } from '../permissions/service-commands.ts';
+import { roleHolding } from '../permissions/service-roles.ts';
 
 /** Team policy, applied on WRITE only: the parser accepts any well-formed history. */
 export type Verdict<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
@@ -194,7 +197,7 @@ export const CARD_USAGE = `--question "<what is decided>" --options "<one choice
 export const WAITS_USAGE = 'decision:<who>, approval:<who>, task:T<id> or time:<YYYY-MM-DD HH:MM>, comma-separated';
 
 /** How a verifying task names when its proof runs (T1306), for the refusals that ask for it. */
-export const PROOF_WAITS_USAGE = 'time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying whose end runs it';
+export const PROOF_WAITS_USAGE = 'time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying, or an open one of your own, whose end runs it';
 
 /** The statuses of a task a proof may wait on: one under way, whose end runs the proof. */
 const PROOF_TASK_STATUSES: readonly TaskStatus[] = ['in-progress', 'verifying'];
@@ -1234,15 +1237,21 @@ export class RegisterPolicy {
    * on any task, a sub-lead on the tasks of its group; only the LEAD_FIELDS (the lead the LEFT_OWNER_LEAD_FIELDS on a
    * task whose owner left the team, or when it points a task holding no issue ref at an issue: issue migrate opens an
    * issue for each task of the team and links it, replacing a note ref, while a task's issue stays its issue), and a
-   * sub-lead hands a task only
-   * to itself or a session it leads, so work never leaves its group by a sub-lead's hand.
+   * sub-lead hands a task only to itself or a session it leads, so work never leaves its group by a sub-lead's hand. A
+   * holder of a service role giving `issue migrate` (T4606) may make that one change, the ref alone, on any task but one
+   * kept local (`local: <why>`, a security hole among them): lifting that mark stays its owner's or a leader's call.
    */
   private leaderUpdateProblem(task: Task, caller: string, names: readonly TaskFieldName[], changes: Partial<TaskFields>): string | undefined {
     const isLead = caller === this.tree.lead;
+    const linksIssue = linksAnIssue(task, changes);
+    // The migrate role's holder links every team task to the issue its run opened for it (T4606), and nothing else; a
+    // task kept local is never one, so a holder's --yes run skips its row (migrate.ts skipReason asks this judge).
+    if (linksIssue && names.length === 1 && !hasIssueOrReason(task.ref) && roleHolding(this.config.serviceRoles, MIGRATE_COMMAND, caller) !== undefined) {
+      return undefined;
+    }
     if (!isLead && !this.tree.leads(caller, task.owner)) {
       return `only the owner (${task.owner}) or ${this.approversText(task.owner)} changes ${task.id}`;
     }
-    const linksIssue = task.ref?.startsWith(ISSUE_REF_PREFIX) !== true && changes.ref !== undefined && changes.ref !== null && changes.ref.startsWith(ISSUE_REF_PREFIX);
     const allowed = isLead && (linksIssue || !this.config.sessions.includes(task.owner)) ? LEFT_OWNER_LEAD_FIELDS : LEAD_FIELDS;
     const notLead = names.filter((name) => !allowed.includes(name));
     if (notLead.length > 0) {
@@ -1274,7 +1283,8 @@ export class RegisterPolicy {
 
   /**
    * A title, description or priority GitHub changed, on the import's own task only. A field the task already has
-   * is left out, judged under the lock, so a sync that raced another changes nothing twice.
+   * is left out, judged under the lock, so a sync that raced another changes nothing twice. A task whose line left
+   * its description out is judged by its mark (description-cut.ts), or every sync would write the body again.
    */
   importUpdate(task: Task, changes: ImportChanges, note: string): Verdict<UpdateChange> {
     const notImported = this.notImported(task);
@@ -1283,7 +1293,7 @@ export class RegisterPolicy {
     }
     const changed: ImportChanges = {
       ...(changes.title !== undefined && changes.title !== task.title ? { title: changes.title } : {}),
-      ...(changes.description !== undefined && changes.description !== task.description ? { description: changes.description } : {}),
+      ...(changes.description !== undefined && !holdsDescription(task, changes.description) ? { description: changes.description } : {}),
       ...(changes.priority !== undefined && changes.priority !== task.priority ? { priority: changes.priority } : {}),
     };
     if (Object.keys(changed).length === 0) {
@@ -1518,15 +1528,26 @@ function runsProof(reason: WaitReason): boolean {
 }
 
 /**
- * A proof runs when the task it waits on ends, so it waits only on one in progress or verifying (T1306): one not
- * started has no end in sight, and the task stays waiting on it until it starts.
+ * A proof runs when the task it waits on ends, so it waits only on one in progress or verifying (T1306), or on an
+ * open one of the same owner (#1544), who can start it now, so its end is in sight and the verifying task stops being
+ * due meanwhile; another's open task, or one waiting, has no end in sight, and the task stays waiting on it until it
+ * starts. An open one planned after a task not finished yet (`--after`) cannot start now either, so its end is not in
+ * sight: that refusal names the unfinished tasks.
  */
 function unstartedProofTask(task: Task, id: string, context: StatusContext): string | undefined {
   const target = context.state.tasks.get(id) ?? context.elsewhere.get(id)?.task;
   if (target === undefined || PROOF_TASK_STATUSES.includes(target.status)) {
     return undefined;
   }
-  return `${id} is ${target.status}: a proof waits only on a task in progress or verifying; until it starts, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
+  if (target.status === 'open' && target.owner === task.owner) {
+    const unfinished = unfinishedAfter(target.after, waitContext(context.state.tasks, context.now, context.zone, context.elsewhere));
+    if (unfinished.length === 0) {
+      return undefined;
+    }
+    return `${id} is planned after ${unfinished.join(', ')}, not finished yet, so it cannot start now: a proof waits on an open task of its own owner's only once it can start; until then, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
+  }
+  const whose = target.status === 'open' ? ` and ${target.owner}'s` : '';
+  return `${id} is ${target.status}${whose}: a proof waits only on a task in progress or verifying, or an open one of its own owner's; until it starts, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
 }
 
 /**
@@ -1634,6 +1655,11 @@ function loopProblem(id: string, other: string, tasks: ReadonlyMap<string, Task>
 /** Why a time to wait until (stored form) is refused, or undefined: it must be still to come. */
 function timeProblem(at: string, { now, zone }: Pick<StatusContext, 'now' | 'zone'>): string | undefined {
   return (parseDeadline(at, zone)?.getTime() ?? 0) > now.getTime() ? undefined : `time ${showStored(at, zone)} has passed: name a time to come`;
+}
+
+/** True when `changes` point a task holding no issue ref at an issue: what issue migrate writes for each task it opens one for. */
+function linksAnIssue(task: Task, changes: Partial<TaskFields>): boolean {
+  return !isIssueRef(task.ref) && isIssueRef(changes.ref);
 }
 
 function blankToNull(text: string | undefined): string | null {

@@ -1,10 +1,12 @@
 import type { KitConfig } from '../../config/types.ts';
 import { recordField, stringField, type JsonRecord } from '../../core/guards.ts';
 import { toJsonlLine } from '../../core/jsonl.ts';
-import { ROLE_CAP_WINDOW_MS, roleAllowOutput, roleAllowRecord, roleAllowsSince, roleCapOutput, roleHolding } from '../../hooks/service-role-allow.ts';
+import { ROLE_CAP_WINDOW_MS, roleAllowOutput, roleAllowRecord, roleAllowsSince, roleCapOutput } from '../../hooks/service-role-allow.ts';
+import { roleHolding } from '../../permissions/service-roles.ts';
 import { sessionIdOf } from '../../inbox/inbox.ts';
-import { isIssueCommand } from '../../permissions/service-commands.ts';
+import { isCappedCommand, MIGRATE_COMMAND } from '../../permissions/service-commands.ts';
 import { toolRoleCallOf } from '../../permissions/service-role-call.ts';
+import { migrateRowsFileOf, migrateWeightOf } from '../migrate-role-check.ts';
 import { shipBranchOf, shipToolTest } from '../ship-role-check.ts';
 import type { CommandTable } from '../../slash/plan.ts';
 import { hookLogOf } from '../hook-logs.ts';
@@ -25,11 +27,12 @@ async function holderOf(runtime: CliRuntime, kit: Kit, config: KitConfig, claude
 
 /**
  * What the route-allow hook prints for a service role's call: an allow when the tab's holder holds a role giving the
- * call's command, every guard passed it (`guardsPass`), a close or comment is under the role's daily cap and a ship or
- * merge runs the team's landed ship tool on the holder's own task branch (ship-role-check.ts); an ask of the owner past
- * the cap; else '', so the permission check decides. It answers only with the switch on and a config that loaded with
- * no issue from this release (a newer one's or a broken key's config gives no role), and only once the allow is
- * logged: the cap counts the log, so a log it cannot write lets nothing past.
+ * call's command, every guard passed it (`guardsPass`), a close or a migrate's issue rows fit under the role's
+ * daily cap, a migrate reads its rows from one of the team's task folders (migrate-role-check.ts) and a ship or merge
+ * runs the team's landed ship tool on the holder's own task branch (ship-role-check.ts); an ask of the owner past the
+ * cap; else '', so the permission check decides. It answers only with the switch on and a config that loaded with no
+ * issue from this release (a newer one's or a broken key's config gives no role), and only once the allow is logged:
+ * the cap counts the log, so a log it cannot write lets nothing past.
  */
 export async function roleAllowOutputOf(runtime: CliRuntime, kit: Kit, payload: JsonRecord, cli: CommandTable, guardsPass: () => Promise<boolean>): Promise<string> {
   const { load } = kit;
@@ -49,18 +52,24 @@ export async function roleAllowOutputOf(runtime: CliRuntime, kit: Kit, payload: 
   if (call === undefined || holder === undefined || role === undefined) {
     return '';
   }
-  // A ship is held to the holder's own task branch (C4) and logged by it; a close or comment counts toward the cap (C6).
-  const target = 'ship' in call ? await shipBranchOf(runtime, kit, config, holder, call.ship) : call.target;
-  if (target === undefined || !(await guardsPass())) {
+  // A ship is held to the holder's own task branch (C4) and logged by it, a migrate to a rows file in the team's task
+  // files; a close counts one toward the cap (C6), a migrate each issue row of its file (T4606), so a file the allow
+  // cannot weigh is left to the permission check.
+  const migrates = call.command === MIGRATE_COMMAND;
+  const target = 'ship' in call ? await shipBranchOf(runtime, kit, config, holder, call.ship) : migrates ? migrateRowsFileOf(kit.paths, call.target) : call.target;
+  const count = target !== undefined && migrates ? await migrateWeightOf(runtime.files, target, config.register.secretPatterns) : undefined;
+  if (target === undefined || (migrates && count === undefined) || !(await guardsPass())) {
     return '';
   }
   const log = hookLogOf(runtime, kit.paths, 'prompt-answers');
   const now = runtime.clock.now();
   const cap = config.prompts.serviceRoleDailyCap;
-  if (isIssueCommand(call.command) && roleAllowsSince((await log.read()) ?? '', role, now - ROLE_CAP_WINDOW_MS) >= cap) {
-    return roleCapOutput(role, cap);
+  const weight = count ?? 1;
+  if (isCappedCommand(call.command) && roleAllowsSince((await log.read()) ?? '', role, now - ROLE_CAP_WINDOW_MS) + weight > cap) {
+    return roleCapOutput(role, cap, weight);
   }
   const acted = { command: call.command, target };
-  await log.append(toJsonlLine(roleAllowRecord({ at: new Date(now), session: holder, claudeSession, role, call: acted })));
+  const facts = { at: new Date(now), session: holder, claudeSession, role, call: acted };
+  await log.append(toJsonlLine(roleAllowRecord(count === undefined ? facts : { ...facts, count })));
   return roleAllowOutput(role, acted);
 }

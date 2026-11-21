@@ -38,7 +38,7 @@ const quotedPaths = (doc: DocFile): string[] =>
 
 describe('the contributor kit', () => {
   it('reads the project skills from .claude/skills', () => {
-    assert.deepEqual(folders, ['dev-add-command', 'dev-add-config-key', 'dev-design-issue', 'dev-github-intake', 'dev-ship-change', 'dev-update-docs']);
+    assert.deepEqual(folders, ['dev-add-command', 'dev-add-config-key', 'dev-design-issue', 'dev-github-intake', 'dev-ship-change', 'dev-ship-release', 'dev-update-docs']);
   });
 
   for (const skill of skills) {
@@ -86,6 +86,30 @@ describe('the contributor kit', () => {
     for (const doc of [rules, contributing, ...skills.filter((skill) => skill.path.includes('dev-ship-change'))]) {
       assert.ok(doc.text.replace(/\s+/g, ' ').includes(limit), `${doc.path} names ${limit}`);
       assert.ok(doc.text.includes(trailer), `${doc.path} names ${trailer}`);
+    }
+  });
+
+  it('points every way into an issue or a pull request at the guide for outside people and their AI tools', () => {
+    const guide = 'docs/issues-and-pull-requests.md';
+    assert.ok(existsSync(join(ROOT, guide)), `${guide} exists`);
+    const entries = [
+      'README.md',
+      'CONTRIBUTING.md',
+      'llms.txt',
+      '.github/ISSUE_TEMPLATE/bug.yml',
+      '.github/ISSUE_TEMPLATE/feature.yml',
+      '.github/ISSUE_TEMPLATE/config.yml',
+      '.github/pull_request_template.md',
+    ];
+    assert.deepEqual(entries.filter((path) => !read(path).includes(guide)), []);
+  });
+
+  it("keeps the intake skill's host rules: an outside diff is read before any checkout, and some never run here", () => {
+    const intake = skills.find((skill) => skill.path.includes('dev-github-intake'));
+    assert.ok(intake !== undefined, 'dev-github-intake exists');
+    const text = intake.text.replace(/\s+/g, ' ');
+    for (const rule of ['Read its full diff before any checkout', 'is never checked out on this host', '## What needs the maintainer']) {
+      assert.ok(text.includes(rule), `dev-github-intake says "${rule}"`);
     }
   });
 });
