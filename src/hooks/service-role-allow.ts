@@ -1,7 +1,6 @@
-import type { ServiceRoleConfig } from '../config/types.ts';
 import type { JsonRecord } from '../core/guards.ts';
 import { parseJsonl } from '../core/jsonl.ts';
-import { isIssueCommand, TEAM_HELD_COMMANDS, type ServiceCommand } from '../permissions/service-commands.ts';
+import { isCappedCommand } from '../permissions/service-commands.ts';
 import type { RoleCall } from '../permissions/service-role-call.ts';
 import { holdBackOutput } from './permission.ts';
 
@@ -9,9 +8,9 @@ import { holdBackOutput } from './permission.ts';
  * The service-role allow (T2984, the owner's option A): a session holding a role runs the role's teamrig commands with no
  * permission check, so a job the owner gave it (closing the GitHub issue a fix landed for, shipping its own branch)
  * never stalls on a prompt. It answers only for the tab bound to the holder (C1), only once every guard passed the
- * call, and only up to `prompts.serviceRoleDailyCap` closes and comments a role in 24 hours, then it asks the owner
- * (C6); a ship is held to the holder's own task branch instead (C4). Its log line names the role, command and issue or
- * branch, never the text (C7); `prompts.routeAllow: off` takes it away.
+ * call, and only up to `prompts.serviceRoleDailyCap` closes and migrated issues a role in 24 hours, then it asks the
+ * owner (C6); a ship is held to the holder's own task branch instead (C4). Its log line names the role, command and
+ * issue or branch, never the text (C7); `prompts.routeAllow: off` takes it away.
  */
 
 /** A role call's command and what it acts on, as the log and the allow name them. */
@@ -20,30 +19,22 @@ export type RoleTarget = Pick<RoleCall, 'command' | 'target'>;
 /** The rolling window the daily cap counts over. */
 export const ROLE_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** True when the role gives `command` to `holder`: a holder it names, or every session for a command that checks its own caller. */
-function holds(role: ServiceRoleConfig, command: ServiceCommand, holder: string): boolean {
-  if (!role.commands.includes(command)) {
-    return false;
-  }
-  return role.holders === 'team' ? TEAM_HELD_COMMANDS.has(command) : role.holders.includes(holder);
-}
-
-/** The role, by name, that gives `holder` the command; the first by name when two do, so the cap counts one; else undefined. */
-export function roleHolding(roles: Readonly<Record<string, ServiceRoleConfig>>, command: ServiceCommand, holder: string): string | undefined {
-  return Object.keys(roles)
-    .sort()
-    .find((name) => {
-      const role = roles[name];
-      return role !== undefined && holds(role, command, holder);
-    });
-}
-
-/** How many closes and comments the role's allow let run at or after `sinceMs`, by the prompt-answers log's text; a ship counts toward no cap. */
+/**
+ * How many calls the role's allow let run at or after `sinceMs` toward its cap, by the prompt-answers log's text: one
+ * for each close, and for a migrate its `count`, the issue rows its file held (T4606), so a run opening fifty issues
+ * weighs fifty; a ship counts toward no cap. A line with no positive whole `count` weighs one.
+ */
 export function roleAllowsSince(log: string, role: string, sinceMs: number): number {
-  return parseJsonl(log).records.filter(({ record }) => {
-    const at = record['at'];
-    return record['answer'] === 'role' && record['role'] === role && isIssueCommand(record['command']) && typeof at === 'string' && Date.parse(at) >= sinceMs;
-  }).length;
+  return parseJsonl(log)
+    .records.filter(({ record }) => {
+      const at = record['at'];
+      return record['answer'] === 'role' && record['role'] === role && isCappedCommand(record['command']) && typeof at === 'string' && Date.parse(at) >= sinceMs;
+    })
+    .reduce((sum, { record }) => sum + weightOf(record['count']), 0);
+}
+
+function weightOf(count: unknown): number {
+  return typeof count === 'number' && Number.isSafeInteger(count) && count > 0 ? count : 1;
 }
 
 /** Who ran a role's call, and when. */
@@ -54,6 +45,8 @@ export interface RoleAllowFacts {
   readonly role: string;
   /** The command, and what it acts on: the issue, or the branch a ship or merge runs on. */
   readonly call: RoleTarget;
+  /** What a migrate weighs toward the cap: the issue rows of its file (T4606); absent for a call acting on one issue. */
+  readonly count?: number;
 }
 
 /**
@@ -72,6 +65,7 @@ export function roleAllowRecord(facts: RoleAllowFacts): JsonRecord {
     role: facts.role,
     command: facts.call.command,
     target: facts.call.target,
+    ...(facts.count === undefined ? {} : { count: facts.count }),
   };
 }
 
@@ -86,11 +80,16 @@ export function roleAllowOutput(role: string, call: RoleTarget): string {
   });
 }
 
-/** The hook's stdout once the role ran its cap in 24 hours: a refusal, saying when the role runs again. */
-export function roleCapOutput(role: string, cap: number): string {
+/**
+ * The hook's stdout once the role has no room left in 24 hours for a call weighing `weight` (a migrate's issue rows): a
+ * refusal, saying when the role runs again, and for a migrate that a file past the whole cap must be split.
+ */
+export function roleCapOutput(role: string, cap: number, weight = 1): string {
+  const ran = weight > 1 ? `has less room than this run's ${weight} issue rows left of its ${cap} calls` : `ran its ${cap} calls`;
+  const split = weight > cap ? ' A rows file holding more issue rows than the cap never runs under the role: split it.' : '';
   return holdBackOutput(
     'ask',
-    `teamrig: the service role ${role} ran its ${cap} calls of the last 24 hours (prompts.serviceRoleDailyCap), so this ` +
-      'one is refused. The role runs again once its oldest call of the window is 24 hours old; only the owner raises the cap.',
+    `teamrig: the service role ${role} ${ran} of the last 24 hours (prompts.serviceRoleDailyCap), so this one is refused. ` +
+      `The role runs again once its oldest call of the window is 24 hours old; only the owner raises the cap.${split}`,
   );
 }
