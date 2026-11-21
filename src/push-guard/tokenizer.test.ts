@@ -620,6 +620,7 @@ describe('parseShell: bindings the commands may not show', () => {
       'n=0 m=1\nm=$((n + m)) && echo "$(( m ))"; m=7',
       'n=0; echo "$(echo $((n + 1)))"',
       'n=0; printf "%d\\n" $((n))',
+      'n=0; cat <<EOF\n$((n))\nEOF',
       'n=0; export n; echo $((n))',
     ]) {
       assert.equal(unclear(line), false, line);
@@ -663,6 +664,7 @@ describe('parseShell: bindings the commands may not show', () => {
       "_=0; echo 'a[$(touch F)]' >/dev/null; echo $((_))",
       "BASH_REMATCH=0; [[ 'a[$(touch F)]' =~ .* ]]; echo $((BASH_REMATCH))",
       'N=0; echo $((N))',
+      'cat <<EOF\n$((n))\nEOF',
       'n=0; export -n m; echo $((n))',
       'n=0; shopt -s expand_aliases; echo $((n))',
     ]) {
