@@ -49,8 +49,11 @@ export function writesFile(redirection: Redirection): boolean {
   return target.dynamic || target.text !== '/dev/null';
 }
 
-/** True when a single-dash option cluster turns on `-i` before the letter that takes the rest of the word as a value. */
-function clusterHasI(word: ShellWord, takesValue: RegExp): boolean {
+/**
+ * True when a single-dash option cluster turns on an in-place letter (`-i`, or another `inPlace` matches) before the
+ * letter that takes the rest of the word as a value.
+ */
+function clusterHasI(word: ShellWord, takesValue: RegExp, inPlace = /i/): boolean {
   if (word.dynamic && /^[-$`]/.test(word.text)) {
     return true;
   }
@@ -59,7 +62,7 @@ function clusterHasI(word: ShellWord, takesValue: RegExp): boolean {
   }
   const cluster = word.text.slice(1);
   const end = cluster.search(takesValue);
-  return (end === -1 ? cluster : cluster.slice(0, end)).includes('i');
+  return inPlace.test(end === -1 ? cluster : cluster.slice(0, end));
 }
 
 /**
@@ -92,10 +95,12 @@ export function editsInPlace(launched: ProgramLaunch): boolean {
   switch (programName(launched.program.text)) {
     case 'sed':
     case 'gsed':
-      return args.some((arg) => isLongOption(arg.text, '--in-place') || clusterHasI(arg, /[ef]/));
+      // BSD and macOS sed spell in-place `-I` too; GNU sed refuses it, so reading it there only over-counts.
+      return args.some((arg) => isLongOption(arg.text, '--in-place') || clusterHasI(arg, /[ef]/, /[iI]/));
     case 'perl':
     case 'ruby':
-      return args.some((arg) => clusterHasI(arg, /[eEMmIdDFxV]/));
+      // `-d` takes a value only after `:` or `=` (perl) or none (ruby), so a cluster goes on past it: `-di`.
+      return args.some((arg) => clusterHasI(arg, /[eEMmIDFxV]/));
     case 'awk':
     case 'gawk':
       return args.some((arg) => (arg.dynamic && /^[-$`]/.test(arg.text)) || loadsInplace(arg.text));
