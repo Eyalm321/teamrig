@@ -352,7 +352,8 @@ wrappers and git aliases (an `env -S` string and an alias value split by env's a
 space in both), but it does not see a push inside a script or program the command runs, `gh pr merge`,
 git extensions, or pushes run outside Claude Code. It is a guard against mistakes, not a sandbox: protect the
 branch on your git host too. A program that runs a command where the guard cannot read it (`ssh`, `tmux`,
-`screen`, `watch`, `at`, `crontab`, `docker`/`kubectl exec`) asks when the command it is handed names a push.
+`screen`, `watch`, `at`, `crontab`, `docker`/`kubectl exec`) asks when the command it is handed pushes, read as
+the shell there reads it; so does a push written into a startup file, a git hook or an alias.
 
 ## Before a shell command: the commit guard
 

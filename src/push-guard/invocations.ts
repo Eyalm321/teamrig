@@ -266,42 +266,66 @@ function saysPush(text: string): boolean {
 }
 
 /*
- * Programs that run a command the guard cannot read: on another host or in a container, in a terminal or
- * multiplexer, later, or in parallel. Each is a doubt when the command it is handed names a push, in its
- * arguments or (for those that read commands on stdin) in a heredoc or here-string, and a gated doubt when a
- * pipe feeds it.
+ * Programs that run a command the guard cannot follow: on another host or in a container, in a terminal or
+ * multiplexer, later, or in parallel. The command they are handed is read as a bash script, as the shell at the
+ * other end reads it, and is a doubt when it pushes.
  */
+/** Container tools: only what follows their `exec`, `run`, `enter`, ... is a command (`docker push` pushes an image). */
+const CONTAINER_TOOLS: ReadonlySet<string> = new Set(['docker', 'podman', 'nerdctl', 'kubectl', 'oc', 'lxc', 'toolbox', 'distrobox']);
+const CONTAINER_COMMANDS: ReadonlySet<string> = new Set(['exec', 'run', 'debug', 'enter', 'ssh']);
 /** Programs that run a command from their arguments. */
 const ARGUMENT_RUNNERS: ReadonlySet<string> = new Set([
-  ...['ssh', 'watch', 'tmux', 'screen', 'xterm', 'gnome-terminal', 'konsole', 'kitty', 'alacritty', 'xfce4-terminal', 'parallel'],
-  ...['docker', 'podman', 'kubectl', 'oc', 'awk', 'gawk', 'mawk', 'nawk'],
+  ...['ssh', 'sshpass', 'mosh', 'watch', 'tmux', 'screen', 'byobu', 'dtach', 'zellij', 'wezterm', 'expect', 'parallel'],
+  ...['xterm', 'gnome-terminal', 'konsole', 'kitty', 'alacritty', 'xfce4-terminal', 'make', ...CONTAINER_TOOLS],
 ]);
-/** Container tools: only what follows their `exec`, `run` or `debug` is a command (`docker push` pushes an image). */
-const CONTAINER_TOOLS: ReadonlySet<string> = new Set(['docker', 'podman', 'kubectl', 'oc']);
-const CONTAINER_COMMANDS: ReadonlySet<string> = new Set(['exec', 'run', 'debug']);
 /** awk runs a command only through `system(...)` or a pipe to or from a quoted command. */
 const AWK_RUNS = /system\s*\(|\|\s*"|"\s*\|/;
+const AWKS: ReadonlySet<string> = new Set(['awk', 'gawk', 'mawk', 'nawk']);
 /** Programs that run commands they read on stdin. */
 const STDIN_RUNNERS: ReadonlySet<string> = new Set(['ssh', 'at', 'batch', 'crontab', 'parallel', 'make', 'docker', 'podman', 'kubectl']);
+/** The most argument words a runner's command is looked for in, each suffix read on its own. */
+const MAX_RUNNER_WORDS = 24;
 /** A pipe to the next command, maybe after the newline that ends a heredoc's line. */
 const PIPE_TERMINATOR = /^\|&?\n*$/;
 /** Variables whose value a shell runs as commands later: before a prompt, at its start, or in a prompt. */
 const CODE_VARIABLES = /^(?:PROMPT_COMMAND|BASH_ENV|ENV|PS[0124])(?:\[[^\]]*\])?\+?=/;
-/** A shell's startup file, which every later shell runs. */
-const STARTUP_FILE = /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|profile|zshrc|zprofile|zshenv|zlogin|kshrc|mkshrc)|profile|bash\.bashrc|environment)$/;
+/**
+ * A file whose text a later shell or git runs: a shell's startup file or a folder of them (`~/.bashrc.d/`,
+ * `/etc/profile.d/`, fish's config), a git hook, a systemd user unit, direnv's `.envrc`.
+ */
+const LATER_CODE_FILE =
+  /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|mkshrc|envrc)|profile|bash\.bashrc|environment)$|(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|fish|hooks|systemd\/user|autostart)\//;
 /** A redirection that writes its file: `>`, `>>`, `>|`, `&>`, `&>>`, with a descriptor number or not. */
 const WRITE_REDIRECTION = /^(?:\d*|&)>[>|]?$/;
 
-/** The arguments of an {@link ARGUMENT_RUNNERS} program that hold the command it runs. */
+/** The arguments of an {@link ARGUMENT_RUNNERS} program that may hold the command it runs. */
 function runnerArgs(name: string, args: readonly ShellWord[]): readonly ShellWord[] {
   if (CONTAINER_TOOLS.has(name)) {
     const at = args.findIndex((arg) => CONTAINER_COMMANDS.has(arg.text));
     return at === -1 ? [] : args.slice(at + 1);
   }
-  if (name.endsWith('awk')) {
-    return args.filter((arg) => AWK_RUNS.test(arg.text));
+  if (name === 'make') {
+    // Only `--eval` text is a makefile of the line's own; a recipe from a file is the file's.
+    return args.flatMap((arg, index) => {
+      if (arg.text === '-E' || arg.text === '--eval') {
+        const value = args[index + 1];
+        return value === undefined ? [] : [value];
+      }
+      const attached = /^(?:-E|--eval=)(.+)$/s.exec(arg.text);
+      return attached === null ? [] : [{ text: attached[1] ?? '', dynamic: arg.dynamic }];
+    });
   }
   return args;
+}
+
+/** The literal strings of an awk program: the commands its `system(...)` or pipes may run. */
+function awkStrings(program: string): ShellWord[] {
+  return [...program.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((match) => staticWord((match[1] ?? '').replace(/\\(.)/g, '$1')));
+}
+
+/** Words joined into one command line, as written (`ssh`, `watch`) or quoted word by word (an argv program). */
+function joinedLine(words: readonly ShellWord[], quote: boolean): ShellWord {
+  return { text: words.map((word) => (quote ? shellQuote(word) : word.text)).join(' '), dynamic: words.some((word) => word.dynamic) };
 }
 
 /** Why `parsed` may not hold every command its line runs; undefined when it does. */
@@ -410,7 +434,7 @@ class GitInvocationFinder {
       }
       location.enter(command.subshells);
       if (dialect === 'bash') {
-        this.noteLaterCode(command, stdin);
+        this.noteLaterCode(command, stdin, location, depth);
       }
       const launched = this.visitCommand(command.words, dialect, location, depth, stdin, fedByPipe);
       this.visitHeld(command, launched, rereading[index] ?? true, location, depth);
@@ -506,7 +530,7 @@ class GitInvocationFinder {
           this.visitPackaged(packaged, launched, dialect, location, depth, stdin);
           break;
         }
-        this.visitRunner(name, launched.args, stdin, fedByPipe);
+        this.visitRunner(name, launched.args, stdin, fedByPipe, location, depth);
         const subcommand = name.startsWith('git-') ? name.slice(4) : undefined;
         if (name !== 'git' && (subcommand === undefined || !GIT_BUILTINS.has(subcommand))) {
           break;
@@ -523,40 +547,82 @@ class GitInvocationFinder {
   }
 
   /**
-   * Doubts a program that runs a command the guard cannot read (see {@link ARGUMENT_RUNNERS},
-   * {@link STDIN_RUNNERS}) when that command names a push, or when a pipe feeds it commands.
+   * Doubts a program that runs a command the guard cannot follow (see {@link ARGUMENT_RUNNERS},
+   * {@link STDIN_RUNNERS}) when the command it is handed pushes, read as the bash script the other end runs; a
+   * pipe that feeds one commands is a doubt on a line that names a push. Since a runner's options and host
+   * come before its command, each suffix of its arguments is read, joined as written and quoted word by word.
    */
-  private visitRunner(name: string, args: readonly ShellWord[], stdin: ShellWord | undefined, fedByPipe: boolean): void {
-    const reason = `it hands ${name} a command that names a push, which ${name} runs where the guard cannot read it`;
-    if (ARGUMENT_RUNNERS.has(name) && runnerArgs(name, args).some((arg) => saysPush(arg.text))) {
-      this.doubt(reason, false);
-    } else if (STDIN_RUNNERS.has(name) && stdin !== undefined && saysPush(stdin.text)) {
-      this.doubt(reason, false);
-    } else if (STDIN_RUNNERS.has(name) && stdin === undefined && fedByPipe) {
+  private visitRunner(name: string, args: readonly ShellWord[], stdin: ShellWord | undefined, fedByPipe: boolean, location: Location, depth: number): void {
+    const awk = AWKS.has(name);
+    const programs = awk ? args.filter((arg) => AWK_RUNS.test(arg.text)) : [];
+    const lines: ShellWord[] = [];
+    if (awk) {
+      programs.forEach((program) => lines.push(...awkStrings(program.text)));
+    } else if (ARGUMENT_RUNNERS.has(name)) {
+      const words = runnerArgs(name, args).slice(0, MAX_RUNNER_WORDS);
+      for (let from = 0; from < words.length; from += 1) {
+        const suffix = words.slice(from);
+        lines.push(joinedLine(suffix, false), ...(suffix.length > 1 ? [joinedLine(suffix, true)] : []));
+      }
+    }
+    // awk running a command it builds (`system($0)`) runs what it reads.
+    const readsStdin = STDIN_RUNNERS.has(name) || programs.length > 0;
+    if (readsStdin && stdin !== undefined) {
+      lines.push(stdin);
+    }
+    if (this.handedPush(lines, location, depth) || programs.some((program) => saysPush(program.text))) {
+      this.doubt(`it hands ${name} a command that pushes, which ${name} runs where the guard cannot read it`, false);
+    } else if (lines.some((line) => line.dynamic)) {
+      this.doubt(`it hands ${name} a command only known when it runs`, true);
+    } else if (readsStdin && stdin === undefined && fedByPipe) {
       this.doubt(`it pipes commands into ${name}, which runs them where the guard cannot read them`, true);
     }
   }
 
   /**
-   * Doubts code a later shell runs, when it names a push: text written into a shell startup file (by a
-   * redirection or `tee`), a variable a shell runs as commands (`PROMPT_COMMAND`, `BASH_ENV`, a prompt), or
-   * an alias.
+   * True when one of `lines`, read as a bash script, pushes or hands a runner of its own a push (`sshpass ...
+   * ssh host '...'`). A line only known when it runs is left to the caller.
    */
-  private noteLaterCode(command: ShellCommand, stdin: ShellWord | undefined): void {
+  private handedPush(lines: readonly ShellWord[], location: Location, depth: number): boolean {
+    if (depth >= MAX_SCRIPT_DEPTH) {
+      return lines.length > 0;
+    }
+    return lines.some((line) => {
+      if (line.dynamic || line.text.trim() === '') {
+        return false;
+      }
+      const handed = new GitInvocationFinder(this.context);
+      handed.visitScript(staticWord(line.text), 'bash', location.child(), depth + 1);
+      return handed.invocations.some((invocation) => invocation.subcommand === 'push') || handed.doubts.some((doubt) => !doubt.gated);
+    });
+  }
+
+  /**
+   * Doubts code a later shell or git runs, when it pushes: text written into a startup file, hook or unit (see
+   * {@link LATER_CODE_FILE}) by a redirection or `tee`, a variable a shell runs as commands (`PROMPT_COMMAND`,
+   * `BASH_ENV`, a prompt), or an alias.
+   */
+  private noteLaterCode(command: ShellCommand, stdin: ShellWord | undefined, location: Location, depth: number): void {
     const { words } = command;
     const head = words[0] === undefined ? '' : programName(words[0].text);
     const targets = [
       ...command.redirections.filter((redirection) => WRITE_REDIRECTION.test(redirection.operator)).flatMap((redirection) => (redirection.target === undefined ? [] : [redirection.target])),
       ...(head === 'tee' ? words.slice(1).filter((word) => !word.text.startsWith('-')) : []),
     ];
-    const written = [...words, ...(stdin === undefined ? [] : [stdin])].map((word) => word.text).join(' ');
-    if (targets.some((target) => STARTUP_FILE.test(target.text)) && saysPush(written)) {
-      this.doubt('it writes a push into a shell startup file, which every later shell runs', false);
+    if (targets.some((target) => LATER_CODE_FILE.test(target.text))) {
+      // What lands in the file: the heredoc or here-string, or what echo or printf writes.
+      const written = [...(stdin === undefined ? [] : [stdin]), joinedLine(words.slice(1), false)];
+      if (this.handedPush(written, location, depth) || written.some((text) => text.dynamic && saysPush(text.text))) {
+        this.doubt('it writes a push into a file a later shell or git runs', false);
+      }
     }
     const alias = head === 'alias';
     for (const word of words) {
-      if ((CODE_VARIABLES.test(word.text) || (alias && /^[^=\s]+=/.test(word.text))) && saysPush(word.text.slice(word.text.indexOf('=') + 1))) {
-        this.doubt(alias ? 'it defines an alias that names a push, which a later command may run' : 'it sets a variable a shell runs as commands later to text that names a push', false);
+      if (CODE_VARIABLES.test(word.text) || (alias && /^[^=\s]+=/.test(word.text))) {
+        const value = { text: word.text.slice(word.text.indexOf('=') + 1), dynamic: word.dynamic };
+        if (this.handedPush([value], location, depth)) {
+          this.doubt(alias ? 'it defines an alias that pushes, which a later command may run' : 'it sets a variable a shell runs as commands later to a push', false);
+        }
       }
     }
   }

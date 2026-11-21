@@ -44,6 +44,31 @@ const HANDS_X: readonly string[] = [
   'PROMPT_COMMAND=X',
   'export BASH_ENV=X',
   'alias g=X',
+  // the receiving shell puts a split word back together
+  `ssh host 'git pu""sh origin main'`,
+  `ssh host 'git p\\ush origin main'`,
+  `ssh host 'x=pu; git \${x}sh origin main'`,
+  `watch 'git pu""sh origin main'`,
+  `tmux new -d 'git pu""sh origin main'`,
+  `at now <<< 'git pu""sh origin main'`,
+  `echo 'git pu""sh origin main' >> ~/.bashrc`,
+  `alias g='git pu""sh origin main'`,
+  `PROMPT_COMMAND='git pu""sh origin main'`,
+  // later code beyond the classic startup files
+  'echo X >> ~/.bash_aliases',
+  'echo X > ~/.bashrc.d/x.sh',
+  'echo X > /etc/profile.d/x.sh',
+  'echo X >> ~/.config/fish/config.fish',
+  'echo X > .git/hooks/pre-commit',
+  'echo X > .envrc',
+  // more runners
+  'sshpass -p x ssh host X',
+  'mosh host -- sh -c X',
+  'toolbox run sh -c X',
+  'distrobox enter box -- sh -c X',
+  'podman machine ssh X',
+  "make -E 'all:; git push origin main'",
+  `awk '{system($0)}' <<< X`,
 ];
 
 /** Shapes that stay as they were: X is data, or the program runs something else. */
@@ -63,6 +88,11 @@ const UNCHANGED: readonly (readonly [string, string])[] = [
   ['gh issue create --body X', 'pass'],
   ['git commit -m X', 'pass'],
   ['export A=X', 'pass'],
+  // the handed command is read, not searched for the word
+  ["tmux send-keys -t lead 'echo push done' Enter", 'pass'],
+  ["kubectl exec p -- cat /var/log/push.log", 'pass'],
+  ["ssh host 'cat push-notes.md'", 'pass'],
+  ["echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc", 'pass'],
 ];
 
 describe('findGitInvocations: programs that run a command the guard cannot read', () => {
@@ -80,7 +110,7 @@ describe('findGitInvocations: programs that run a command the guard cannot read'
 
   it('asks always when the command names a push, and only on a push line when a pipe feeds it', () => {
     const named = findGitInvocations(`ssh host ${X}`, { cwd: CWD, home: '/u', dialect: 'bash', git: unset });
-    assert.deepEqual(named.doubts, [{ reason: 'it hands ssh a command that names a push, which ssh runs where the guard cannot read it', gated: false }]);
+    assert.deepEqual(named.doubts, [{ reason: 'it hands ssh a command that pushes, which ssh runs where the guard cannot read it', gated: false }]);
     const piped = findGitInvocations('cat jobs.txt | at now', { cwd: CWD, home: '/u', dialect: 'bash', git: unset });
     assert.deepEqual(piped.doubts, [{ reason: 'it pipes commands into at, which runs them where the guard cannot read them', gated: true }]);
   });
