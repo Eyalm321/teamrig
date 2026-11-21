@@ -5,18 +5,24 @@
 ```sh
 npm ci                # also points git at .githooks (scrub + DCO sign-off checks, the local gate before each push, no push to main)
 npm run setup         # the same hook setup, for a clone installed with --ignore-scripts (npm run check fails until it runs)
-npm run check         # that git runs the repo hooks, then CI's gates on your tree: typecheck, build, tests with the coverage gate, dist smoke, fresh install, pictures, config reference, doc links, scrub
+npm run check         # that git runs the repo hooks, then CI's gates on your tree: typecheck, build, tests with the coverage gate, dist smoke, fresh install, pictures, config reference, parity page, layer boundaries, doc links, scrub
 npm run docs:images   # redraws the pictures in docs/images
 npm run docs:config   # redraws docs/configuration.md from the config schema
+npm run docs:parity   # redraws docs/parity.md from what each adapter declares and the feature registry
 npm run docs:check    # checks relative links, anchors and Mermaid diagram types in the top-level and docs/ Markdown
 node tools/ci/local.ts # the local gate: every CI check on the committed tree, once per tree (--light: the pre-push hook's checks)
 ```
 
 The pictures in the docs are drawn in code (`tools/docs/`), the commands screen by running the real CLI for a made-up
-team, and [the configuration reference](docs/configuration.md) from each key's `description` in
-`plugins/teamrig/config.schema.json`, so none can drift from the code or from what the CLI prints: the checks fail until
-they are redrawn. To change a key's text, edit its `description` and run `npm run docs:config`. The sections below give
-the test and sign-off rules.
+team, [the configuration reference](docs/configuration.md) from each key's `description` in
+`plugins/teamrig/config.schema.json`, and [the parity page](docs/parity.md) from each adapter's `declaration.ts` under
+`src/adapters` and the feature registry (a file per group under `src/features/host`, `src/features/connector` and
+`src/features/terminal`), so none can drift from the code or from what the CLI prints: the checks fail until they are
+redrawn. To change a key's text, edit its `description` and run `npm run docs:config`; to change what a tool supports,
+edit its adapter's declaration and run `npm run docs:parity`. The layer boundaries of `src` (what the core and an
+adapter may import, who
+may import an adapter, where a tool is named) are counted by `node tools/ci/boundaries-cli.ts`, in warn mode: it prints
+the counts and fails nothing yet. The sections below give the test and sign-off rules.
 
 ## How we work
 Every contributor, and every Claude Code session opened in this repo, works the same way. [CLAUDE.md](CLAUDE.md) holds
@@ -62,7 +68,7 @@ The author builds to these and the reviewer checks each one:
 - **The architecture and the decisions already taken**: the change fits [how it works](docs/how-it-works.md), the
   design issues marked `Agreed:` and the design docs, or it says which one it changes and why.
 - **Extensibility weighed early**: ask what a later, more mature architecture would need (another AI CLI, another
-  issue tracker, another UI over the [public interface](docs/public-interface.md)). Do now what is cheap now and
+  issue tracker, another UI over the [public interface](docs/design/public-interface.md)). Do now what is cheap now and
   costly later, such as a port, a config key in place of a constant, or data in place of a branch in code. Build
   no hook for a need no one has named. A design lists these early steps.
 - **Risks named**: every design, issue and pull request says what could go wrong (a break for a caller, a security
@@ -115,6 +121,19 @@ Every change ships tests, so the next change cannot break it unnoticed:
 - A change to a threshold, limit or trigger (a count, a timeout, a restart or retry limit, a wake condition) gets a
   spec of the trigger firing in the real flow, with whatever resets its count on the way (a compaction, a `/clear`,
   a restart): a unit test of the comparison alone passes even when the real flow resets the count before it fires.
+- A recorded Claude Code session (`src/testing/recorded/claude-code/`, recorded with `node tools/record/cli.ts`) holds
+  the hook inputs and transcripts a real session sent, and its `expected/` folder pins what teamrig prints for each;
+  `src/testing/recorded-pins.test.ts` fails when the code and the pins differ. A refactor leaves the pins as they are.
+  A change meant to alter what a hook prints, or a core rule's wording (the session-start pins hold the rules text),
+  runs `node tools/record/pins-cli.ts` from the repository's root and commits the diff with the change.
+- What every adapter of a port must do is a contract of the conformance kit (`src/conformance/`), not a spec of one
+  adapter: `defineContract({ port, side, cases, liars })` in the port's own file, listed in `CONTRACTS` with one
+  `entryOf(...)` line. A case is a value that fails by throwing and speaks only through its `{ port, world }`, and
+  names the feature rows it proves; the kit imports the plugin API, `node:assert` and its own folder alone, so it
+  ships as it is to whoever builds an adapter outside. Every contract carries a liar (a subject that does nothing,
+  or says yes to everything), and the kit's spec fails a contract whose liar passes every case of a feature. An
+  adapter's contract spec is one call, `describeContracts({ side, declaration, bound: [bind(...)] })` of
+  `src/testing/contracts.ts`: its manifest picks the cases, and the spec fails when it binds less than it claims.
 
 `npm run check` runs every gate CI runs on the tree; the local gate also checks each pushed commit's sign-off and scrubs it,
 which the git hooks `npm ci` sets do before each commit. Its coverage gate (`npm run coverage`) fails when:
@@ -142,6 +161,13 @@ log, both in `src/core/jsonl.ts`); a store without that check needs one first. A
 current format with `fieldPaths` (`src/testing/field-paths.ts`), as `src/budget/store.test.ts` does for the
 usage files.
 
+A field renamed in a stored file goes in two releases, since a tab keeps the teamrig it loaded until it reloads and
+old and new code share the file meanwhile. The first release only reads: a `<STORE>_NEXT_FORMAT` constant beside
+the written one names the format a later teamrig writes, the parser takes both formats and either field name, and
+a store that refuses to write beside a newer format lets the next one pass. The writer moves in a later release,
+once every tab reads it. Two tests hold each store to this: the exact line written today, and a line as the later
+release will write it. `src/core/host-session.ts` and `src/sessions/log.ts` show the pattern.
+
 The register's event log (`EVENT_VERSION`) is an exception: a field an older reader can ignore takes no new number.
 Compaction copies each kept line as written, so no rewrite drops the field, and the header of
 `src/register/events.ts` lists each field added this way. A line an older teamrig must not act on still raises the
@@ -160,7 +186,7 @@ kind` (`tools/ci/change-kind.ts`), names what the change touches: `docs` when ev
 Markdown file or under `docs/`, `design` when every one is in the design notes folder, docs/design, else `code` (and `code` when there
 is no base to compare with). It runs the base commit's copy of that tool, never the change's own, so a pull request
 that edits `tools/ci` cannot name itself docs; a base from before the tool is `code`. A `docs` change runs the commit checks (scrub, DCO, size rule, subjects, dependency
-review) and, on ubuntu alone, the build, the docs' specs, the pictures, the config reference and the doc links; a
+review) and, on ubuntu alone, the build, the docs' specs, the pictures, the config reference, the parity page and the doc links; a
 `design` change runs the commit checks and the doc links; a `code` change runs everything on every OS (the test
 matrix's systems come from `change kind`, `TEST_SYSTEMS` in that file). Each job still runs and skips only its steps,
 so `every check passed` reads a pass from each. Before that, the
@@ -186,8 +212,10 @@ dependency review, which reads GitHub's dependency graph ([Security checks](#sec
   to `main`, and a repository with the `local` gate, run every check as above.
 - **Short checks** (off by default): when the repository's entry in `tools/ship/repos.json` says
   `"mergeChecks": "changed"`, which needs the `ci` gate, a push to any branch but `main` runs only the short checks:
-  the scrub, the DCO sign-off, the typecheck and the specs beside the changed files (`foo.ts` brings `foo.test.ts`,
-  a changed spec runs itself). `tools/ship/ship.ts --merge` proves the tree the same way in place of the typecheck,
+  the scrub, the DCO sign-off, the size rule, the commit subjects, the typecheck and the specs beside the changed
+  files (`foo.ts` brings `foo.test.ts`, a changed spec runs itself). A change to the gate itself (`.githooks/`,
+  `.github/`, `tools/ci/`, `tools/ship/`, `src/push-guard/`, `package.json`, the lockfile or a `tsconfig*.json`) runs
+  every check instead. `tools/ship/ship.ts --merge` proves the tree the same way in place of the typecheck,
   coverage gate and full run, then pushes and merges once the required CI checks pass, so the merge holds the ship
   slot only for those steps. A short pass is recorded apart (`local-ci/short/<tree>.json`), never taken for a full
   one; a full pass counts as a short one. A run without `--merge`, and every repository left at `"full"`, run every
@@ -288,6 +316,18 @@ join; agents follow [`dev-design-issue`](.claude/skills/dev-design-issue/SKILL.m
   goes through a private report, as [SECURITY.md](SECURITY.md) says; a log goes in cut to the lines that matter, with
   every private value taken out.
 
+### Design docs
+
+Every design doc and study lives in [`docs/design/`](docs/design), never beside the user docs, so a design is not read
+as how teamrig works today.
+
+- **When**: write one after a design issue's `Agreed:`, or as a study an issue asks for before anything is agreed.
+- **Its header**: the page opens with a status line, `Status: proposed`, `Status: accepted` or `Status: replaced by
+  <link>`, with the date it was written and a link to its issue.
+- **A record, not a living page**: a design doc is not kept current the way user docs are. When the design changes,
+  its status line changes (to `accepted`, or to `replaced by` a newer doc), and what ships is described in the user
+  docs.
+
 ## Pull requests
 - **The description**: the template asks for What, Why, Reach (see [Where a change lives](#where-a-change-lives)), Changes, Risks (see
   [What a change is held to](#what-a-change-is-held-to)), Old-code proof (for a fix, the regression test that fails
@@ -303,6 +343,12 @@ join; agents follow [`dev-design-issue`](.claude/skills/dev-design-issue/SKILL.m
 - **A leg a docs run leaves out**: a check listed `conditional` in `tools/ship/repos.json` (teamrig's windows and
   macOS test legs) is one the run makes only for some changes; once `every check passed` passed without it, the
   merge stops waiting for it, and one that does show must pass.
+- **The merge queue** (off by default): when the repository's entry in `tools/ship/repos.json` says `"queue": true`,
+  which needs the `ci` gate, the merge puts the pull request in GitHub's merge queue at the checked head once its
+  checks pass, in place of its own merge call, and waits for the queue to land it. The queue orders the landings,
+  so the merge takes no landing turn. A pull request already queued is waited on, not queued again. One the queue
+  lets go unmerged stops the merge with GitHub's reason and the failed merge group run's jobs; one still queued at
+  the timeout stays queued, and a merge run again waits on it.
 - **Review**: a code owner (`.github/CODEOWNERS`: the maintainer) reviews the code and approves the last push, and a
   new push dismisses an approval given before it. The reviewer holds it to
   [What a change is held to](#what-a-change-is-held-to) and declines a wrong direction. On a threshold, limit or trigger the reviewer asks "can this

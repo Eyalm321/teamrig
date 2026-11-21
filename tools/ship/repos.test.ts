@@ -10,7 +10,7 @@ const LOCAL = '"local":{"runner":"tools/ci/local.ts"}';
 
 test('reads each repo\'s main branch, gate and check lists, looked up without regard to case', () => {
   const profiles = parseProfiles(`{"Owner/Repo":{"main":"main","gate":"ci","checks":["a","b"]}}`);
-  assert.deepEqual(profileFor(profiles, 'owner/repo'), { slug: 'Owner/Repo', main: 'main', gate: 'ci', checks: ['a', 'b'], summary: null, local: { runner: null }, regenerated: [], flaky: [], conditional: [], aliases: [], mergeChecks: 'full', pullSections: [], release: null });
+  assert.deepEqual(profileFor(profiles, 'owner/repo'), { slug: 'Owner/Repo', main: 'main', gate: 'ci', checks: ['a', 'b'], summary: null, local: { runner: null }, regenerated: [], flaky: [], conditional: [], aliases: [], mergeChecks: 'full', pullSections: [], release: null, queue: false });
   const local = parseProfiles(`{"Owner/Local":{"main":"main","gate":"local","checks":[],${LOCAL}}}`);
   assert.deepEqual(profileFor(local, 'Owner/Local').local, { runner: 'tools/ci/local.ts' });
 });
@@ -47,13 +47,17 @@ test('reads the release pull request\'s branch and changelog, none when not list
   }
 });
 
-test('the shipped repos.json names teamrig\'s release-please pull request branch and its CHANGELOG, and no release for teamrig-pane (T4645)', () => {
+test('the shipped repos.json names teamrig\'s release-please pull request branch and its CHANGELOG (T4645)', () => {
   // release-please names its branch release-please--branches--<main>--components--<component>.
   const config = readFileSync(new URL('../../release-please-config.json', import.meta.url), 'utf8');
   const component = /"component":\s*"([^"]+)"/.exec(config)?.[1];
   const changelog = /"changelog-path":\s*"([^"]+)"/.exec(config)?.[1];
   assert.deepEqual(readProfiles().get('teamrig/teamrig')?.release, { head: `release-please--branches--main--components--${component ?? ''}`, changelog });
-  assert.equal(readProfiles().get('teamrig/teamrig-pane')?.release, null);
+});
+
+test('the shipped repos.json names teamrig-pane\'s release-please branch, from its component teamrig-pane, and its CHANGELOG (T4821)', () => {
+  // The pane's release-please-config.json lives in its own repo: component teamrig-pane, changelog-path CHANGELOG.md.
+  assert.deepEqual(readProfiles().get('teamrig/teamrig-pane')?.release, { head: 'release-please--branches--main--components--teamrig-pane', changelog: 'CHANGELOG.md' });
 });
 
 test('refuses a missing or unknown gate', () => {
@@ -96,6 +100,22 @@ test('reads what a merge checks locally, full when not listed, and refuses anoth
   assert.throws(() => parseProfiles(entry('local', '"changed"')), /O\/R "mergeChecks": "changed" needs the "ci" gate/);
 });
 
+test('reads whether main merges through GitHub\'s merge queue, false when not listed, and refuses another value or true without the ci gate (T3386)', () => {
+  const entry = (gate: string, queue: string): string => `{"O/R":{"main":"main","gate":"${gate}","checks":["a"],${LOCAL},"queue":${queue}}}`;
+  assert.equal(profileFor(parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a"]}}'), 'O/R').queue, false);
+  assert.equal(profileFor(parseProfiles(entry('ci', 'false')), 'O/R').queue, false);
+  assert.equal(profileFor(parseProfiles(entry('ci', 'true')), 'O/R').queue, true);
+  for (const value of ['"true"', '1', 'null', '[true]']) {
+    assert.throws(() => parseProfiles(entry('ci', value)), /O\/R "queue" is true \(main merges through GitHub's merge queue\) or false/, value);
+  }
+  assert.throws(() => parseProfiles(entry('local', 'true')), /O\/R "queue": true needs the "ci" gate/);
+});
+
+test('the shipped repos.json merges no repo through the merge queue until main\'s ruleset turns the queue on (T3386)', () => {
+  const profiles = readProfiles();
+  for (const slug of repoSlugs(profiles)) assert.equal(profileFor(profiles, slug).queue, false, slug);
+});
+
 test('the shipped repos.json keeps every repo\'s merge on the whole local suite until its main requires CI (T3414); teamrig\'s does, so its merge runs the changed checks (#1464)', () => {
   const profiles = readProfiles();
   // This repository's main requires CI (.github/rulesets/main.json), so a second full local run at merge only repeats it.
@@ -111,7 +131,7 @@ test('the shipped repos.json names each repo\'s every-check-passed job its summa
 test('the shipped repos.json calls regenerated exactly the dist, the version files and the release manifest a ship writes again', () => {
   const profiles = readProfiles();
   assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig').regenerated, [`${DIST}/`, ...[...TEAMRIG_VERSION_FILES, TEAMRIG_RELEASE_MANIFEST].map(file => file.path)]);
-  assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig-pane').regenerated, ['plugins/teamrig-pane/.claude-plugin/plugin.json']);
+  assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig-pane').regenerated, ['plugins/teamrig-pane/.claude-plugin/plugin.json', TEAMRIG_RELEASE_MANIFEST.path]);
 });
 
 /** The status checks main's ruleset requires before GitHub accepts a merge. */
