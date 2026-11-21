@@ -351,7 +351,8 @@ can read it. Never route around a refusal; report it to the lead. On Windows a G
 wrappers and git aliases (an `env -S` string and an alias value split by env's and git's own rules, a CR a plain
 space in both), but it does not see a push inside a script or program the command runs, `gh pr merge`,
 git extensions, or pushes run outside Claude Code. It is a guard against mistakes, not a sandbox: protect the
-branch on your git host too.
+branch on your git host too. A program that runs a command where the guard cannot read it (`ssh`, `tmux`,
+`screen`, `watch`, `at`, `crontab`, `docker`/`kubectl exec`) asks when the command it is handed names a push.
 
 ## Before a shell command: the commit guard
 
