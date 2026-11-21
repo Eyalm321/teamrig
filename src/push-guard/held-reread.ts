@@ -63,6 +63,27 @@ function clusterHasI(word: ShellWord, takesValue: RegExp): boolean {
 }
 
 /**
+ * True when `text` names the long option `name`, spelled out or by any prefix getopt_long accepts (`--i` for
+ * `--in-place` in GNU sed, where no other long option starts with `--i`), with or without an `=value`.
+ */
+function isLongOption(text: string, name: string): boolean {
+  const end = text.indexOf('=');
+  const spelled = end === -1 ? text : text.slice(0, end);
+  return spelled.length >= 3 && name.startsWith(spelled);
+}
+
+/** True when a gawk word loads the inplace extension: `inplace`, `-iinplace`, `--incl=inplace`, a path to `inplace.awk`. */
+function loadsInplace(text: string): boolean {
+  let value = text;
+  if (text.startsWith('--') && text.includes('=') && isLongOption(text, '--include')) {
+    value = text.slice(text.indexOf('=') + 1);
+  } else if (text.startsWith('-i')) {
+    value = text.slice(2);
+  }
+  return value.slice(value.lastIndexOf('/') + 1).startsWith('inplace');
+}
+
+/**
  * True when a program writes its arguments' text back into the files it edits: `sed -i`, `perl -pi`, `ruby -i`, gawk's
  * `-i inplace`. A word only known when it runs may be such an option, so it counts.
  */
@@ -71,21 +92,25 @@ export function editsInPlace(launched: ProgramLaunch): boolean {
   switch (programName(launched.program.text)) {
     case 'sed':
     case 'gsed':
-      return args.some((arg) => arg.text.startsWith('--in-place') || clusterHasI(arg, /[ef]/));
+      return args.some((arg) => isLongOption(arg.text, '--in-place') || clusterHasI(arg, /[ef]/));
     case 'perl':
     case 'ruby':
       return args.some((arg) => clusterHasI(arg, /[eEMmIdDFxV]/));
     case 'awk':
     case 'gawk':
-      return args.some((arg) => /^(?:-i|--include=)?inplace$/.test(arg.text));
+      return args.some((arg) => (arg.dynamic && /^[-$`]/.test(arg.text)) || loadsInplace(arg.text));
     default:
       return false;
   }
 }
 
+/** The commands whose arguments may define names: `alias`, `enable` and the file readers `source` and `.`. */
+const DEFINERS = new Set(['alias', 'enable', 'source', '.']);
+
 /**
  * The names a command line makes into commands of its own: functions (`f() {`, `function f`), aliases and builtins it
  * loads (`enable -f lib.so name`). Such a name may run its arguments as code, so it is never a known external program.
+ * A sourced file or text eval'd from a word known only when it runs may define any name.
  */
 export class LineCommands {
   private readonly names = new Set<string>();
@@ -104,7 +129,11 @@ export class LineCommands {
       } else if (command.words.length === 1 && command.terminator.replace(/\s/g, '').startsWith('()')) {
         this.add(head);
       }
-      if (command.words.some((word) => word.text === 'alias' || word.text === 'enable')) {
+      // A sourced file or eval'd text known only when it runs may define any name.
+      if (command.words.some((word) => word.text === 'eval') && command.words.some((word) => word.dynamic)) {
+        this.unknown = true;
+      }
+      if (command.words.some((word) => DEFINERS.has(word.text))) {
         this.noteDefiners(launch(command.words, 'bash'));
       }
     }
@@ -120,6 +149,10 @@ export class LineCommands {
       return;
     }
     const program = launched.program.text;
+    if (program === 'source' || program === '.') {
+      this.unknown = true;
+      return;
+    }
     for (const arg of launched.args) {
       if (program === 'alias' && arg.text.includes('=')) {
         this.add({ text: arg.text.slice(0, arg.text.indexOf('=')), dynamic: arg.dynamic });
