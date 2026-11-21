@@ -1,15 +1,17 @@
 import { spawn } from 'node:child_process';
 import type { Env } from '../core/home.ts';
-import { endOf, type ShellEnd } from '../test-run/shell.ts';
+import { endOf, type ShellEnd } from '../core/shell-end.ts';
 import type { CloseReason, IssueDraft, LabelSpec } from '../issues/host.ts';
 import { LABEL_FILE, parseLabelFile } from '../issues/label-file.ts';
-import { MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
+import { areaLabelSpec, MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
+import { labelRefusal } from '../issues/write.ts';
+import { GH_PROGRAM } from './gh-program.ts';
 import { QUERY_VARIABLES, RAW_FIELD } from './queries.ts';
 
 /**
  * The kinds of `gh` command line teamrig runs: a page of a shipped query (the issue import, the links read and the
  * pull request monitor, which never write to GitHub), the creation of one issue (issue migrate, which opens an issue for a team task), one
- * comment on or the close of one issue or pull request (issue comment and issue close, a close with or without its
+ * comment on or the close of one issue or pull request (issue reply and issue close, a close with or without its
  * reason), its body replaced (issue edit), its labels: the read of one label of a repository, labels added to one
  * issue, one label taken off it (issue label), the read of one issue, for the id a duplicate close names (issue close
  * --duplicate-of), logins added to one issue's assignees, the read of one user, for the case GitHub spells its login
@@ -187,6 +189,14 @@ export function issueAssigneeReadArgs(target: IssueNumber, login: string): strin
 /** The command line that reads one GitHub user, whose `login` is spelled in the case GitHub keeps; it fails when there is no such user. */
 export function userReadArgs(login: string): string[] {
   return ['api', `users/${login}`];
+}
+
+/**
+ * The command line that reads the user the token belongs to, the login the sync runs as: the status push assigns it
+ * an issue whose session maps to no login (T4581). Only its `login` is read from the answer.
+ */
+export function viewerReadArgs(): string[] {
+  return ['api', 'user'];
 }
 
 /** The command line that makes `label` in `repo`: its name, colour and description, each a raw field. */
@@ -404,6 +414,14 @@ export function isUserRead(args: readonly string[]): boolean {
   return args[0] === 'api' && args.length === 2 && match !== null && isLogin(match[1] ?? '');
 }
 
+/**
+ * True for `gh api user` and nothing more, as viewerReadArgs builds it: a read, gh's default GET, of the user the
+ * token belongs to. A method, a field, a filter or a path below the user (such as its e-mails or keys) is refused.
+ */
+export function isViewerRead(args: readonly string[]): boolean {
+  return args.length === 2 && args[0] === 'api' && args[1] === 'user';
+}
+
 /** `repos/<owner>/<name>/labels`: the labels of a repository, where a POST makes one. */
 const LABELS_PATH = /^repos\/([^/]+\/[^/]+)\/labels$/u;
 
@@ -413,11 +431,23 @@ export type FileLabels = (repo: string) => readonly LabelSpec[];
 /**
  * True for the command line labelCreateArgs builds for one of the labels teamrig makes (MANAGED_LABEL_SPECS: the
  * status push's own and the design label) and nothing more: its name, colour and description word for word, in that
- * order. So the runner makes no other label (beside one isFileLabelCreate takes), and edits or deletes none, whatever
- * a caller passes.
+ * order. So the runner makes no other label (beside one isAreaLabelCreate or isFileLabelCreate takes), and edits or
+ * deletes none, whatever a caller passes.
  */
 export function isLabelCreate(args: readonly string[]): boolean {
   return labelCreateIn(args, () => MANAGED_LABEL_SPECS);
+}
+
+/**
+ * True for the command line labelCreateArgs builds for an area label (areaLabelSpec): a name a host takes, in the one
+ * area colour and description, word for word. Which names are areas is the team's github.areaOwners, which issue label
+ * checks before the create (issues/write.ts); the runner holds the create to that one look, so it makes no label in a
+ * look of the caller's choosing.
+ */
+export function isAreaLabelCreate(args: readonly string[]): boolean {
+  const field = args[5] ?? '';
+  const name = field.startsWith('name=') ? field.slice('name='.length) : '';
+  return labelRefusal(name) === undefined && labelCreateIn(args, () => [areaLabelSpec(name)]);
 }
 
 /**
@@ -744,7 +774,7 @@ export class GhRefusedError extends Error {
   }
 }
 
-/** True for each fixed command line the runner starts; it also makes a label a read label file named (isFileLabelCreate). */
+/** True for each fixed command line the runner starts, an area label's create among them; it also makes a label a read label file named (isFileLabelCreate). */
 export function isAllowedGh(args: readonly string[]): boolean {
   return (
     isIssueQuery(args) ||
@@ -763,7 +793,9 @@ export function isAllowedGh(args: readonly string[]): boolean {
     isAssigneeRead(args) ||
     isIssueAssigneeRead(args) ||
     isUserRead(args) ||
+    isViewerRead(args) ||
     isLabelCreate(args) ||
+    isAreaLabelCreate(args) ||
     isLinkAdd(args) ||
     isFieldValueSet(args) ||
     isIssueTypeSet(args) ||
@@ -829,7 +861,7 @@ export function isReviewRead(args: readonly string[]): boolean {
  * GhOutputCapError. It keeps what each repository's label file named when it read one, so it makes only those
  * labels beside its own.
  */
-export function nodeGhRunner(program = 'gh', leading: readonly string[] = [], timeoutMs = GH_TIMEOUT_MS, maxBytes = GH_OUTPUT_MAX_BYTES): GhRunner {
+export function nodeGhRunner(program: string = GH_PROGRAM, leading: readonly string[] = [], timeoutMs = GH_TIMEOUT_MS, maxBytes = GH_OUTPUT_MAX_BYTES): GhRunner {
   const labelFiles = new LabelFileReads();
   return {
     run: async (request) => {

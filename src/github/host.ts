@@ -5,6 +5,7 @@ import {
   type CloseReason,
   type HostEnd,
   type HostAssignee,
+  type HostViewer,
   type HostComments,
   type HostIssueId,
   type HostIssueLabels,
@@ -16,6 +17,7 @@ import {
   type HostOpen,
   type HostPulls,
   type HostReach,
+  type HostThread,
   type HostUse,
   type HostWatch,
   type IssueDraft,
@@ -24,8 +26,9 @@ import {
   type IssueTarget,
   type WatchMarks,
 } from '../issues/host.ts';
+import { isRecord } from '../core/guards.ts';
 import type { FieldValue, HostField, HostFieldRead, IssueFields } from '../issues/fields.ts';
-import type { IssueState } from '../issues/issue.ts';
+import type { IssueState, IssueThread } from '../issues/issue.ts';
 import type { HostPosts } from '../issues/post.ts';
 import { LABEL_FILE, parseLabelFile } from '../issues/label-file.ts';
 import { MAX_COMMENT } from '../issues/write.ts';
@@ -56,6 +59,7 @@ import {
   WATCH_PATHS,
   watchProbeArgs,
   userReadArgs,
+  viewerReadArgs,
   type GhResult,
   type GhRunner,
   type WatchPath,
@@ -267,6 +271,26 @@ export class GitHubIssueHost implements IssueHost {
     return id === undefined ? { kind: 'failed', reason: `gh printed no id for ${shown}` } : { kind: 'found', id };
   }
 
+  /** A label here takes any name, a space too, so each is held as it is. */
+  labelName(label: string): string {
+    return label;
+  }
+
+  /**
+   * Reads one issue or pull request through the same REST read as its id (an issue's path serves a pull request too):
+   * read with its state, labels, assignees, kind and body; missing on Not Found; else failed with gh's own line, or
+   * when the answer has no issue's shape.
+   */
+  async thread(target: IssueTarget): Promise<HostThread> {
+    const shown = targetText(target);
+    const read = await this.read(target.repo, issueReadArgs(target), shown);
+    if (read.kind !== 'found') {
+      return read;
+    }
+    const thread = threadIn(read.stdout);
+    return thread === undefined ? { kind: 'failed', reason: `gh printed no issue for ${shown}` } : { kind: 'read', thread };
+  }
+
   /**
    * Reads the one label: found when gh ends well, missing when GitHub answers Not Found (no such label, or a
    * repository the access cannot see, which the add would fail on anyway), else failed with gh's own line.
@@ -325,6 +349,23 @@ export class GitHubIssueHost implements IssueHost {
     }
     const read = await this.read(repo, assigneeReadArgs(repo, user.login), `whether ${user.login} may be assigned in ${repo}`);
     return read.kind === 'found' ? user : read;
+  }
+
+  /**
+   * Reads the user the token for `repo` belongs to (`gh api user`), for its login as GitHub spells it; failed with
+   * gh's own line, as for a token that is no user's (an app's), or when the answer holds no login. Only the login is kept.
+   */
+  async viewer(repo: string): Promise<HostViewer> {
+    const what = 'the GitHub user the token belongs to';
+    const read = await this.read(repo, viewerReadArgs(), what);
+    if (read.kind === 'missing') {
+      return { kind: 'failed', reason: 'GitHub shows no user the token belongs to' };
+    }
+    if (read.kind === 'failed') {
+      return read;
+    }
+    const login = loginIn(read.stdout);
+    return login === undefined ? { kind: 'failed', reason: `gh printed no login for ${what}` } : { kind: 'found', login };
   }
 
   /**
@@ -573,6 +614,46 @@ export function loginIn(stdout: string): string | undefined {
   }
   const { login } = parsed;
   return typeof login === 'string' && isLogin(login) ? login : undefined;
+}
+
+/**
+ * An issue or pull request as GitHub's REST API prints it (`state` open or closed, `labels` of names, `assignees` of
+ * logins, a `pull_request` field on a pull request only, `body` null when empty), else undefined.
+ */
+export function threadIn(stdout: string): IssueThread | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  const { state, labels, assignees, body } = parsed;
+  const names = namesIn(labels, 'name');
+  const logins = namesIn(assignees, 'login');
+  if ((state !== 'open' && state !== 'closed') || names === undefined || logins === undefined || (body !== null && body !== undefined && typeof body !== 'string')) {
+    return undefined;
+  }
+  const pull = parsed['pull_request'];
+  return { state, labels: names, assignees: logins, pull: pull !== undefined && pull !== null, body: body ?? '' };
+}
+
+/** The string `key` of each record of a REST list, or undefined when it is no list or one item has none. */
+function namesIn(list: unknown, key: string): string[] | undefined {
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  const names: string[] = [];
+  for (const item of list) {
+    const name: unknown = isRecord(item) ? item[key] : undefined;
+    if (typeof name !== 'string') {
+      return undefined;
+    }
+    names.push(name);
+  }
+  return names;
 }
 
 /** The `id` of an issue as GitHub's REST API prints it: a positive safe integer, else undefined. */
