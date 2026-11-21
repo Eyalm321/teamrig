@@ -1,11 +1,9 @@
 import { spawn } from 'node:child_process';
 import type { Env } from '../core/home.ts';
+import { endOf, type ShellEnd } from '../core/shell-end.ts';
 import { nodeTreeKill, type TreeKill } from '../delivery/tree-kill.ts';
 import { posixQuote } from '../open/quote.ts';
 import { silenceHostCpu, watchSilence, type SilenceHostCpu } from './silence.ts';
-
-/** How a shell command ended: its exit code, or the signal that stopped it. */
-export type ShellEnd = { readonly kind: 'exited'; readonly code: number } | { readonly kind: 'signal'; readonly signal: string };
 
 /** How a `teamrig test` run ended: as a shell command does, or stopped with every process it started after printing nothing for `silentMs` (#1532). */
 export type TestEnd = ShellEnd | { readonly kind: 'idle'; readonly silentMs: number };
@@ -94,11 +92,6 @@ export function posixWord(word: string): string {
 
 function cmdWord(word: string): string {
   return word !== '' && !CMD_SPECIAL.test(word) ? word : `"${word.replaceAll('"', '\\"')}"`;
-}
-
-/** The end Node reports on `close`: a code, or no code and the signal that stopped the process. */
-export function endOf(code: number | null, signal: string | null): ShellEnd {
-  return code === null ? { kind: 'signal', signal: signal ?? 'an unknown signal' } : { kind: 'exited', code };
 }
 
 /** The signals that end this process from outside: Ctrl-C, a kill, and the terminal that started it closing. */
