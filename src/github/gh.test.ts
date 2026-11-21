@@ -15,6 +15,7 @@ import {
   GhOutputCapError,
   GhRefusedError,
   isAllowedGh,
+  isAreaLabelCreate,
   isAssigneeRead,
   isCommentsRead,
   isIssueAssign,
@@ -63,10 +64,12 @@ import {
   WATCH_PATHS,
   watchProbeArgs,
   userReadArgs,
+  isViewerRead,
+  viewerReadArgs,
   type IssueNumber,
 } from './gh.ts';
 import type { IssueDraft, LabelSpec } from '../issues/host.ts';
-import { MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
+import { areaLabelSpec, MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
 import { CLOSED_ISSUES_QUERY, closedPageArgs, OPEN_ISSUES_QUERY, openPageArgs, PULL_REQUESTS_QUERY, pullPageArgs } from './queries.ts';
 
 const DIR = mkdtempSync(join(tmpdir(), 'teamrig-gh-'));
@@ -405,6 +408,37 @@ describe('the managed label create (T2999, T3096)', () => {
   });
 });
 
+describe('the area label create (T4053)', () => {
+  const AREA = areaLabelSpec('area:cli');
+
+  it('takes the create of a label name a host takes, in the one area colour and description', () => {
+    for (const name of ['area:cli', 'Area: The Pane', 'a'.repeat(50)]) {
+      const args = labelCreateArgs('acme/web', areaLabelSpec(name));
+      assert.ok(isAreaLabelCreate(args) && isAllowedGh(args), name);
+    }
+  });
+
+  it('refuses another colour or description, a name no host takes, and any other method, field or path', () => {
+    const good = labelCreateArgs('acme/web', AREA);
+    for (const args of [
+      labelCreateArgs('acme/web', { ...AREA, color: '000000' }),
+      labelCreateArgs('acme/web', { ...AREA, description: 'x' }),
+      labelCreateArgs('acme/web', areaLabelSpec('')),
+      labelCreateArgs('acme/web', areaLabelSpec(' area:cli')),
+      labelCreateArgs('acme/web', areaLabelSpec('area:\ncli')),
+      labelCreateArgs('acme/web', areaLabelSpec('a'.repeat(51))),
+      labelCreateArgs('acme/..', AREA),
+      good.map((arg) => (arg === 'POST' ? 'PATCH' : arg)),
+      good.map((arg) => (arg === '-f' ? '-F' : arg)),
+      [...good, '-f', 'new_name=x'],
+      good.map((arg, at) => (at === 1 ? 'repos/acme/web/labels/area%3Acli' : arg)),
+    ]) {
+      assert.equal(isAreaLabelCreate(args), false, args.slice(1).join(' '));
+      assert.equal(isAllowedGh(args), false, args.slice(1).join(' '));
+    }
+  });
+});
+
 describe("the repository's label file: its read, and the create of a label it names", () => {
   const AREA: LabelSpec = { name: 'area:cli', color: '1d76db', description: 'Area: the command line' };
   const FILE = JSON.stringify({ labels: [AREA] });
@@ -481,10 +515,30 @@ describe('the assignee calls (T2999)', () => {
       ['api', 'users/octo--cat'],
       ['api', 'users/../user'],
       ['api', 'users/octocat?per_page=1'],
-      ['api', 'user'],
       ['api', '/users/octocat'],
     ]) {
       assert.equal(isUserRead(args), false, args.slice(1).join(' '));
+      assert.equal(isAllowedGh(args), false, args.slice(1).join(' '));
+    }
+    assert.equal(isUserRead(['api', 'user']), false);
+  });
+
+  it('takes the read of the user the token belongs to, and refuses one with a method, a field or a path past it (T4581)', () => {
+    assert.deepEqual(viewerReadArgs(), ['api', 'user']);
+    assert.ok(isViewerRead(viewerReadArgs()) && isAllowedGh(viewerReadArgs()));
+    for (const args of [
+      ['api', 'user', '-X', 'GET'],
+      ['api', 'user', '-X', 'PATCH', '-f', 'name=x'],
+      ['api', 'user', '--jq', '.email'],
+      ['api', 'user/emails'],
+      ['api', 'user/keys'],
+      ['api', 'user/repos'],
+      ['api', '/user'],
+      ['api', 'user?per_page=1'],
+      ['api', 'users'],
+      ['api'],
+    ]) {
+      assert.equal(isViewerRead(args), false, args.slice(1).join(' '));
       assert.equal(isAllowedGh(args), false, args.slice(1).join(' '));
     }
   });

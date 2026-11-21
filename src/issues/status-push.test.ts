@@ -8,8 +8,11 @@ import {
   changeLine,
   changeWrites,
   heldIssue,
+  hourPushWrites,
   isGoal,
   issueGoal,
+  issuePushPlan,
+  planIssue,
   planPush,
   PUSH_WRITES_PER_HOUR,
   PUSH_WRITES_PER_RUN,
@@ -17,7 +20,10 @@ import {
   SESSION_PUSH,
   STATUS_LABELS,
   assigneeOf,
+  pushAssignees,
   sessionLogins,
+  VIEWER_UNREAD,
+  viewerRead,
   type IssueChange,
 } from './status-push.ts';
 
@@ -106,6 +112,22 @@ describe('planPush (T2682)', () => {
     assert.equal(plan.unchanged, 1);
   });
 
+  it('plans a status label under the name the tracker holds it by, so one it renames is not added again on every run (T4754)', () => {
+    const hyphens = (label: string): string => label.replace(/\s+/gu, '-');
+    const tasks = [holding('T1', 7, { status: 'in-progress' })];
+    const planned = (labels: string[]): ReturnType<typeof planPush> => planPush(REPO, [testHostIssue(7, { labels })], tasks, SESSION_PUSH, undefined, new Set(), hyphens);
+    const held = planned(['status:in-progress']);
+    assert.deepEqual([held.changes, held.unchanged], [[], 1]);
+    assert.deepEqual(
+      planned([]).changes.map((change) => [change.add, change.remove]),
+      [[['status:in-progress'], []]],
+    );
+    assert.deepEqual(
+      planned(['status:in progress']).changes.map((change) => [change.add, change.remove]),
+      [[['status:in-progress'], ['status:in progress']]],
+    );
+  });
+
   it('closes the open issue of a done task as completed and of a dropped one as not planned, taking off its status labels', () => {
     const plan = planPush(
       REPO,
@@ -133,7 +155,7 @@ describe('planPush (T2682)', () => {
       ],
       [holding('T1', 7, { status: 'done' }), holding('T2', 8, { status: 'dropped' }), holding('T3', 9, { status: 'done' }), holding('T4', 10, { status: 'done' })],
       SESSION_PUSH,
-      logins,
+      pushAssignees(logins, viewerRead(undefined)),
     );
     assert.deepEqual(plan.keptOpen, [
       { target: { repo: REPO, number: 7 }, task: 'T1', status: 'done', why: { kind: 'taken', assignees: ['outsider'] } },
@@ -323,40 +345,143 @@ describe('planPush (T2682)', () => {
   });
 });
 
+describe('planIssue (T3169)', () => {
+  const target = { repo: REPO, number: 922 };
+
+  it('plans one issue as the repository push would: its status label, an assign of a scheduled task, a close of an ended one', () => {
+    const who = pushAssignees(sessionLogins({ octocat: 'bravo' }), VIEWER_UNREAD);
+    const verifying = holding('T1', 922, { owner: 'bravo', status: 'verifying' });
+    const plan = planIssue(target, verifying, { state: 'open', labels: ['bug', 'status:open'], assignees: [] }, who);
+    assert.deepEqual(plan, { kind: 'change', change: { target, task: 'T1', status: 'verifying', add: ['status:in review'], remove: ['status:open'], close: undefined, assign: 'octocat' }, wantsViewer: false });
+    assert.deepEqual(planPush(REPO, [testHostIssue(922, { labels: ['bug', 'status:open'] })], [verifying], undefined, who).changes, plan.kind === 'change' ? [plan.change] : []);
+    const done = planIssue(target, holding('T1', 922, { status: 'done' }), { state: 'open', labels: ['status:in review'], assignees: [] });
+    assert.deepEqual(done, { kind: 'change', change: { target, task: 'T1', status: 'done', add: [], remove: ['status:in review'], close: 'completed' }, wantsViewer: false });
+  });
+
+  it('wants the viewer read for an assign its session maps to no login, and assigns the viewer once read (T4581)', () => {
+    const unmapped = holding('T1', 922, { owner: 'charlie', status: 'in-progress' });
+    const issue = { state: 'open' as const, labels: ['status:open'], assignees: [] };
+    const before = planIssue(target, unmapped, issue, pushAssignees(sessionLogins({}), VIEWER_UNREAD));
+    assert.ok(before.kind === 'change' && before.wantsViewer && before.change.assign === undefined);
+    const after = planIssue(target, unmapped, issue, pushAssignees(sessionLogins({}), viewerRead('sync-bot')));
+    assert.ok(after.kind === 'change' && !after.wantsViewer && after.change.assign === 'sync-bot');
+  });
+
+  it('leaves an issue showing its status unchanged, and a closed one whose task is active closed', () => {
+    assert.deepEqual(planIssue(target, holding('T1', 922, { status: 'waiting' }), { state: 'open', labels: ['status:waiting'], assignees: ['x'] }), { kind: 'unchanged', wantsViewer: false });
+    assert.deepEqual(planIssue(target, holding('T1', 922, { status: 'waiting' }), { state: 'closed', labels: [], assignees: [] }), { kind: 'closed-active' });
+  });
+
+  it('makes a plan of the one issue as its repository plan: its change alone, nothing for an unchanged or a closed-active one', () => {
+    const who = pushAssignees(sessionLogins({ octocat: 'bravo' }), VIEWER_UNREAD);
+    const none = { repo: REPO, deferred: [], heldCloses: [], closedActive: [], keptOpen: [], unlisted: [], shared: [], openPulls: [], wantsViewer: false };
+    const open = holding('T1', 922, { owner: 'bravo', status: 'open' });
+    // An open task whose issue has an assignee shows claimed, as in the repository push.
+    const change: IssueChange = { target, task: 'T1', status: 'open', add: ['status:claimed'], remove: [], close: undefined };
+    assert.deepEqual(issuePushPlan(target, open, { state: 'open', labels: [], assignees: ['x'] }, who), { ...none, changes: [change], unchanged: 0 });
+    assert.deepEqual(issuePushPlan(target, open, { state: 'open', labels: ['status:claimed'], assignees: ['x'] }, who), { ...none, changes: [], unchanged: 1 });
+    assert.deepEqual(issuePushPlan(target, open, { state: 'closed', labels: [], assignees: [] }, who), { ...none, changes: [], unchanged: 0 });
+  });
+
+  it('leaves open an issue a finished task holds that is taken outside the team, or a design issue, as the repository push does', () => {
+    const done = holding('T1', 922, { status: 'done' });
+    assert.deepEqual(planIssue(target, done, { state: 'open', labels: ['status:in progress'], assignees: ['outsider'] }), { kind: 'kept-open', why: { kind: 'taken', assignees: ['outsider'] }, wantsViewer: false });
+    assert.deepEqual(planIssue(target, done, { state: 'open', labels: ['design'], assignees: [] }), { kind: 'kept-open', why: { kind: 'design' }, wantsViewer: false });
+    assert.equal(planIssue(target, done, { state: 'open', labels: [], assignees: ['acme'] }).kind, 'change', 'the repository owner is the team');
+  });
+
+  it('plans the one issue status label under the name the tracker holds it by, as the repository push does (T4754)', () => {
+    const hyphens = (label: string): string => label.replace(/\s+/gu, '-');
+    const verifying = holding('T1', 922, { status: 'verifying' });
+    assert.deepEqual(planIssue(target, verifying, { state: 'open', labels: ['status:in-review'], assignees: ['x'] }, undefined, hyphens), { kind: 'unchanged', wantsViewer: false });
+    const who = pushAssignees(sessionLogins({}), viewerRead('sync-bot'));
+    assert.deepEqual(
+      issuePushPlan(target, verifying, { state: 'open', labels: [], assignees: ['x'] }, who, hyphens).changes.map((change) => change.add),
+      [['status:in-review']],
+    );
+    assert.deepEqual(
+      issuePushPlan(target, verifying, { state: 'open', labels: [], assignees: ['x'] }, who).changes.map((change) => change.add),
+      [['status:in review']],
+    );
+  });
+});
+
 describe('the assignee (T2999)', () => {
   const logins = sessionLogins({ octocat: 'bravo', hubot: 'bravo', monalisa: 'alpha' });
+  const who = pushAssignees(logins, viewerRead('sync-bot'));
 
-  it("maps each session to its first login, and an issue to its session's login, else the repository's owner", () => {
+  it("maps each session to its first login, and an issue to its session's login, else the login the sync runs as, never the repository's owner (T4581)", () => {
     assert.deepEqual([...logins], [
       ['bravo', 'octocat'],
       ['alpha', 'monalisa'],
     ]);
-    assert.equal(assigneeOf(REPO, 'bravo', logins), 'octocat');
-    assert.equal(assigneeOf(REPO, 'lead', logins), 'acme');
+    assert.equal(assigneeOf('bravo', who), 'octocat');
+    assert.equal(assigneeOf('lead', who), 'sync-bot');
+    assert.equal(assigneeOf('lead', pushAssignees(logins, viewerRead(undefined))), undefined);
+    assert.equal(assigneeOf('lead', pushAssignees(logins, VIEWER_UNREAD)), undefined);
+    assert.equal(assigneeOf('bravo', pushAssignees(logins, VIEWER_UNREAD)), 'octocat');
+  });
+
+  it('wants the unread viewer only for an issue its session cannot assign, or a close left for outside logins (T4581)', () => {
+    const unread = pushAssignees(logins, VIEWER_UNREAD);
+    const mapped = [holding('T1', 7, { owner: 'bravo', status: 'in-progress' })];
+    assert.equal(planPush(REPO, [testHostIssue(7)], mapped, undefined, unread).wantsViewer, false);
+    assert.equal(planPush(REPO, [testHostIssue(7)], [holding('T1', 7, { owner: 'lead', status: 'in-progress' })], undefined, unread).wantsViewer, true);
+    assert.equal(planPush(REPO, [testHostIssue(7)], mapped, undefined, { ...unread, refused: new Set(['octocat']) }).wantsViewer, true);
+    const finished = [holding('T1', 7, { owner: 'bravo', status: 'done' })];
+    assert.equal(planPush(REPO, [testHostIssue(7, { assignees: ['outsider'] })], finished, undefined, unread).wantsViewer, true);
+    assert.equal(planPush(REPO, [testHostIssue(7, { assignees: ['octocat'] })], finished, undefined, unread).wantsViewer, false);
+    assert.equal(planPush(REPO, [testHostIssue(7, { assignees: ['outsider'] })], finished, undefined, pushAssignees(logins, viewerRead('outsider'))).wantsViewer, false);
+    assert.equal(planPush(REPO, [testHostIssue(7)], [holding('T1', 7, { owner: 'lead', status: 'in-progress' })], undefined, who).wantsViewer, false);
+  });
+
+  it('passes over a login the repository refuses for the next in line, whatever its case, and gives the host spelling of one it takes (T4581)', () => {
+    const read = { ...who, refused: new Set(['octocat']), spelled: new Map([['sync-bot', 'Sync-Bot']]) };
+    assert.equal(assigneeOf('bravo', read), 'Sync-Bot');
+    assert.equal(assigneeOf('alpha', read), 'monalisa');
+    assert.equal(assigneeOf('bravo', { ...read, refused: new Set(['octocat', 'sync-bot']) }), undefined);
+    assert.equal(assigneeOf('bravo', { ...who, refused: new Set(['octocat']), viewer: viewerRead('OctoCat') }), undefined);
   });
 
   it('assigns an open issue of a scheduled task no one is assigned to, alone or with its label, and never one a person assigned', () => {
     const issues = [testHostIssue(7), testHostIssue(8, { labels: ['status:claimed'] }), testHostIssue(9, { assignees: ['someone'] })];
     const tasks = [holding('T1', 7, { owner: 'bravo', status: 'in-progress' }), holding('T2', 8, { owner: 'lead', due: '2030-01-09' }), holding('T3', 9, { owner: 'bravo' })];
-    const plan = planPush(REPO, issues, tasks, undefined, logins);
+    const plan = planPush(REPO, issues, tasks, undefined, who);
     assert.deepEqual(
       plan.changes.map((change) => [change.task, change.add, change.assign, changeWrites(change)]),
       [
         ['T1', ['status:in progress'], 'octocat', 2],
-        ['T2', [], 'acme', 1],
+        ['T2', [], 'sync-bot', 1],
         ['T3', ['status:claimed'], undefined, 1],
       ],
     );
     assert.deepEqual(plan.changes.map(changeLine), [
       'LABEL acme/web#7 T1 in-progress: add status:in progress, assign octocat',
-      'ASSIGN acme/web#8 T2 open: assign acme',
+      'ASSIGN acme/web#8 T2 open: assign sync-bot',
       'LABEL acme/web#9 T3 open: add status:claimed',
     ]);
   });
 
+  it('plans no write for an assign no login is left for, so it takes none of the run (T4581)', () => {
+    const issues = [testHostIssue(7, { labels: ['status:claimed'] }), testHostIssue(8)];
+    const tasks = [holding('T1', 7, { owner: 'lead', due: '2030-01-09' }), holding('T2', 8, { owner: 'bravo', status: 'in-progress' })];
+    const limits = { writesPerRun: 2, closes: true };
+    assert.deepEqual(planPush(REPO, issues, tasks, limits, who).deferred.map((change) => change.task), ['T2']);
+    const plan = planPush(REPO, issues, tasks, limits, { ...who, refused: new Set(['sync-bot']), spelled: new Map([['octocat', 'octocat']]) });
+    assert.equal(plan.unchanged, 1);
+    assert.deepEqual(plan.changes.map(changeLine), ['LABEL acme/web#8 T2 in-progress: add status:in progress, assign octocat']);
+    assert.deepEqual(plan.deferred, []);
+  });
+
+  it("counts the login the sync runs as one of the team's, so a finished task closes an issue it was assigned (T4581)", () => {
+    const plan = planPush(REPO, [testHostIssue(7, { assignees: ['Sync-Bot'] })], [holding('T1', 7, { status: 'done' })], SESSION_PUSH, who);
+    assert.deepEqual(plan.keptOpen, []);
+    assert.deepEqual(plan.changes.map((change) => change.close), ['completed']);
+  });
+
   it('assigns no one to the issue of an open task no one scheduled, and claims it once a person is assigned (T3021)', () => {
     const issues = [testHostIssue(7, { labels: ['status:open'] }), testHostIssue(8, { labels: ['status:open'], assignees: ['someone'] })];
-    const plan = planPush(REPO, issues, [holding('T1', 7, { owner: 'bravo' }), holding('T2', 8, { owner: 'bravo' })], undefined, logins);
+    const plan = planPush(REPO, issues, [holding('T1', 7, { owner: 'bravo' }), holding('T2', 8, { owner: 'bravo' })], undefined, who);
     assert.equal(plan.unchanged, 1);
     assert.deepEqual(plan.changes.map(changeLine), ['LABEL acme/web#8 T2 open: add status:claimed, take off status:open']);
   });
@@ -364,7 +489,7 @@ describe('the assignee (T2999)', () => {
   it('takes every status label off a design issue and assigns it to no one, even once scheduled (T3096)', () => {
     const issues = [testHostIssue(7, { labels: ['design', 'status:open'] }), testHostIssue(8, { labels: ['design'] })];
     const tasks = [holding('T1', 7, { owner: 'bravo' }), holding('T2', 8, { owner: 'bravo', status: 'in-progress', due: '2030-01-09' })];
-    const plan = planPush(REPO, issues, tasks, undefined, logins);
+    const plan = planPush(REPO, issues, tasks, undefined, who);
     assert.equal(plan.unchanged, 1);
     assert.deepEqual(plan.changes.map(changeLine), ['LABEL acme/web#7 T1 open: take off status:open']);
   });
@@ -372,13 +497,13 @@ describe('the assignee (T2999)', () => {
   it('takes every status label off a goal, and still assigns it once scheduled (T3056)', () => {
     const issues = [testHostIssue(7, { labels: ['feature', 'status:open'] }), testHostIssue(8)];
     const tasks = [holding('T1', 7, { owner: 'bravo', after: ['T3'] }), holding('T2', 8, { owner: 'bravo', status: 'in-progress', after: ['T3'] })];
-    const plan = planPush(REPO, issues, tasks, undefined, logins);
+    const plan = planPush(REPO, issues, tasks, undefined, who);
     assert.deepEqual(plan.changes.map(changeLine), ['LABEL acme/web#7 T1 open: take off status:open', 'ASSIGN acme/web#8 T2 in-progress: assign octocat']);
   });
 
   it('assigns no closing issue, and nobody without logins', () => {
     const issues = [testHostIssue(7), testHostIssue(8, { labels: ['status:open'] })];
-    assert.equal(planPush(REPO, issues, [holding('T1', 7, { status: 'done' })], undefined, logins).changes[0]?.assign, undefined);
+    assert.equal(planPush(REPO, issues, [holding('T1', 7, { status: 'done' })], undefined, who).changes[0]?.assign, undefined);
     assert.deepEqual(planPush(REPO, issues, [holding('T2', 8, { status: 'open' })]).changes, []);
   });
 });
@@ -395,6 +520,23 @@ describe('autoPushWrites (T2876)', () => {
     for (const probeSeconds of [30, 45, 60, 90, 120, 300, 420, 540, 600, 660, 780, 900, 3540, 3600]) {
       assert.ok(autoPushWrites(probeSeconds) * Math.ceil(3600 / probeSeconds) <= PUSH_WRITES_PER_HOUR, `every ${probeSeconds} seconds`);
     }
+  });
+});
+
+describe('hourPushWrites (T4592)', () => {
+  it('sends the run limit while the hour has room, at any probe interval', () => {
+    assert.equal(hourPushWrites(60, 0), PUSH_WRITES_PER_RUN);
+    assert.equal(hourPushWrites(30, 40), PUSH_WRITES_PER_RUN);
+  });
+
+  it('sends only what the hour has left, and none once it is spent', () => {
+    assert.equal(hourPushWrites(60, PUSH_WRITES_PER_HOUR - 4), 4);
+    assert.equal(hourPushWrites(60, PUSH_WRITES_PER_HOUR), 0);
+    assert.equal(hourPushWrites(60, PUSH_WRITES_PER_HOUR + 5), 0);
+  });
+
+  it('sends nothing with the watch turned off', () => {
+    assert.equal(hourPushWrites(0, 0), 0);
   });
 });
 
