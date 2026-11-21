@@ -1,19 +1,24 @@
-import { recordField, stringField, type JsonRecord } from '../core/guards.ts';
+import { isRecord, recordField, stringField, type JsonRecord } from '../core/guards.ts';
 import {
   isAssigneeRead,
+  isIssueAssigneeRead,
   isCommentsRead,
   COMMENTS_PAGE,
   isUserRead,
+  isViewerRead,
   isIssueAssign,
   isIssueUnassign,
   isIssueBodyEdit,
   isIssueClose,
+  isFieldValueSet,
   isIssueComment,
+  isIssueTypeSet,
   isIssueCreate,
   isIssueRead,
   isJobLogRead,
   isLabelAdd,
   isFileLabelCreate,
+  isAreaLabelCreate,
   isLabelCreate,
   isLabelFileRead,
   isLabelRead,
@@ -33,7 +38,8 @@ import {
   type WatchPath,
 } from '../github/gh.ts';
 import { nodesOf } from '../github/issues.ts';
-import { CLOSED_ISSUES_QUERY, ISSUE_LINKS_QUERY, ISSUE_PAGE_SIZE, OPEN_ISSUES_QUERY, OPEN_PULLS_QUERY, PULL_PAGE_SIZE, PULL_REQUESTS_QUERY, RAW_FIELD } from '../github/queries.ts';
+import { FAKE_VIEWER } from './fake-issue-host.ts';
+import { CLOSED_ISSUES_QUERY, ISSUE_FIELDS_QUERY, ISSUE_LINKS_QUERY, ISSUE_PAGE_SIZE, OPEN_ISSUES_QUERY, OPEN_PULLS_QUERY, PULL_PAGE_SIZE, PULL_REQUESTS_QUERY, RAW_FIELD } from '../github/queries.ts';
 
 /** What a test sets on an issue; the rest takes a plain default. */
 export interface IssueSpec {
@@ -109,6 +115,20 @@ export function ghIssue(repo: string, number: number, spec: IssueSpec = {}): Jso
     comments: { nodes: spec.comments ?? [] },
     closedByPullRequestsReferences: { totalCount: spec.linkedPulls ?? 0 },
   };
+}
+
+/**
+ * A held issue (ghIssue's GraphQL shape) as GitHub's REST issue read prints it: its id 1000 + the number, the state
+ * in lowercase, labels and assignees as lists of records, and a null body for an empty one.
+ */
+function heldIssueRest(issue: JsonRecord, number: number): JsonRecord {
+  const nodesOf = (key: string): unknown[] => {
+    const field = issue[key];
+    const nodes = isRecord(field) ? field['nodes'] : undefined;
+    return Array.isArray(nodes) ? nodes : [];
+  };
+  const body = stringField(issue, 'body') ?? '';
+  return { id: 1000 + number, number, state: (stringField(issue, 'state') ?? 'OPEN').toLowerCase(), labels: nodesOf('labels'), assignees: nodesOf('assignees'), body: body === '' ? null : body };
 }
 
 /** A timeline item: `actor`, an account of `kind`, put `label` on the issue at `at`. */
@@ -295,6 +315,13 @@ const MENTION_PAGE = /^repos\/([^/]+\/[^/]+)\/(issues\/comments|pulls\/comments|
 /** A pull request's reviews path: its repository and number. */
 const REVIEW_PAGE = /^repos\/([^/]+\/[^/]+)\/pulls\/([0-9]+)\/reviews\?/;
 
+/** A repository's issue fields, its issue types and its open issues' values, each node as the fields query prints it. */
+export interface FakeFields {
+  readonly fields: readonly JsonRecord[];
+  readonly types: readonly JsonRecord[];
+  readonly issues: readonly JsonRecord[];
+}
+
 /**
  * A gh that reaches no network: each request is recorded, so a test can hold every one to a read. A page of the
  * open or closed issue query gets the issues `holds` set for the repository in that state, closed ones changed
@@ -305,6 +332,7 @@ const REVIEW_PAGE = /^repos\/([^/]+\/[^/]+)\/pulls\/([0-9]+)\/reviews\?/;
 export class FakeGh implements GhRunner {
   readonly ran: GhRequest[] = [];
   private readonly issues = new Map<string, readonly JsonRecord[]>();
+  private readonly fielded = new Map<string, FakeFields>();
   private readonly pulls = new Map<string, readonly JsonRecord[]>();
   private readonly canned = new Map<string, GhResult>();
   private readonly pullFailures = new Map<string, GhResult>();
@@ -316,8 +344,10 @@ export class FakeGh implements GhRunner {
   /** What each label file read named, as the real runner keeps it, so a create of a label it named is taken. */
   private readonly fileReads = new LabelFileReads();
   private readonly unassignable = new Map<string, readonly string[]>();
+  private readonly participants = new Map<string, readonly string[]>();
   private readonly spellings = new Map<string, string>();
   private userAnswer: GhResult | undefined;
+  private viewerAnswer: GhResult | undefined;
   private commentsAnswer: GhResult | undefined;
   private readonly jobLogs = new Map<number, string>();
   /** REST posts by `<repo> <list>`, and reviews by `<repo>#<number>`. */
@@ -329,6 +359,26 @@ export class FakeGh implements GhRunner {
   /** How often each `<repo> <probe path>` changed: its entity tag is `W/"v<count>"`. */
   private readonly versions = new Map<string, number>();
   private readonly probeFailures = new Map<string, GhResult>();
+
+  /**
+   * From now on, `repo` has these issue fields and types, and its open issues these values, as the fields query
+   * prints them (github/queries.ts ISSUE_FIELDS_QUERY); a repository a test gave none has no fields and no types.
+   */
+  holdsFields(repo: string, fields: FakeFields): this {
+    this.fielded.set(repo, fields);
+    return this;
+  }
+
+  /** The one page of the fields query for `repo`. */
+  private fieldsRead(repo: string): GhResult {
+    const held = this.fielded.get(repo);
+    const repository = {
+      issueTypes: { nodes: held?.types ?? [] },
+      issueFields: { nodes: held?.fields ?? [] },
+      issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: held?.issues ?? [] },
+    };
+    return { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ data: { repository } }), stderr: '' };
+  }
 
   /** From now on, `repo` holds these issues (as ghIssue builds them). */
   holds(repo: string, issues: readonly JsonRecord[]): this {
@@ -418,6 +468,15 @@ export class FakeGh implements GhRunner {
   }
 
   /**
+   * From now on, these logins took part in the issue or pull request `repo#number` (a comment), so GitHub lets them
+   * be assigned to it, though a read for the whole repository is still Not Found for one set by cannotAssign.
+   */
+  tookPart(repo: string, number: number, logins: readonly string[]): this {
+    this.participants.set(`${repo}#${number}`, logins);
+    return this;
+  }
+
+  /**
    * From now on, GitHub spells each of these logins as given: a user read in any case prints it so, and an assignee
    * read matches it only in that case, as GitHub's does. A login not given is spelled as a read names it.
    */
@@ -435,6 +494,12 @@ export class FakeGh implements GhRunner {
   /** From now on, every user read ends as given. */
   answersUserRead(result: GhResult): this {
     this.userAnswer = result;
+    return this;
+  }
+
+  /** From now on, every read of the user the token belongs to (`gh api user`) ends as given; until then, it is FAKE_VIEWER. */
+  answersViewerRead(result: GhResult): this {
+    this.viewerAnswer = result;
     return this;
   }
 
@@ -478,7 +543,7 @@ export class FakeGh implements GhRunner {
     if (isLabelRead(request.args)) {
       return this.labelRead(request.args[1] ?? '');
     }
-    if (isLabelCreate(request.args)) {
+    if (isLabelCreate(request.args) || isAreaLabelCreate(request.args)) {
       return this.writeFailure ?? this.labelCreate(request.args);
     }
     if (isLabelFileRead(request.args)) {
@@ -492,8 +557,14 @@ export class FakeGh implements GhRunner {
     if (isAssigneeRead(request.args)) {
       return this.assigneeRead(request.args[1] ?? '');
     }
+    if (isIssueAssigneeRead(request.args)) {
+      return this.issueAssigneeRead(request.args[1] ?? '');
+    }
     if (isUserRead(request.args)) {
       return this.userRead(request.args[1] ?? '');
+    }
+    if (isViewerRead(request.args)) {
+      return this.viewerAnswer ?? { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ login: FAKE_VIEWER, type: 'User' }), stderr: '' };
     }
     if (isCommentsRead(request.args)) {
       return this.commentsAnswer ?? this.commentsRead(request.args);
@@ -513,7 +584,7 @@ export class FakeGh implements GhRunner {
       const log = this.jobLogs.get(Number(request.args[3]));
       return this.canned.get(repo) ?? (log === undefined ? notVisible(repo) : { end: { kind: 'exited', code: 0 }, stdout: log, stderr: '' });
     }
-    if (isIssueComment(request.args) || isIssueBodyEdit(request.args) || isIssueClose(request.args) || isLabelAdd(request.args) || isLabelRemove(request.args) || isIssueAssign(request.args) || isIssueUnassign(request.args)) {
+    if (isIssueComment(request.args) || isIssueBodyEdit(request.args) || isIssueClose(request.args) || isLabelAdd(request.args) || isLabelRemove(request.args) || isIssueAssign(request.args) || isIssueUnassign(request.args) || isFieldValueSet(request.args) || isIssueTypeSet(request.args)) {
       return this.writeFailure ?? { end: { kind: 'exited', code: 0 }, stdout: '{}', stderr: '' };
     }
     if (isLinkAdd(request.args)) {
@@ -534,6 +605,9 @@ export class FakeGh implements GhRunner {
     const pulls = this.pulls.get(repo);
     if (issues === undefined && pulls === undefined) {
       return notVisible(repo);
+    }
+    if (query === ISSUE_FIELDS_QUERY) {
+      return this.fieldsRead(repo);
     }
     const since = Date.parse(fieldOf(request.args, 'since') ?? '');
     const held =
@@ -652,8 +726,18 @@ export class FakeGh implements GhRunner {
   }
 
   /**
+   * A read of whether a login may be assigned to one item, as GitHub answers it: what a test set for the repository,
+   * else as the repository-wide read, except that a login that took part in the item may be assigned to it.
+   */
+  private issueAssigneeRead(path: string): GhResult {
+    const [, owner = '', name = '', , number = '', , login = ''] = path.split('/');
+    const took = (this.participants.get(`${owner}/${name}#${number}`) ?? []).includes(login);
+    return took && this.canned.get(`${owner}/${name}`) === undefined ? { end: { kind: 'exited', code: 0 }, stdout: '', stderr: '' } : this.assigneeRead(`repos/${owner}/${name}/assignees/${login}`);
+  }
+
+  /**
    * An issue read as GitHub's REST API answers it: what a test set for the repository, else the issue's number and
-   * its id, 1000 + the number, when the repository holds it, else Not Found.
+   * its id, 1000 + the number, and the names of its labels, when the repository holds it, else Not Found.
    */
   /**
    * A read of one issue's new comments as GitHub's REST API answers it: the comments the issue holds posted at or
@@ -684,10 +768,10 @@ export class FakeGh implements GhRunner {
     if (canned !== undefined) {
       return canned;
     }
-    const held = (this.issues.get(`${owner}/${name}`) ?? []).some((issue) => String(issue['number']) === number);
-    return held
-      ? { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ id: 1000 + Number(number), number: Number(number) }), stderr: '' }
-      : { end: { kind: 'exited', code: 1 }, stdout: '', stderr: 'gh: Not Found (HTTP 404)\n' };
+    const held = (this.issues.get(`${owner}/${name}`) ?? []).find((issue) => String(issue['number']) === number);
+    return held === undefined
+      ? { end: { kind: 'exited', code: 1 }, stdout: '', stderr: 'gh: Not Found (HTTP 404)\n' }
+      : { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify(heldIssueRest(held, Number(number))), stderr: '' };
   }
 
   /**

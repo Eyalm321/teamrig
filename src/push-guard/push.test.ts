@@ -334,6 +334,8 @@ describe('evaluatePushes: where a push hides', () => {
       ['nice -n 5 git push origin main', 'ask'],
       ['exec git push -f origin main', 'deny'],
       ['coproc git push origin main', 'ask'],
+      ['jobs -x git push -f origin main', 'deny'],
+      ['jobs -l git push origin main', 'allow'],
       ['echo main | xargs git push origin', 'ask', 'doubt'],
     ]);
   });
@@ -563,6 +565,17 @@ describe('evaluatePushes: where a push hides', () => {
       ['H="$G push"; $H origin main', 'ask', 'doubt'],
       ['X="git push"; $X origin $B', 'ask', 'doubt'],
       ['P="export B=main"; B=topic; $P; git push origin $B', 'ask', 'doubt'],
+    ]);
+  });
+
+  it('reads a heredoc written to a file a variable names as stored, like one written to a path spelled out', () => {
+    const run = 'node $S/x.cjs && T=/p/bin/teamrig && $T test -- node --test x; $T test -- tsc';
+    expectRows([
+      [`S=/s; cat > $S/x.cjs <<'EOF'\nedit('the push labels');\nEOF\n${run}`, 'allow'],
+      [`S=/s; cat > /s/x.cjs <<'EOF'\nedit('the push labels');\nEOF\n${run}`, 'allow'],
+      // A device target may lead back to a pipe, so its body still counts; past a failed `node`, $T is what the shell inherited.
+      [`D=/dev/stdout; cat > $D <<'EOF'\nedit('the push labels');\nEOF\n${run}`, 'ask', 'doubt'],
+      [`S=/s; cat > $S/x.cjs <<'EOF'\nconst a = 1;\nEOF\n${run}; $T push`, 'ask', 'doubt'],
     ]);
   });
 

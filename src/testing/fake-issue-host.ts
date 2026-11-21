@@ -1,7 +1,14 @@
-import type { CloseReason, HostAssignee, HostComments, HostEnd, HostIssueId, HostJobLog, HostLabel, HostLabelFile, HostLinks, HostList, HostOpen, HostPulls, HostReach, HostUse, HostWatch, IssueDraft, IssueHost, IssueTarget, LabelSpec, WatchMarks } from '../issues/host.ts';
-import type { LinkedIssue } from '../issues/issue.ts';
+import { targetText, type CloseReason, type HostAssignee, type HostComments, type HostEnd, type HostIssueId, type HostIssueLabels, type HostJobLog, type HostLabel, type HostLabelFile, type HostLinks, type HostList, type HostOpen, type HostPulls, type HostReach, type HostThread, type HostUse, type HostViewer, type HostWatch, type IssueDraft, type IssueHost, type IssueTarget, type LabelNaming, type LabelSpec, type WatchMarks } from '../issues/host.ts';
+import type { FieldValue, HostField, HostFieldRead, IssueFields } from '../issues/fields.ts';
+import type { HostIssue, IssueThread, LinkedIssue } from '../issues/issue.ts';
 import type { HostPost, HostPosts } from '../issues/post.ts';
 import type { HostPull } from '../issues/pull.ts';
+
+/** The login a fake host's access, and FakeGh's token, belong to until a test says otherwise: the account the sync runs as. */
+export const FAKE_VIEWER = 'sync-bot';
+
+/** An issue as the fake reads one a test did not give: open, with no labels, assignees or body. */
+const BLANK_THREAD: IssueThread = { state: 'open', labels: [], assignees: [], pull: false, body: '' };
 
 /** What each use does, as the fake's access line words it. */
 const USE_VERB: Readonly<Record<HostUse, string>> = { read: 'reads', open: 'opens issues', write: 'writes' };
@@ -18,10 +25,12 @@ export type HostCall =
   | { readonly kind: 'sub-issue'; readonly parent: IssueTarget; readonly childId: number }
   | { readonly kind: 'blocked-by'; readonly target: IssueTarget; readonly blockerId: number }
   | { readonly kind: 'assign'; readonly target: IssueTarget; readonly logins: readonly string[] }
-  | { readonly kind: 'unassign'; readonly target: IssueTarget; readonly login: string };
+  | { readonly kind: 'unassign'; readonly target: IssueTarget; readonly login: string }
+  | { readonly kind: 'field'; readonly target: IssueTarget; readonly field: string; readonly value: FieldValue }
+  | { readonly kind: 'type'; readonly target: IssueTarget; readonly type: string };
 
 /**
- * An issue host that reaches nothing and holds no issue: a list is empty, a pull request read gives what a test set,
+ * An issue host that reaches nothing: a list gives the issues a test gave it, none until then, a pull request read gives what a test set,
  * each write is recorded, and ends done unless a test set it to fail; opened issues are numbered from 1. Its
  * repositories have the labels a test gave it, and every issue a test did not make missing, with the id 1000 + its
  * number; its links read gives the issues a test gave it, by repository. It is reached as `<owner>: writes as the
@@ -40,7 +49,10 @@ export class FakeIssueHost implements IssueHost {
   private labelCreateEnd: HostEnd = { kind: 'done' };
   private readonly removeEnds = new Map<string, HostEnd>();
   private labelReadFailure: string | undefined;
+  private listed: readonly HostIssue[] = [];
   private readonly labels = new Set<string>();
+  /** How it names a label; as it is, until a test says otherwise. */
+  private naming: LabelNaming = (label) => label;
   private readonly labelFiles = new Map<string, HostLabelFile>();
   /** The repositories whose label file was read, in order. */
   readonly labelFileReads: string[] = [];
@@ -50,8 +62,40 @@ export class FakeIssueHost implements IssueHost {
   private readonly unassignable = new Set<string>();
   private readonly spellings = new Map<string, string>();
   private assigneeRead: HostAssignee | undefined;
+  /** Whom the access belongs to; the sync's own account, FAKE_VIEWER, until a test says otherwise. */
+  private viewerRead: HostViewer = { kind: 'found', login: FAKE_VIEWER };
+  /** How many times who the access belongs to was read. */
+  viewerReads = 0;
   private assignEnd: HostEnd = { kind: 'done' };
+  private readonly itemLabels = new Map<string, readonly string[]>();
+  private issueLabelsRead: HostIssueLabels | undefined;
+  private readonly participants = new Set<string>();
+  /** Each item a labels read was asked for, in order. */
+  readonly labelReads: IssueTarget[] = [];
   private unassignEnd: HostEnd = { kind: 'done' };
+  /** No fields capability until a test gives one, as a tracker without issue fields has none. */
+  fields?: IssueFields;
+
+  /**
+   * From now on, it has issue fields: a read of any repository gives `read`, and each field or type write is recorded
+   * and ends with `end`.
+   */
+  hasFields(read: HostFieldRead, end: HostEnd = { kind: 'done' }): this {
+    this.fields = {
+      read: (_repo: string) => Promise.resolve(read),
+      setField: (target: IssueTarget, field: HostField, value: FieldValue) => {
+        this.calls.push({ kind: 'field', target, field: field.name, value });
+        return Promise.resolve(end);
+      },
+      setType: (target: IssueTarget, type: string) => {
+        this.calls.push({ kind: 'type', target, type });
+        return Promise.resolve(end);
+      },
+    };
+    return this;
+  }
+  private readonly threads = new Map<number, IssueThread>();
+  private threadRead: HostThread | undefined;
 
   /** From now on, taking an assignee off fails for `reason`. */
   failsUnassign(reason: string): this {
@@ -71,6 +115,12 @@ export class FakeIssueHost implements IssueHost {
     return this;
   }
 
+  /** From now on, every read of whom the access belongs to ends as `viewer`: found with a login, or failed. */
+  runsAs(viewer: HostViewer): this {
+    this.viewerRead = viewer;
+    return this;
+  }
+
   /** From now on, every read of whether a login may be assigned ends as `end`. */
   readsAssignee(end: HostAssignee): this {
     this.assigneeRead = end;
@@ -83,9 +133,33 @@ export class FakeIssueHost implements IssueHost {
     return this;
   }
 
+  /** From now on, the issue or pull request `target` carries these labels; every other one carries none. */
+  labelsItem(target: IssueTarget, ...labels: string[]): this {
+    this.itemLabels.set(targetText(target), labels);
+    return this;
+  }
+
+  /** From now on, every read of an item's labels ends as `end`. */
+  readsIssueLabels(end: HostIssueLabels): this {
+    this.issueLabelsRead = end;
+    return this;
+  }
+
+  /** From now on, these logins may be assigned only to the items they took part in: never in a repository-wide read. */
+  tookPart(...logins: string[]): this {
+    logins.forEach((login) => this.participants.add(login));
+    return this;
+  }
+
   /** From now on, every repository has these labels. */
   hasLabels(...labels: string[]): this {
     labels.forEach((label) => this.labels.add(label));
+    return this;
+  }
+
+  /** From now on, it holds each label under the name `naming` gives it, as a tracker whose labels take fewer names does. */
+  namesLabels(naming: LabelNaming): this {
+    this.naming = naming;
     return this;
   }
 
@@ -191,8 +265,14 @@ export class FakeIssueHost implements IssueHost {
     );
   }
 
-  list(): Promise<HostList> {
-    return Promise.resolve({ kind: 'listed', issues: [], notes: [] });
+  /** From now on, a list gives those of `issues` that are the asked repository's. */
+  lists(...issues: HostIssue[]): this {
+    this.listed = issues;
+    return this;
+  }
+
+  list(repo: string): Promise<HostList> {
+    return Promise.resolve({ kind: 'listed', issues: this.listed.filter((issue) => issue.repo === repo), notes: [] });
   }
 
   /** From now on, a pull request read of `repo` gives the open ones of `pulls`, and those changed at or after its time. */
@@ -277,6 +357,27 @@ export class FakeIssueHost implements IssueHost {
     return Promise.resolve(this.idRead ?? { kind: 'found', id: 1000 + target.number });
   }
 
+  /** From now on, a read of `number` in any repository gives `thread`. */
+  holdsThread(number: number, thread: Partial<IssueThread>): this {
+    this.threads.set(number, { ...BLANK_THREAD, ...thread });
+    return this;
+  }
+
+  /** From now on, every read of an issue or pull request ends as `end`. */
+  readsThread(end: HostThread): this {
+    this.threadRead = end;
+    return this;
+  }
+
+  /** The thread a test gave the number, else an open issue with no labels, assignees or body. */
+  thread(target: IssueTarget): Promise<HostThread> {
+    return Promise.resolve(this.threadRead ?? { kind: 'read', thread: this.threads.get(target.number) ?? BLANK_THREAD });
+  }
+
+  labelName(label: string): string {
+    return this.naming(label);
+  }
+
   labelExists(_repo: string, label: string): Promise<HostLabel> {
     if (this.labelReadFailure !== undefined) {
       return Promise.resolve({ kind: 'failed', reason: this.labelReadFailure });
@@ -323,7 +424,27 @@ export class FakeIssueHost implements IssueHost {
   }
 
   assigneeExists(_repo: string, login: string): Promise<HostAssignee> {
-    return Promise.resolve(this.assigneeRead ?? (this.unassignable.has(login) ? { kind: 'missing' } : { kind: 'found', login: this.spellings.get(login.toLowerCase()) ?? login }));
+    return Promise.resolve(this.assigneeRead ?? (this.participants.has(login) ? { kind: 'missing' } : this.assignee(login)));
+  }
+
+  viewer(_repo: string): Promise<HostViewer> {
+    this.viewerReads += 1;
+    return Promise.resolve(this.viewerRead);
+  }
+
+  /** As assigneeExists, but a login that took part in an item may be assigned to it too. */
+  assignableOn(_target: IssueTarget, login: string): Promise<HostAssignee> {
+    return Promise.resolve(this.assigneeRead ?? this.assignee(login));
+  }
+
+  /** Missing for a login set unassignable, else found as the host spells it. */
+  private assignee(login: string): HostAssignee {
+    return this.unassignable.has(login) ? { kind: 'missing' } : { kind: 'found', login: this.spellings.get(login.toLowerCase()) ?? login };
+  }
+
+  issueLabels(target: IssueTarget): Promise<HostIssueLabels> {
+    this.labelReads.push(target);
+    return Promise.resolve(this.issueLabelsRead ?? { kind: 'read', labels: this.itemLabels.get(targetText(target)) ?? [] });
   }
 
   assign(target: IssueTarget, logins: readonly string[]): Promise<HostEnd> {
@@ -341,7 +462,7 @@ export class FakeIssueHost implements IssueHost {
     return Promise.resolve(this.unassignEnd);
   }
 
-  /** Its issues have no comments, as its list holds none. */
+  /** Its issues have no new comments. */
   newComments(_target: IssueTarget, _since: number): Promise<HostComments> {
     return Promise.resolve({ kind: 'read', comments: [] });
   }

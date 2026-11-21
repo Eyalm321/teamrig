@@ -213,6 +213,8 @@ export interface TeamPaths {
   readonly githubCi: string;
   /** Held while a sync records its finish. */
   readonly githubSyncLock: string;
+  /** The automatic status push's writes per minute over the last hour (issues/push-hour.ts). */
+  readonly githubPushHour: string;
   /** The response clock of each GitHub thread waiting on an answer of ours (github/clock.ts). */
   readonly githubClocks: string;
   /** The lease of the team's one `issue watch`: its pid and last beat (github/watch.ts). */
@@ -289,7 +291,12 @@ const TASKS_FOLDER = 'tasks';
  * task's design is found by its id, never by a search.
  */
 export function taskFolder(kitHome: string, team: string, id: string): string {
-  return join(teamHome(kitHome, team), TASKS_FOLDER, id);
+  return join(tasksFolder(kitHome, team), id);
+}
+
+/** The folder holding every task folder of the team. */
+export function tasksFolder(kitHome: string, team: string): string {
+  return join(teamHome(kitHome, team), TASKS_FOLDER);
 }
 
 /** The team's paths; `claudeDir` is Claude Code's own folder (`claudeConfigDir`), whose `skills` is the default skills folder. */
@@ -363,6 +370,7 @@ export function teamPaths(kitHome: string, team: string, claudeDir: string, over
     githubSync: join(state, 'github-sync.json'),
     githubCi: join(state, 'github-ci'),
     githubSyncLock: join(state, 'github-sync.lock'),
+    githubPushHour: join(state, 'github-push-hour.json'),
     githubClocks: join(state, 'github-clocks.json'),
     githubWatch: join(state, 'github-watch.json'),
     githubWatchLock: join(state, 'github-watch.lock'),

@@ -5,8 +5,10 @@ import {
   type CloseReason,
   type HostEnd,
   type HostAssignee,
+  type HostViewer,
   type HostComments,
   type HostIssueId,
+  type HostIssueLabels,
   type HostJobLog,
   type HostLabel,
   type HostLabelFile,
@@ -15,6 +17,7 @@ import {
   type HostOpen,
   type HostPulls,
   type HostReach,
+  type HostThread,
   type HostUse,
   type HostWatch,
   type IssueDraft,
@@ -23,7 +26,9 @@ import {
   type IssueTarget,
   type WatchMarks,
 } from '../issues/host.ts';
-import type { IssueState } from '../issues/issue.ts';
+import { isRecord } from '../core/guards.ts';
+import type { FieldValue, HostField, HostFieldRead, IssueFields } from '../issues/fields.ts';
+import type { IssueState, IssueThread } from '../issues/issue.ts';
 import type { HostPosts } from '../issues/post.ts';
 import { LABEL_FILE, parseLabelFile } from '../issues/label-file.ts';
 import { MAX_COMMENT } from '../issues/write.ts';
@@ -33,7 +38,9 @@ import {
   assigneeReadArgs,
   blockedByAddArgs,
   commentsReadArgs,
+  fieldValueSetArgs,
   issueAssignArgs,
+  issueAssigneeReadArgs,
   issueUnassignArgs,
   issueBodyArgs,
   issueCloseArgs,
@@ -42,6 +49,7 @@ import {
   issueLabelAddArgs,
   issueLabelRemoveArgs,
   issueReadArgs,
+  issueTypeSetArgs,
   jobLogArgs,
   labelReadArgs,
   isLogin,
@@ -51,12 +59,14 @@ import {
   WATCH_PATHS,
   watchProbeArgs,
   userReadArgs,
+  viewerReadArgs,
   type GhResult,
   type GhRunner,
   type WatchPath,
 } from './gh.ts';
 import { type ProbeAnswer, probeAnswerOf } from './probe.ts';
 import { ghFailureKind, ISSUE_LIMIT, type IssueList, listIssues, plainLine, readCommentsIn, type ReadKind, runRead, startFailureText } from './issues.ts';
+import { readFields } from './fields.ts';
 import { failedLogExcerpt } from './job-log.ts';
 import { listLinks } from './links.ts';
 import { createdNumber } from './migrate.ts';
@@ -261,6 +271,26 @@ export class GitHubIssueHost implements IssueHost {
     return id === undefined ? { kind: 'failed', reason: `gh printed no id for ${shown}` } : { kind: 'found', id };
   }
 
+  /** A label here takes any name, a space too, so each is held as it is. */
+  labelName(label: string): string {
+    return label;
+  }
+
+  /**
+   * Reads one issue or pull request through the same REST read as its id (an issue's path serves a pull request too):
+   * read with its state, labels, assignees, kind and body; missing on Not Found; else failed with gh's own line, or
+   * when the answer has no issue's shape.
+   */
+  async thread(target: IssueTarget): Promise<HostThread> {
+    const shown = targetText(target);
+    const read = await this.read(target.repo, issueReadArgs(target), shown);
+    if (read.kind !== 'found') {
+      return read;
+    }
+    const thread = threadIn(read.stdout);
+    return thread === undefined ? { kind: 'failed', reason: `gh printed no issue for ${shown}` } : { kind: 'read', thread };
+  }
+
   /**
    * Reads the one label: found when gh ends well, missing when GitHub answers Not Found (no such label, or a
    * repository the access cannot see, which the add would fail on anyway), else failed with gh's own line.
@@ -313,6 +343,67 @@ export class GitHubIssueHost implements IssueHost {
    * failed with gh's own line.
    */
   async assigneeExists(repo: string, login: string): Promise<HostAssignee> {
+    const user = await this.spelledLogin(repo, login);
+    if (user.kind !== 'found') {
+      return user;
+    }
+    const read = await this.read(repo, assigneeReadArgs(repo, user.login), `whether ${user.login} may be assigned in ${repo}`);
+    return read.kind === 'found' ? user : read;
+  }
+
+  /**
+   * Reads the user the token for `repo` belongs to (`gh api user`), for its login as GitHub spells it; failed with
+   * gh's own line, as for a token that is no user's (an app's), or when the answer holds no login. Only the login is kept.
+   */
+  async viewer(repo: string): Promise<HostViewer> {
+    const what = 'the GitHub user the token belongs to';
+    const read = await this.read(repo, viewerReadArgs(), what);
+    if (read.kind === 'missing') {
+      return { kind: 'failed', reason: 'GitHub shows no user the token belongs to' };
+    }
+    if (read.kind === 'failed') {
+      return read;
+    }
+    const login = loginIn(read.stdout);
+    return login === undefined ? { kind: 'failed', reason: `gh printed no login for ${what}` } : { kind: 'found', login };
+  }
+
+  /**
+   * Reads whether the login may be assigned to the one issue or pull request, as GitHub spells it (as assigneeExists
+   * does): GitHub takes one with access to the repository, and also one who took part in the item. Found with that
+   * login when gh ends well; missing when GitHub answers Not Found; else failed with gh's own line.
+   */
+  async assignableOn(target: IssueTarget, login: string): Promise<HostAssignee> {
+    const user = await this.spelledLogin(target.repo, login);
+    if (user.kind !== 'found') {
+      return user;
+    }
+    const read = await this.read(target.repo, issueAssigneeReadArgs(target, user.login), `whether ${user.login} may be assigned to ${targetText(target)}`);
+    return read.kind === 'found' ? user : read;
+  }
+
+  /**
+   * Reads the one issue or pull request for the names of its labels: read with them, missing when GitHub answers Not
+   * Found, else failed with gh's own line, or when the answer holds no label list.
+   */
+  async issueLabels(target: IssueTarget): Promise<HostIssueLabels> {
+    const shown = targetText(target);
+    const read = await this.read(target.repo, issueReadArgs(target), `the labels of ${shown}`);
+    if (read.kind !== 'found') {
+      return read;
+    }
+    const labels = labelNamesIn(read.stdout);
+    return labels === undefined ? { kind: 'failed', reason: `gh printed no label list for ${shown}` } : { kind: 'read', labels };
+  }
+
+  /**
+   * The user `login` names, with the login as GitHub keeps its case: GitHub's assignee checks match that case only,
+   * while teamrig keeps logins in lowercase. Missing when GitHub has no such user.
+   */
+  private async spelledLogin(repo: string, login: string): Promise<HostAssignee> {
+    if (!isLogin(login)) {
+      return { kind: 'failed', reason: `${JSON.stringify(login)} is no GitHub login` };
+    }
     const user = await this.read(repo, userReadArgs(login), `the GitHub user ${login}`);
     if (user.kind !== 'found') {
       return user;
@@ -321,8 +412,7 @@ export class GitHubIssueHost implements IssueHost {
     if (spelled === undefined || spelled.toLowerCase() !== login.toLowerCase()) {
       return { kind: 'failed', reason: `gh printed no login ${login} for the GitHub user ${login}` };
     }
-    const read = await this.read(repo, assigneeReadArgs(repo, spelled), `whether ${spelled} may be assigned in ${repo}`);
-    return read.kind === 'found' ? { kind: 'found', login: spelled } : read;
+    return { kind: 'found', login: spelled };
   }
 
   /** One read of `what` in `repo`: found with what gh printed when it ends well, missing on Not Found, else failed with gh's own line. */
@@ -408,6 +498,20 @@ export class GitHubIssueHost implements IssueHost {
    * reads as changed again later); failed when none changed and one failed, with that line, any secret shape
    * redacted; else unchanged. GitHub answers an unchanged probe 304, which does not count against the rate limit.
    */
+  /**
+   * Issue fields and types: a read of the shipped fields query with the same access as a list, and each write one
+   * field's value or the type of one issue (gh.ts isFieldValueSet, isIssueTypeSet).
+   */
+  readonly fields: IssueFields = {
+    read: async (repo: string): Promise<HostFieldRead> => {
+      const access = await this.tokens.accessFor(repo);
+      return access instanceof NoAccessError ? { kind: 'failed', reason: access.message } : readFields(this.gh, access, repo);
+    },
+    setField: (target: IssueTarget, field: HostField, value: FieldValue): Promise<HostEnd> =>
+      this.write(target, fieldValueSetArgs(target, field.id, value), `set the field ${JSON.stringify(field.name)} of`),
+    setType: (target: IssueTarget, type: string): Promise<HostEnd> => this.write(target, issueTypeSetArgs(target, type), 'set the type of'),
+  };
+
   async watch(repo: string, marks: WatchMarks): Promise<HostWatch> {
     const access = await this.tokens.accessFor(repo);
     if (access instanceof NoAccessError) {
@@ -512,6 +616,46 @@ export function loginIn(stdout: string): string | undefined {
   return typeof login === 'string' && isLogin(login) ? login : undefined;
 }
 
+/**
+ * An issue or pull request as GitHub's REST API prints it (`state` open or closed, `labels` of names, `assignees` of
+ * logins, a `pull_request` field on a pull request only, `body` null when empty), else undefined.
+ */
+export function threadIn(stdout: string): IssueThread | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  const { state, labels, assignees, body } = parsed;
+  const names = namesIn(labels, 'name');
+  const logins = namesIn(assignees, 'login');
+  if ((state !== 'open' && state !== 'closed') || names === undefined || logins === undefined || (body !== null && body !== undefined && typeof body !== 'string')) {
+    return undefined;
+  }
+  const pull = parsed['pull_request'];
+  return { state, labels: names, assignees: logins, pull: pull !== undefined && pull !== null, body: body ?? '' };
+}
+
+/** The string `key` of each record of a REST list, or undefined when it is no list or one item has none. */
+function namesIn(list: unknown, key: string): string[] | undefined {
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  const names: string[] = [];
+  for (const item of list) {
+    const name: unknown = isRecord(item) ? item[key] : undefined;
+    if (typeof name !== 'string') {
+      return undefined;
+    }
+    names.push(name);
+  }
+  return names;
+}
+
 /** The `id` of an issue as GitHub's REST API prints it: a positive safe integer, else undefined. */
 export function issueIdIn(stdout: string): number | undefined {
   let parsed: unknown;
@@ -525,4 +669,33 @@ export function issueIdIn(stdout: string): number | undefined {
   }
   const { id } = parsed;
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
+/**
+ * The names of the labels of an issue as GitHub's REST API prints it: its `labels` list, each an object with a
+ * `name` string. Undefined when the answer holds no such list.
+ */
+export function labelNamesIn(stdout: string): string[] | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || !('labels' in parsed)) {
+    return undefined;
+  }
+  const list: unknown = parsed.labels;
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  const items: readonly unknown[] = list;
+  const names: string[] = [];
+  for (const label of items) {
+    if (typeof label !== 'object' || label === null || !('name' in label) || typeof label.name !== 'string') {
+      return undefined;
+    }
+    names.push(label.name);
+  }
+  return names;
 }

@@ -1,0 +1,249 @@
+# Changelog
+
+## [0.496.0](https://github.com/teamrig/teamrig/compare/teamrig-v0.495.1...teamrig-v0.496.0) (2026-11-20)
+
+
+### Features
+
+* **ci:** a change-kind tool names a CI run's change code, docs or design (T4617) ([4642445](https://github.com/teamrig/teamrig/commit/46424452cbb9fbd663cec21b2bf4524673d6428e))
+* **issues:** count the status push's writes over the rolling hour (T4592) ([b89ec7b](https://github.com/teamrig/teamrig/commit/b89ec7beec5ff4f73456ac1ffe1157bf4d8c8311))
+* **issues:** issue label makes a missing label github.areaOwners names (T4053) ([005be3e](https://github.com/teamrig/teamrig/commit/005be3ec3d55c6b7674e9b04519ddcfb3bcfa035))
+* **issues:** the automatic push sends what the hour has left, not an even share (T4592) ([eb0d394](https://github.com/teamrig/teamrig/commit/eb0d394a7eb51f91a539bbe17d8f5710c4fdbaaf))
+* **register:** a snapshot holds each kept task as one line and only two days of events (T4076) ([54a19ba](https://github.com/teamrig/teamrig/commit/54a19ba9c3cc4f4a7e64e01b3d2af8fc8cce5da9))
+* **register:** a task's folded state as one snapshot line, read back exactly (T4076) ([e9d5881](https://github.com/teamrig/teamrig/commit/e9d58811d6ea44674ce0bfad42f49997d95c078c))
+* **register:** the issue migrate role's holder links any team task to its issue ([7916b7a](https://github.com/teamrig/teamrig/commit/7916b7a57ddf8a6085051b9b15c2df5a0f377b34))
+* **roles:** issue migrate is a service command a role may give ([2184b9a](https://github.com/teamrig/teamrig/commit/2184b9aff5448c8131478e75e89839088251b59b))
+* **ship:** a merge on a merge queue repo enqueues the checked head and waits for the queue to land it, with no landing turn (T3386) ([5b90352](https://github.com/teamrig/teamrig/commit/5b90352ee80e9f46e7ef85dfe8a47ae8976a670b))
+* **ship:** a merge queue landing enqueues the approved head and waits for GitHub to land or eject it (T3386) ([91df090](https://github.com/teamrig/teamrig/commit/91df0905a73c8e67e4c31e3d300c551f96487640))
+* **ship:** a merge stops waiting for a conditional check its run left out once the summary passed (T4617) ([ecb9226](https://github.com/teamrig/teamrig/commit/ecb92267126d546b8b46a9c109055feabe8de064))
+* **ship:** release-pull.ts reads whether a release pull request holds only a release (T4645) ([21a0048](https://github.com/teamrig/teamrig/commit/21a0048f88ad7dd6236a9a815cf4b6a8bed0f5d9))
+* **ship:** repos.json names a repo's release pull request branch and changelog (T4645) ([da347c5](https://github.com/teamrig/teamrig/commit/da347c549f60584b6c30f7688f439ab504d9a98e))
+* **ship:** repos.json says whether main merges through GitHub's merge queue (T3386) ([9a1315c](https://github.com/teamrig/teamrig/commit/9a1315cf8a32be90046caea0ec0f22277eb0d013))
+* **ship:** ship.ts merge --release merges the release pull request on its release task's approval (T4645) ([63aeaad](https://github.com/teamrig/teamrig/commit/63aeaaddaa3c7e51dc6f0ee6196e4291bc3da4ed))
+
+
+### Bug Fixes
+
+* **check:** LOG-SIZE names each file's own remedy, not teamrig compact for every one (T4686) ([112a72e](https://github.com/teamrig/teamrig/commit/112a72ed6407107c608b6fd4280e6c0963798a5c))
+* **ci:** change kind runs the base commit's classifier, never the change's own (T4617) ([78f3c1c](https://github.com/teamrig/teamrig/commit/78f3c1c3c55d7100d62eaf899b1096692af179b9))
+* **github:** the issue templates link the outside guide under the org repository (T4326) ([c06f850](https://github.com/teamrig/teamrig/commit/c06f850114da5609f7946bab780968305b09523c))
+* **github:** the issue templates link the security advisory form of the org repository (T4326) ([570745c](https://github.com/teamrig/teamrig/commit/570745c62a61c0d65b5389935b5c502619a16703))
+* **hooks:** resolve . and .. in a path, not across a command's words ([6c7f4cb](https://github.com/teamrig/teamrig/commit/6c7f4cbe0a2259d1c249f0b4569200fb57743b74))
+* **leader-digest:** read a snapshot of task lines, and the history for a cursor before its window (T4076) ([f6d5a37](https://github.com/teamrig/teamrig/commit/f6d5a37ea5a30fb6ae927e706d6c265b46c364bf))
+* **meeting-end:** read the history for a meeting that started before the snapshot's event window (T4076) ([7cd689d](https://github.com/teamrig/teamrig/commit/7cd689d7d6688d77d0e313a92695eada834e690f))
+* **permissions:** a release merge is a ship role call, so the lead-approved release needs no permission prompt (T4672) ([c988e3c](https://github.com/teamrig/teamrig/commit/c988e3cdd1d4846f4214b61b8f62ade35aff3e91))
+* **queue:** a ship holds the slot of the repository its words move, or every slot when in doubt ([#1711](https://github.com/teamrig/teamrig/issues/1711)) ([e91c673](https://github.com/teamrig/teamrig/commit/e91c6735a2d7f18b92e2b2ea91d7d1f5a7446dbf))
+* **queue:** a ship step of one word, a whole shell line, holds every slot ([#1711](https://github.com/teamrig/teamrig/issues/1711)) ([ddc27f3](https://github.com/teamrig/teamrig/commit/ddc27f3bc7f965da274e946b4e029cefd56baef9))
+* **queue:** a ship step whose program is a script of another repository holds every slot ([#1711](https://github.com/teamrig/teamrig/issues/1711)) ([8562fe9](https://github.com/teamrig/teamrig/commit/8562fe9860254307296dd5702bffb6b981742067))
+* **queue:** hold the ship slot per repository, not per host ([#1711](https://github.com/teamrig/teamrig/issues/1711)) ([039ed66](https://github.com/teamrig/teamrig/commit/039ed66a0a3c49063708b8f17aa270096d1223d2))
+* **register:** the issue migrate holder never lifts a task kept local (T4606) ([f296bac](https://github.com/teamrig/teamrig/commit/f296bac985b3f5b4a75ff8f541f8f0babf2be4cf))
+* **roles:** a migrate counts each issue row toward the daily cap (T4606) ([68c7560](https://github.com/teamrig/teamrig/commit/68c7560d95b4f24edfb85c9869aa7161fc168a1a))
+* **ship:** a merge-queue landing waits on or reports merged only the approved head (T4681) ([4bb7ec1](https://github.com/teamrig/teamrig/commit/4bb7ec147077246ba18f84eb8dd5a7dfef4a08e5))
+* **ship:** count the tab check runCli runs before step-away as ship code ([#1686](https://github.com/teamrig/teamrig/issues/1686)) ([08e7934](https://github.com/teamrig/teamrig/commit/08e79346792e4289521998f11fa07c8e1aa51bd9))
+* **ship:** the start check counts only the CLI commands the ship runs ([#1686](https://github.com/teamrig/teamrig/issues/1686)) ([69a212a](https://github.com/teamrig/teamrig/commit/69a212a752cd73a64e3088da678cc1e48582389b))
+* **ship:** the teamrig-pane profile waits for its commit subject gate, not the plugin version gate it dropped (T4678) ([5d740ca](https://github.com/teamrig/teamrig/commit/5d740ca4a02aa427438c977318445dae9023ac19))
+* **show:** judge a task's need for the history with windowOpensAfter (T4076) ([5e3769e](https://github.com/teamrig/teamrig/commit/5e3769efbb7b6fef4a754aa00d0f62ecf185dd76))
+* **show:** read the history for a task created before the snapshot's event window (T4076) ([054dcab](https://github.com/teamrig/teamrig/commit/054dcab9ae50bbab750d59e54228d9459c3150e1))
+* **starter-watch:** list the starters once more when a listing failed or left them out ([#908](https://github.com/teamrig/teamrig/issues/908)) ([797000a](https://github.com/teamrig/teamrig/commit/797000a88466e864bcff08533351065f67b0d4be))
+* **team-split:** move a task created before the snapshot's event window with all its lines (T4076) ([8f9c9d6](https://github.com/teamrig/teamrig/commit/8f9c9d67b02b208b0e602149b7a81ec71241eaeb))
+
+## [0.495.1](https://github.com/teamrig/teamrig/compare/teamrig-v0.495.0...teamrig-v0.495.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **ship:** a waiting ship's tool is checked against the remote's own head at its start ([#1466](https://github.com/teamrig/teamrig/issues/1466)) ([8cd2ce5](https://github.com/teamrig/teamrig/commit/8cd2ce581dcacb0f08b7c07e112212b7ea80f97b))
+
+## [0.495.0](https://github.com/teamrig/teamrig/compare/teamrig-v0.494.0...teamrig-v0.495.0) (2026-11-19)
+
+
+### Features
+
+* **github:** read the login the token belongs to (T4581) ([f7c8410](https://github.com/teamrig/teamrig/commit/f7c8410e0366ecaedb98cdd01c4d688d5b094fe1))
+* **inbox:** a line naming a p0 sent to many sessions wakes only those who act on it (T4431) ([1b99895](https://github.com/teamrig/teamrig/commit/1b998954976c419ca04045c81e62be5c61b0354f))
+
+
+### Bug Fixes
+
+* **ci:** the pre-push light checks build the dist before the plugin's tests, which load it (T4595) ([6938809](https://github.com/teamrig/teamrig/commit/6938809267b68c9dd62d8c9905a5bc23e16a0615))
+* **issues:** the status push assigns the login the sync runs as, never the repo owner, and a refused assign costs no write (T4581) ([1dea906](https://github.com/teamrig/teamrig/commit/1dea906439880449c704ac64440893bec6c4f46e))
+* **push-guard:** a program that may set variables unseen cuts only what runs after it ([ab4d090](https://github.com/teamrig/teamrig/commit/ab4d0909b8c64cf60580a3a5d3320350519bb6f3))
+* **push-guard:** resolve a redirection target a line's variable names ([b4d6297](https://github.com/teamrig/teamrig/commit/b4d62972902840466ecf9868033eb20af09e8a41))
+* **push-guard:** test a heredoc stored through a variable path ahead of an unknown program ([276b225](https://github.com/teamrig/teamrig/commit/276b225bb940aee0f7e2497a5611db79d2edde01))
+* **register:** a proof may wait on its owner's own open task ([#1544](https://github.com/teamrig/teamrig/issues/1544)) ([029aadd](https://github.com/teamrig/teamrig/commit/029aaddf6d85e7f16ecf28f6317040faf6c03c12))
+* **register:** a proof waits on its owner's open task only once every --after task is finished ([#1544](https://github.com/teamrig/teamrig/issues/1544)) ([3b4e92e](https://github.com/teamrig/teamrig/commit/3b4e92e096d84600ca661b969a718e35253dc378))
+
+## [0.494.0](https://github.com/teamrig/teamrig/compare/teamrig-v0.493.0...teamrig-v0.494.0) (2026-11-19)
+
+
+### Features
+
+* **cli:** teamrig issue assign gives one item to its takers ([74b4908](https://github.com/teamrig/teamrig/commit/74b4908f98bebfd73b2b49f2cd9849209214ac6b))
+* **github:** the host reads whether a login may be assigned to one item, and the labels it carries ([882d113](https://github.com/teamrig/teamrig/commit/882d113cdae52a361757b3cf824551743f94a095))
+* **github:** the runner takes the read of whether a login may be assigned to one issue ([e03f0f5](https://github.com/teamrig/teamrig/commit/e03f0f5773b8a1b2f6fe12fd538c807efe28fc88))
+* **issues:** an assign gives an item to its takers, refused on a design issue or for one the host would drop ([023e47b](https://github.com/teamrig/teamrig/commit/023e47b05f78b1dbfcdc547db7a724efa98baaed))
+* **marketplace:** installs read the release branch's plugin folder (T4355) ([5d06636](https://github.com/teamrig/teamrig/commit/5d0663647ae5f1fef49ca1dd38bb0837a200ddb9))
+* **ship:** ship.ts pr opens the pull request of an approved, pushed head with the ship token (T4364) ([5c236b8](https://github.com/teamrig/teamrig/commit/5c236b8bb070af5dc91f3e49facb9bf712b64d81))
+
+
+### Bug Fixes
+
+* **config:** config get shows every key the config guard refuses as owner-gated ([#1470](https://github.com/teamrig/teamrig/issues/1470)) ([c993030](https://github.com/teamrig/teamrig/commit/c993030d56f2ab8e6bf7aa253123b709d8b3a2cb))
+* **queue:** a memory wait line says the floor is kept free for the host, not the step's need ([#1670](https://github.com/teamrig/teamrig/issues/1670)) ([53d32e7](https://github.com/teamrig/teamrig/commit/53d32e7f5704cec4b899013efb5185796065b1ab))
+* **queue:** a re-run's label matches its first run, a re-run word set aside ([#1670](https://github.com/teamrig/teamrig/issues/1670)) ([781e4b6](https://github.com/teamrig/teamrig/commit/781e4b68a9a2c307c37be0fc177e28d7e526d0be))
+* **queue:** one outlier run no longer pins a step's memory need, and re-runs match by label without commit ids ([#1670](https://github.com/teamrig/teamrig/issues/1670)) ([5f31192](https://github.com/teamrig/teamrig/commit/5f31192684c528e3aac6bf9f11a5e5160123eeb0))
+* **ship:** a ship and a catch-up commit the dist only while the tree tracks it (T4355) ([fe47ef7](https://github.com/teamrig/teamrig/commit/fe47ef7eea2c81edf760fb4334405cb6b86641c6))
+
+## [0.493.0](https://github.com/teamrig/teamrig/compare/teamrig-v0.492.0...teamrig-v0.493.0) (2026-11-19)
+
+
+### Features
+
+* **budget:** budget.resets lists the person's other Claude accounts as kind account, free again a week after each switch (T939) ([1ddec6b](https://github.com/teamrig/teamrig/commit/1ddec6b70a6ef673fc50b71c96da766408fb2144))
+* **check:** name a session left ready with no restart coming ([#705](https://github.com/teamrig/teamrig/issues/705)) ([0664f17](https://github.com/teamrig/teamrig/commit/0664f1790844fd0df6a8c312b92529492227264a))
+* **check:** UNKNOWN-GOAL flags a task whose goal tag has no record ([#846](https://github.com/teamrig/teamrig/issues/846)) ([bb30ae4](https://github.com/teamrig/teamrig/commit/bb30ae4d3088353104f5c3efdca94a607da0263b))
+* **cli:** every command takes --session and --team ([#654](https://github.com/teamrig/teamrig/issues/654)) ([b5ab4f3](https://github.com/teamrig/teamrig/commit/b5ab4f338226f369cb7b763b6a62eb6b4ad11b33))
+* **cli:** the status push sets each held issue's fields and type after its labels (T3406) ([3aca51e](https://github.com/teamrig/teamrig/commit/3aca51e0180b06b3eda3f09bc83e3d290be14d26))
+* **config:** github.fields names the issue fields, priority options and types the status push sets (T3406) ([5f0753b](https://github.com/teamrig/teamrig/commit/5f0753be18822880668d557052827cb701e3ebb5))
+* **config:** the lead may set github.watcher, one of the sessions (T3447) ([415261e](https://github.com/teamrig/teamrig/commit/415261e16c9d943f323fb009d8badc12a1659e35))
+* **github:** read each open issue's fields and type, and write them on the owner's token (T3406) ([66bcef0](https://github.com/teamrig/teamrig/commit/66bcef0848edfd7800962fb099fd4952821c19b2))
+* **github:** the allowlist takes one issue field value write and one issue type write, word for word (T3406) ([0dbe0e8](https://github.com/teamrig/teamrig/commit/0dbe0e8d1560310f58d53e877c877f04fe6dd726))
+* **github:** the response clock groups its reminders per owner and GH-LATE per check ([#1475](https://github.com/teamrig/teamrig/issues/1475)) ([b64829c](https://github.com/teamrig/teamrig/commit/b64829cbd2a4ae41cdae07d1352a50b72a55300e))
+* **inbox:** a line naming unfinished right-now work wakes as --wake now (T4414) ([5fcd904](https://github.com/teamrig/teamrig/commit/5fcd904bd6c4c8c168a76da7b8da95381ae0f493))
+* **issues:** an optional fields capability on the tracker port, and the one-way field and type plan (T3406) ([12bc0a1](https://github.com/teamrig/teamrig/commit/12bc0a195c45f37145f76090666941c1c0db946c))
+* **register:** a task tree names the sessions a task waits on and what of each (T4414) ([3092344](https://github.com/teamrig/teamrig/commit/3092344cac5de7fe8478aca8cc619ab0ebefa408))
+* **ship:** a pull request already open without its Reach section merges with a warning line ([d152005](https://github.com/teamrig/teamrig/commit/d15200588ce6d0e53debe5d4a5900db0c7225e5b))
+* **ship:** a repo profile lists the sections a pull request note must hold ([d8b230a](https://github.com/teamrig/teamrig/commit/d8b230ae9f75d2b8c2ac7fa146a0be34feb2c397))
+* **ship:** merge opens no teamrig pull request without its Reach section (T3058) ([cc31aa5](https://github.com/teamrig/teamrig/commit/cc31aa5f341c9323f781f5d0acd1d3cf904ee22a))
+
+
+### Bug Fixes
+
+* **check:** RESTART-STALLED skips a ready session whose Claude Code is gone ([#705](https://github.com/teamrig/teamrig/issues/705)) ([a6182e4](https://github.com/teamrig/teamrig/commit/a6182e437a9446ed3af5db1069dc1babef0c3995))
+* **ci:** a release run that opens no release pull request passes (T4347) ([6bea29c](https://github.com/teamrig/teamrig/commit/6bea29c811753f838a4ffc5a708c1078cfc07feb))
+* **ci:** the pre-push hook runs light checks and leaves the suite to CI (T4344) ([6f8019e](https://github.com/teamrig/teamrig/commit/6f8019e7c82bf89e9d95908c005b1422870352a7))
+* **cli:** a command never sees a --session or --team it does not declare ([#654](https://github.com/teamrig/teamrig/issues/654)) ([ed3f9e6](https://github.com/teamrig/teamrig/commit/ed3f9e6f4da1b0a3c48f6f64c57124d7a6630b9f))
+* **cli:** undeclared --session/--team stay out of flags as the line is read, and --session is checked on the team the command runs for ([#654](https://github.com/teamrig/teamrig/issues/654)) ([c8000af](https://github.com/teamrig/teamrig/commit/c8000aff8dbf5a11d9347be310be3c31c0013071))
+* **github:** a grouped GH-LATE keeps its key when its newest late thread is answered ([#1475](https://github.com/teamrig/teamrig/issues/1475)) ([1939eb0](https://github.com/teamrig/teamrig/commit/1939eb00d5e7381d18918f28f7add414542ec308))
+* **idle:** a closed session asked to wake for right-now work keeps its place first in the reopen line (T4414) ([3f78fa2](https://github.com/teamrig/teamrig/commit/3f78fa228d903d1fe0120abf7c9e7e0105ae30db))
+* **idle:** a closed session reopens for right-now work of others that waits on it (T4414) ([78d245b](https://github.com/teamrig/teamrig/commit/78d245bbc2b93377db04f8f1b053752615d7cb86))
+* **issues:** the status push names a task on an open pull request as one, not as unlisted ([#1451](https://github.com/teamrig/teamrig/issues/1451)) ([de09404](https://github.com/teamrig/teamrig/commit/de09404d783ba3f3f5ee8942a962113834878fa6))
+* **meeting:** one spotlight dims the host at a time, so a second meeting lifts the first's (T4294) ([5739de0](https://github.com/teamrig/teamrig/commit/5739de016998f1c9bbdb670afdccbcac620cabe7)), closes [#1674](https://github.com/teamrig/teamrig/issues/1674)
+* **push-guard:** read the jobs builtin's -x form as a launcher and an unseen setter (T4423) ([7fd91a2](https://github.com/teamrig/teamrig/commit/7fd91a28c7d689c286942593d2ad299cc1e876c5))
+* **queue:** a step's time limit leaves out the time its share was set aside (T4218) ([768212f](https://github.com/teamrig/teamrig/commit/768212f4b7b8dfe8cde7a880dc01fe7cca70b204))
+* **register:** a note-only set points to update --note ([#701](https://github.com/teamrig/teamrig/issues/701)) ([4a325fb](https://github.com/teamrig/teamrig/commit/4a325fb1c8fb61edea634819bd6fd4a8d92d65aa))
+* **register:** right-now work handed to a closed owner reopens it at once, and its NOTE no longer says it is woken at an idle prompt (T4414) ([124f978](https://github.com/teamrig/teamrig/commit/124f978e5ff0b41bc2d2409fa5bb8e48b049519f))
+* **register:** right-now work waiting on a session wakes it, and reopens it when closed (T4414) ([da63252](https://github.com/teamrig/teamrig/commit/da632523ea79505a1eef7e32e5ba2f392e8ddc58))
+* **ship:** a merge reads an approved head's work by the version files the ship sets again, the release manifest too (T4298) ([27dbeae](https://github.com/teamrig/teamrig/commit/27dbeae96baca58b1ee06c5ba73ddd4900a44c9b))
+* **ship:** a merge's drift check retries a fetch that lost a ref race, and one that cannot read keeps exit 0 ([#1452](https://github.com/teamrig/teamrig/issues/1452)) ([8f8c225](https://github.com/teamrig/teamrig/commit/8f8c225550b1a244b3f8f3c007aa4a2dff149b1a))
+* **ship:** an empty plan ships the commits a branch already carries, so an outside pull request keeps its author (T4116) ([eeac703](https://github.com/teamrig/teamrig/commit/eeac703418d8888382e0c529b939c1b10963bb40))
+* **ship:** only an older merge whose checks passed holds the landing turn (T4196) ([1192137](https://github.com/teamrig/teamrig/commit/1192137ed8f6c2d33e59d266e0058f46c51d8e15))
+* **update:** the update check reads the version a git-subdir marketplace entry installs (T4355) ([5665f10](https://github.com/teamrig/teamrig/commit/5665f104d077965e857f58427b48c466a9bb0162))
+* **wake:** a closed session's CLOSED line for right-now work says its reopen goes first (T4414) ([0b710cc](https://github.com/teamrig/teamrig/commit/0b710cc1008dbb2b535f3cd851f915318b4020fc))
+* **worktree:** a branch id with a leading zero names no task (T3269) ([38355ba](https://github.com/teamrig/teamrig/commit/38355ba6d868e74efab5d9f97699b4b9a1e0fd8b))
+
+## [0.492.0](https://github.com/teamrig/teamrig/compare/teamrig-v0.491.0...teamrig-v0.492.0) (2026-11-18)
+
+
+### Features
+
+* **budget:** budget cut --stop holds a session whatever its use, up to the week's reset (T3455) ([ec4cbee](https://github.com/teamrig/teamrig/commit/ec4cbeeef79b0368700dc08fda45634fd6db9cd4))
+* **check:** warn the lead when a team log nears the task pane's read limit (T3482) ([dae2f01](https://github.com/teamrig/teamrig/commit/dae2f01d3fab306abddbbe168f277ab771d4f12a))
+* **ci:** a short proof runs the scrub, DCO, typecheck and the changed files' specs, recorded apart from the pass record (T3414) ([d8a4440](https://github.com/teamrig/teamrig/commit/d8a4440b1a05ded6620f0fc3f7b47dadf2024ec1)), closes [#1372](https://github.com/teamrig/teamrig/issues/1372)
+* **ci:** the pre-push hook proves a branch with the short checks when repos.json's merge switch is on (T3414) ([d0cdbff](https://github.com/teamrig/teamrig/commit/d0cdbffa7faf546a56d7849cb6ab68e59ca2dce9)), closes [#1372](https://github.com/teamrig/teamrig/issues/1372)
+* **cleanup:** teamrig cleanup launchers lists orphaned tab launchers and ends them with --yes (T4108) ([0b22067](https://github.com/teamrig/teamrig/commit/0b22067f98bd55bed10fb88765cf66200a258341))
+* **cli:** teamrig follow, follow --list and unfollow, the issues and pull requests a session follows (T3363) ([8ea2fc8](https://github.com/teamrig/teamrig/commit/8ea2fc805c44b05f26e5c383a579e316d5b848c8))
+* **cli:** teamrig pipeline front puts a task's steps at the front of the host line (T4082) ([7a39dec](https://github.com/teamrig/teamrig/commit/7a39decfe8926077c2ab79948db6c3deb79800a8))
+* **cli:** teamrig set --drop-approval gives up a task's approval for a new ask ([f315c72](https://github.com/teamrig/teamrig/commit/f315c7289531225118ea3cd152c363fbce966369))
+* **cli:** teamrig step-away and step-back, run inside a queued step (T3336) ([0080370](https://github.com/teamrig/teamrig/commit/00803701add7710bfe7a0582b311dc6db6ea8b0c))
+* **config:** github.activity and github.followMax, for the activity a session hears and the items it follows (T3363) ([99ad448](https://github.com/teamrig/teamrig/commit/99ad448bb277cc247736ef648f7d072a86a9cef7))
+* **config:** prompts.hookAsks defaults to refuse, so no prompt holds a session by default (T3356) ([2a9d84c](https://github.com/teamrig/teamrig/commit/2a9d84c41194f4c5d4fa1381dbf803e1c392e2af))
+* **delivery:** a fronted task's step goes first in the host line, and a request can be read again (T4082) ([8564148](https://github.com/teamrig/teamrig/commit/85641488cfb1ee9317a99a34925953af165bd982))
+* **delivery:** a step waiting for the host lock reads its request again once a minute (T4082) ([598c7f6](https://github.com/teamrig/teamrig/commit/598c7f6d8290bd21b41f893950dbd585463e4a42))
+* **delivery:** a store of the tasks the lead put at the front of the host line (T4082) ([a53f4a2](https://github.com/teamrig/teamrig/commit/a53f4a20d5ed5b864c944733fde44132b371c22b))
+* **delivery:** a team's line requests read its register and front again at each read (T4082) ([bdf61af](https://github.com/teamrig/teamrig/commit/bdf61afbef0c17434d6a371882460b563d3f74bb))
+* **env:** credentialsOf gives the credential variables of an environment (T4093) ([f2d7d91](https://github.com/teamrig/teamrig/commit/f2d7d91d904f7e2c18c186de3147bb740e22da96))
+* **files:** the files port tells a file's size without reading it (T3482) ([2b82e78](https://github.com/teamrig/teamrig/commit/2b82e7874c2491abcec420f0e4036ecd53b50566))
+* **github:** a pull request that closes a task's issue routes its posts, mentions and news to that task's owner, whatever its branch (T3363) ([5bd42a1](https://github.com/teamrig/teamrig/commit/5bd42a169e2c65475f03b20a64a9d9d93a3ed430))
+* **github:** issue marks tell a watched issue's close, reopen and labels to its task's owner and its followers (T3363) ([fed0a40](https://github.com/teamrig/teamrig/commit/fed0a40c983130ad97889d83fb5d3695b9d722b4))
+* **github:** pull request news reaches the owner of a task linking it and its followers, tells checks turning green, and wakes a session for changes requested on its own (T3363) ([a6bf55a](https://github.com/teamrig/teamrig/commit/a6bf55ad85cab72812cea654917345e239d6a033))
+* **github:** route each new comment, review comment and review on a task's or a followed item to its sessions, a question waking the owner (T3363) ([ecceb7e](https://github.com/teamrig/teamrig/commit/ecceb7e1965fb65aec4bdcfdc7de2846608187b0))
+* **github:** the auto sync tells a task's owner and its followers a watched issue's close, reopen and labels, in sync state format 6 (T3363) ([fee4225](https://github.com/teamrig/teamrig/commit/fee4225d2fae0dbf9f949f36e3ca5b21ff2f38d9))
+* **github:** the automatic sync tells a task's owner and an item's followers each new comment, review comment and review, from the posts its mention scan reads (T3363) ([6b5646f](https://github.com/teamrig/teamrig/commit/6b5646f522f8088e27d7614866d611179af079d4))
+* **github:** the follows store, the issues and pull requests each session follows (T3363) ([ab9ce39](https://github.com/teamrig/teamrig/commit/ab9ce3928454db3779cf7218e625104fcfc058f3))
+* **git:** the merge git port reads many files at a commit in one git run (T4035) ([506a263](https://github.com/teamrig/teamrig/commit/506a263f033949a1e47d0e2dd18879e26fbcc374))
+* **host-lock:** a queued step can set its host share aside and take it back in turn (T3336) ([1653ca4](https://github.com/teamrig/teamrig/commit/1653ca426e7b532635a52b0fa03f8adc9b937009))
+* **idle:** a closed session reopens for a pile of inbox lines it has not seen, unless it rests; a closed child lead reopens on every trigger (T3387) ([d50eab2](https://github.com/teamrig/teamrig/commit/d50eab2ea3d4b6bff9bbcfab9d204021cddeccf6))
+* **idle:** a tab's idle pass also runs the stale passes of its tree's other teams (T3387) ([c55c098](https://github.com/teamrig/teamrig/commit/c55c098177a0c84578cf024e5f9868a6aed9cc04))
+* **merge:** read the checkout a file is in, naming a read git did not answer (T3368) ([0cddf61](https://github.com/teamrig/teamrig/commit/0cddf61b135aadc4ce6c2210e185a2eaa60820de))
+* **open:** a launcher census reads every teamrig launch process and which lost their tab (T4108) ([6f2fc3b](https://github.com/teamrig/teamrig/commit/6f2fc3b8f5a07a76803bdaeec1e9127e1d456119))
+* **processes:** SessionProcesses lists every process from one listing, and lineage reads it (T4108) ([3ea778c](https://github.com/teamrig/teamrig/commit/3ea778cc0ec7a044130a95f01b3d53e47f743b9c))
+* **queue:** a parked step record a dispatcher claims once (T4093) ([61cdad4](https://github.com/teamrig/teamrig/commit/61cdad4646d483c20783337f5e45d7df3f3e7063))
+* **queue:** a step can append its output to its own log (T4093) ([cb575a4](https://github.com/teamrig/teamrig/commit/cb575a486aa2369d471aa2db1a1b805d1c60c9a0))
+* **queue:** queue and merge steps wait in the host line by their team's live requests (T4082) ([c373ecf](https://github.com/teamrig/teamrig/commit/c373ecf5436d1ad93ddcbe0c09838357e93b8cdc))
+* **ship:** a merge of a repo whose main requires CI runs only the short checks before the push (T3414) ([e197de6](https://github.com/teamrig/teamrig/commit/e197de6afcb2e0f7621f2ab6035791f212d7ac8a)), closes [#1372](https://github.com/teamrig/teamrig/issues/1372)
+* **ship:** repos.json says what a merge checks locally, the whole suite unless its main requires CI (T3414) ([ef0c316](https://github.com/teamrig/teamrig/commit/ef0c3163d8b25c2cac8df26d1c3b3d5ef5cf390b)), closes [#1372](https://github.com/teamrig/teamrig/issues/1372)
+* **ship:** the ship gate proves a tree short with the runner's --short, its record kept apart (T3414) ([b4ec47a](https://github.com/teamrig/teamrig/commit/b4ec47a68e330b92ef0130e3f343498e7208ab59)), closes [#1372](https://github.com/teamrig/teamrig/issues/1372)
+
+
+### Bug Fixes
+
+* **admission:** a step that takes no ship slot passes every ship behind the one waiting on it (T3336) ([db419b8](https://github.com/teamrig/teamrig/commit/db419b80810248800d7899996009214c674f7dc6))
+* **ci:** a local plugin-version run judges the raise against the fork point (T4254) ([d067d1f](https://github.com/teamrig/teamrig/commit/d067d1f6d261c5e25fd23020ca00bdf564ce14a4))
+* **ci:** the coverage gate reports a run folder it cannot remove and goes on, never failing on it (T4233) ([02de774](https://github.com/teamrig/teamrig/commit/02de774ab2e1804da21c7b8b5eb3570d7a236e8f))
+* **cleanup:** --yes ends an orphaned launcher only when its id keeps the same starter and start (T4108) ([c23ebff](https://github.com/teamrig/teamrig/commit/c23ebffaae2dc26750de14c70dd87b6a26af1ad7))
+* **closed-wake:** a close the idle pass made a moment ago is no reopen under way ([#1584](https://github.com/teamrig/teamrig/issues/1584)) ([910195f](https://github.com/teamrig/teamrig/commit/910195f1ce991aadb1ff492efa07fcdbdd59d51c))
+* **delivery:** the line front's model holds no file access; its store moves to line-front-store.ts (T4082) ([eb8cbfd](https://github.com/teamrig/teamrig/commit/eb8cbfdaa36a9cf1a6a41a28c19ed56e92566b1c))
+* **git:** a git run records why git gave no answer, apart from git's own no (T3368) ([e1206c6](https://github.com/teamrig/teamrig/commit/e1206c646376264ab70c0bbc5a5e8ec53baf2bc7))
+* **github:** a mention on an item a team task links to reaches that task's owner, not only an imported task's (T3363) ([cb183b4](https://github.com/teamrig/teamrig/commit/cb183b42d84baaa6da50e197cc87f5107242cdf9))
+* **github:** an issue teamrig add opens follows github.stamp too ([#1102](https://github.com/teamrig/teamrig/issues/1102)) ([e7deab2](https://github.com/teamrig/teamrig/commit/e7deab2b9bdd6ecc11b122fef1dfef1f8ca6837a))
+* **github:** an outside pull request opened is a plain line to the watcher, which defaults to the GitHub answerer (T3412) ([456d029](https://github.com/teamrig/teamrig/commit/456d02915b88746f632ea37926d79e4e7fa8c8f9))
+* **github:** the response clock counts only the team's logins as our answer (T3380) ([a5223fc](https://github.com/teamrig/teamrig/commit/a5223fca091743ec0d6fee3970287fac095c4374))
+* **hooks:** no teamrig guard ever asks a person; what it would ask about is refused with the route (T3356) ([b84df35](https://github.com/teamrig/teamrig/commit/b84df351809cac76e3a11916e740c8e1aed4e9f0))
+* **hooks:** the drop-cd refusal no longer says to put the steps in a script file (T3291) ([ac95eea](https://github.com/teamrig/teamrig/commit/ac95eea93fe193bf39df36ca5aa5b1a1cea4f3d3))
+* **host-lock:** a share an older teamrig took is kept, not set aside, as its release would leave it behind (T3409) ([bb707e8](https://github.com/teamrig/teamrig/commit/bb707e838fd063d829b63c73b0efbdfda6f2469c))
+* **host-lock:** a share set aside is removed once its step's process is gone (T3409) ([195c86f](https://github.com/teamrig/teamrig/commit/195c86f8b28df604aa31bc61dc8fa4e9477e7dbb))
+* **idle:** only the root team's lead is never closed; a leader stays open while a task waits on its answer or a session it leads runs (T3387) ([af20874](https://github.com/teamrig/teamrig/commit/af2087402bbfef337f48c09bdbe5de74506600a7))
+* **issues:** a finished task never closes an issue taken outside the team, or a design issue (T3350) ([8e88928](https://github.com/teamrig/teamrig/commit/8e8892876dfe2006c0575933c963dff1fff33c6d))
+* **issues:** issue links plans one link per issue pair, never one issue to itself (T3352) ([cf70e60](https://github.com/teamrig/teamrig/commit/cf70e601aa972ce4f996f57df9f2f6e59bac071c))
+* **meet:** --terminal names the terminal searched for a running session's tab too ([#1514](https://github.com/teamrig/teamrig/issues/1514)) ([8d3ca0f](https://github.com/teamrig/teamrig/commit/8d3ca0fc951d6d50b80ccf5334eae259b165d99a))
+* **open:** launcher census reads the entry script with win32 path rules, so a Windows command line matches on Linux and macOS (T4108) ([019e69d](https://github.com/teamrig/teamrig/commit/019e69d06a203e9828c4e92be76ef18dbd8eb93f))
+* **open:** the keeper starts its program hidden too (T3369) ([bc48322](https://github.com/teamrig/teamrig/commit/bc483226e7a7836debbf0697c4851ef60191f588))
+* **parked:** hasParked skips the files a dispatcher already found no step (T4093) ([44dbb1f](https://github.com/teamrig/teamrig/commit/44dbb1fa825c398c93b847b067e616c75807ff0a))
+* **queue:** a dispatched step runs as its parker's Claude Code session, never the dispatcher's, and holds no messaging token (T4093) ([ad5f49c](https://github.com/teamrig/teamrig/commit/ad5f49cb8ca86d2f89b935c4aae2eef4e41b1366))
+* **queue:** a ship tool run without --merge is a test step and takes no ship slot (T3414) ([67ea7ac](https://github.com/teamrig/teamrig/commit/67ea7aca81438e3d77db759912390f41763cdfd8)), closes [#1372](https://github.com/teamrig/teamrig/issues/1372)
+* **queue:** a step passes every ship waiting while a ship holds the slot (T4333) ([817e755](https://github.com/teamrig/teamrig/commit/817e755c09822362863ffdaf0a9cb8af7f77c3eb))
+* **queue:** a waiting ship is refused only when the code its tool runs changed, not when main moved on (T3419) ([2765ea0](https://github.com/teamrig/teamrig/commit/2765ea0fa53d23955d8872bc18acab798a95cd35)), closes [#1378](https://github.com/teamrig/teamrig/issues/1378)
+* **register:** a restated approval wait keeps the approval unless its note names a new head (T3207) ([38971a4](https://github.com/teamrig/teamrig/commit/38971a461eb098fb79e63245fa0b5171d4623c51))
+* **register:** a restated approval wait with no head is refused, naming the head that keeps the approval (T3094) ([c0c5da0](https://github.com/teamrig/teamrig/commit/c0c5da0a98d8b4c5418aec20befc8d23464d84d7))
+* **register:** a set on an approved task keeps or refuses, never silently drops, its approval ([41e02ad](https://github.com/teamrig/teamrig/commit/41e02ad39845faf436bdbe8962bce8e94d276a56))
+* **register:** auto-archive also does a log's first rotation (T3482) ([a3f3107](https://github.com/teamrig/teamrig/commit/a3f3107b8d3a214f06169f3fac6c66ed11a668ff))
+* **release:** the release manifest starts from main's version, 0.489.0 (T3346) ([2837db1](https://github.com/teamrig/teamrig/commit/2837db19bdecbc9c050ceaa1b888e2d929d9f4fd))
+* **setup:** the team pointer's git check runs through the kit's git runner (T4035) ([44ea00c](https://github.com/teamrig/teamrig/commit/44ea00cffdeb33b51ba24faf96685e8b584fdd58))
+* **ship:** a catch-up sets the release manifest to main's plugin version again (T4298) ([fd7b89b](https://github.com/teamrig/teamrig/commit/fd7b89b79297d0b419f08ab58ad7f3ac9aa444bd))
+* **ship:** a merge on the ci gate sets its host share aside for the checks' wait and the merge call (T3336) ([5d31161](https://github.com/teamrig/teamrig/commit/5d3116172a4593549594b8906ed66a368b1c7859))
+* **ship:** a merge's catch-up push that loses the version race to a merge landing during its gate catches up again (T4131) ([cae099f](https://github.com/teamrig/teamrig/commit/cae099f3bed69a5e85ae005d13b354f2680e2f94))
+* **ship:** a raise that stamps a migration's firstRelease is the raise, taken back for review (T4171) ([0a02199](https://github.com/teamrig/teamrig/commit/0a021998673ee89913100550b72e9fba078fe4a6))
+* **ship:** a run without --merge leaves the version raise and the dist out of the head it is approved on (T3346) ([a1db437](https://github.com/teamrig/teamrig/commit/a1db43716899cb0cf6dff8ee0873792d91869cec))
+* **ship:** a ship tool check git did not answer is read again, never refused as a changed tool (T3368) ([367e972](https://github.com/teamrig/teamrig/commit/367e9729cd3390d193533ef8b9745724bfc2c57e))
+* **ship:** a waiting ship runs from a moved checkout only when it moved forward from its pin (T3419) ([9cfdff2](https://github.com/teamrig/teamrig/commit/9cfdff2cb13d2b54a01bc3643cdbadbe5d585f70))
+* **ship:** a waiting ship's code is read from its imports and the roots its tool names, at its pin and its head (T3419) ([19760c5](https://github.com/teamrig/teamrig/commit/19760c53401b52cb2a568ea67189a5d17bc60091))
+* **ship:** an approval keeps through a migration's release stamp set again with the raise (T3419) ([12c08aa](https://github.com/teamrig/teamrig/commit/12c08aa8f80fcec67189fe81ac524bfe2dbb22bd)), closes [#1378](https://github.com/teamrig/teamrig/issues/1378)
+* **ship:** an approval masks a migration's release stamp only at a version the change ships in (T3419) ([683090e](https://github.com/teamrig/teamrig/commit/683090e1b52aee9a6b9db1fd06f9edf781e71e7f)), closes [#1378](https://github.com/teamrig/teamrig/issues/1378)
+* **ship:** an approval's fingerprint drops a diff's closing newline, so a raise sorting last keeps it (T4216) ([9505349](https://github.com/teamrig/teamrig/commit/950534985804bd531b2851263a952d8a0dc4c490))
+* **ship:** the ship tool check reads a tool's code one import level per git run (T4035) ([78e5d16](https://github.com/teamrig/teamrig/commit/78e5d16308a648fd57b53812ad52a0240a500591))
+* **spawn:** every program teamrig starts is hidden, so a background queue run opens no terminal tab (T3369) ([e03e570](https://github.com/teamrig/teamrig/commit/e03e570d51166600c488ec0fe0deeb0a213572a8))
+* **test:** a bare teamrig test runs through the host queue, one spec file small and more heavy (T2323) ([7da07cf](https://github.com/teamrig/teamrig/commit/7da07cf29f07e61d9d29e6676bb424f4534e7deb)), closes [#877](https://github.com/teamrig/teamrig/issues/877)
+* **test:** starter-watch specs run Git for Windows' own sh where PATH lacks one, so they no longer skip (T4103) ([7507d6a](https://github.com/teamrig/teamrig/commit/7507d6ac7a7705fd97dd8800dee8babb155f83b5))
+* **wake:** a rush poke comes again only after something changed for the session (T3407) ([86b713b](https://github.com/teamrig/teamrig/commit/86b713bf7e27d56dce9248658d287a0e180a20fe))
+
+
+### Performance Improvements
+
+* **ci:** the coverage suite runs at most 10 test files at once (T4064) ([b829bcf](https://github.com/teamrig/teamrig/commit/b829bcf34ba11b7d99aa016f64ff66b729fe6f80))
+* **ci:** the coverage suite runs half the host's cores at once (T4064) ([b11be41](https://github.com/teamrig/teamrig/commit/b11be4155cd337f3f0bff9233edaf626472a0f24))
+* **ci:** the local gate runs its checks below normal priority (T4064) ([ab1b088](https://github.com/teamrig/teamrig/commit/ab1b08841f69912c7aa19a2244cdb64d8d97b02d))
+* **queue:** a parked step writes only allow-listed variables to disk and runs with the dispatcher's env under them (T4093) ([7b45511](https://github.com/teamrig/teamrig/commit/7b455115e562097b894c7f716f5d57f1af7328a2))
+* **queue:** queue --detach parks its step for one dispatcher, so a waiting step holds a file, not a node process (T4093) ([df83852](https://github.com/teamrig/teamrig/commit/df83852e9753604844edeb1abdb2f2112476a4aa))
+* **queue:** the detached sweep starts a dispatcher for steps left parked with none running (T4093) ([9be3744](https://github.com/teamrig/teamrig/commit/9be3744bad502825f51ef5ffcb2332e31101a24b))
+* **ship:** run the typecheck and the coverage suite once per ship, in the gate (T4064) ([7af92d9](https://github.com/teamrig/teamrig/commit/7af92d93239ef45e5de0fdcc340e034cba3ded01))

@@ -5,7 +5,7 @@ import type { Env } from '../core/home.ts';
 import { parseObject } from '../core/jsonl.ts';
 import { UTF8_OUTPUT } from '../core/powershell.ts';
 import { sweepTree, windowsSweepHost, type SweepHost } from '../delivery/tree-kill.ts';
-import { nodeProgramRunner, type ProgramRunner } from '../github/credentials.ts';
+import { nodeProgramRunner, type ProgramRunner } from '../core/program-runner.ts';
 import { exitText, outcomeOfError } from './processes.ts';
 
 /** One running process as the system describes it. */
@@ -292,8 +292,9 @@ function argumentsOf(commandLine: string): string {
  * the shell through a second `env` that ends at once, so the hook shell's own starter is gone and no listing links it
  * to git. The stub has the same arguments under another program (the exec swapped `env` for `sh`), started no later
  * than `stopped` and at most `EXEC_STUB_MS` before, and is not in the line yet. Only one such process counts: two
- * (two hooks with one path, in two worktrees of a repo at once) or none leave the line where it stopped, as does an
- * unknown start (a `ps` listing, where starters stay linked) or no arguments.
+ * (two hooks run at once with one path as git passes it, such as a relative `.git/hooks/pre-commit` or
+ * `.githooks/pre-push` in any two repos or worktrees) or none leave the line where it stopped, as does an unknown start
+ * (a `ps` listing, where starters stay linked) or no arguments.
  */
 function execStubOf(stopped: ListedProcess, listed: readonly ListedProcess[], seen: ReadonlySet<number>): ListedProcess | undefined {
   const args = argumentsOf(stopped.info.commandLine);

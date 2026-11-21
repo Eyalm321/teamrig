@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { TEST_SYSTEMS, testSystems } from '../ci/change-kind.ts';
 import { parseProfiles, profileFor, readProfiles, repoSlugs, slugOf } from './repos.ts';
 import { DIST } from './ship-commits.ts';
 import { TEAMRIG_RELEASE_MANIFEST, TEAMRIG_VERSION_FILES } from './version-bump.ts';
@@ -9,7 +10,7 @@ const LOCAL = '"local":{"runner":"tools/ci/local.ts"}';
 
 test('reads each repo\'s main branch, gate and check lists, looked up without regard to case', () => {
   const profiles = parseProfiles(`{"Owner/Repo":{"main":"main","gate":"ci","checks":["a","b"]}}`);
-  assert.deepEqual(profileFor(profiles, 'owner/repo'), { slug: 'Owner/Repo', main: 'main', gate: 'ci', checks: ['a', 'b'], summary: null, local: { runner: null }, regenerated: [], flaky: [], aliases: [], mergeChecks: 'full' });
+  assert.deepEqual(profileFor(profiles, 'owner/repo'), { slug: 'Owner/Repo', main: 'main', gate: 'ci', checks: ['a', 'b'], summary: null, local: { runner: null }, regenerated: [], flaky: [], conditional: [], aliases: [], mergeChecks: 'full', pullSections: [], release: null, queue: false });
   const local = parseProfiles(`{"Owner/Local":{"main":"main","gate":"local","checks":[],${LOCAL}}}`);
   assert.deepEqual(profileFor(local, 'Owner/Local').local, { runner: 'tools/ci/local.ts' });
 });
@@ -27,6 +28,36 @@ test('refuses an entry with no main, a blank or non-text check, or a check liste
   assert.throws(() => parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a",""]}}'), /O\/R needs "main" and a "checks" list/);
   assert.throws(() => parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a",3]}}'), /O\/R needs "main" and a "checks" list/);
   assert.throws(() => parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a","a"]}}'), /O\/R lists a check twice/);
+});
+
+test('reads the sections a pull request note must hold, and refuses a list that is not distinct names', () => {
+  assert.deepEqual(profileFor(parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a"],"pullSections":["Reach"]}}'), 'O/R').pullSections, ['Reach']);
+  for (const sections of ['"Reach"', '[""]', '["Reach","Reach"]', '[3]']) {
+    assert.throws(() => parseProfiles(`{"O/R":{"main":"main","gate":"ci","checks":["a"],"pullSections":${sections}}}`), /O\/R "pullSections" needs a list of distinct section names/, sections);
+  }
+  assert.deepEqual(readProfiles().get('generala6/teamrig')?.pullSections, ['Reach', 'Risks']);
+});
+
+test('reads the release pull request\'s branch and changelog, none when not listed, and refuses a bad branch or a path outside the repo (T4645)', () => {
+  const release = (value: string): string => `{"O/R":{"main":"main","gate":"ci","checks":["a"],"release":${value}}}`;
+  assert.deepEqual(profileFor(parseProfiles(release('{"head":"release-please--main","changelog":"CHANGELOG.md"}')), 'O/R').release, { head: 'release-please--main', changelog: 'CHANGELOG.md' });
+  assert.equal(profileFor(parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a"]}}'), 'O/R').release, null);
+  for (const value of ['"x"', '{"head":"r"}', '{"changelog":"C.md"}', '{"head":"r b","changelog":"C.md"}', '{"head":"r","changelog":"/C.md"}', '{"head":"r","changelog":"../C.md"}', '{"head":"","changelog":"C.md"}']) {
+    assert.throws(() => parseProfiles(release(value)), /O\/R "release" needs a "head" branch name and a "changelog" path inside the repo/, value);
+  }
+});
+
+test('the shipped repos.json names teamrig\'s release-please pull request branch and its CHANGELOG (T4645)', () => {
+  // release-please names its branch release-please--branches--<main>--components--<component>.
+  const config = readFileSync(new URL('../../release-please-config.json', import.meta.url), 'utf8');
+  const component = /"component":\s*"([^"]+)"/.exec(config)?.[1];
+  const changelog = /"changelog-path":\s*"([^"]+)"/.exec(config)?.[1];
+  assert.deepEqual(readProfiles().get('teamrig/teamrig')?.release, { head: `release-please--branches--main--components--${component ?? ''}`, changelog });
+});
+
+test('the shipped repos.json names teamrig-pane\'s release-please branch, from its component teamrig-pane, and its CHANGELOG (T4821)', () => {
+  // The pane's release-please-config.json lives in its own repo: component teamrig-pane, changelog-path CHANGELOG.md.
+  assert.deepEqual(readProfiles().get('teamrig/teamrig-pane')?.release, { head: 'release-please--branches--main--components--teamrig-pane', changelog: 'CHANGELOG.md' });
 });
 
 test('refuses a missing or unknown gate', () => {
@@ -69,9 +100,27 @@ test('reads what a merge checks locally, full when not listed, and refuses anoth
   assert.throws(() => parseProfiles(entry('local', '"changed"')), /O\/R "mergeChecks": "changed" needs the "ci" gate/);
 });
 
-test('the shipped repos.json keeps every repo\'s merge on the whole local suite until its main requires CI (T3414)', () => {
+test('reads whether main merges through GitHub\'s merge queue, false when not listed, and refuses another value or true without the ci gate (T3386)', () => {
+  const entry = (gate: string, queue: string): string => `{"O/R":{"main":"main","gate":"${gate}","checks":["a"],${LOCAL},"queue":${queue}}}`;
+  assert.equal(profileFor(parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a"]}}'), 'O/R').queue, false);
+  assert.equal(profileFor(parseProfiles(entry('ci', 'false')), 'O/R').queue, false);
+  assert.equal(profileFor(parseProfiles(entry('ci', 'true')), 'O/R').queue, true);
+  for (const value of ['"true"', '1', 'null', '[true]']) {
+    assert.throws(() => parseProfiles(entry('ci', value)), /O\/R "queue" is true \(main merges through GitHub's merge queue\) or false/, value);
+  }
+  assert.throws(() => parseProfiles(entry('local', 'true')), /O\/R "queue": true needs the "ci" gate/);
+});
+
+test('the shipped repos.json merges no repo through the merge queue until main\'s ruleset turns the queue on (T3386)', () => {
   const profiles = readProfiles();
-  for (const slug of repoSlugs(profiles)) assert.equal(profileFor(profiles, slug).mergeChecks, 'full', slug);
+  for (const slug of repoSlugs(profiles)) assert.equal(profileFor(profiles, slug).queue, false, slug);
+});
+
+test('the shipped repos.json keeps every repo\'s merge on the whole local suite until its main requires CI (T3414); teamrig\'s does, so its merge runs the changed checks (#1464)', () => {
+  const profiles = readProfiles();
+  // This repository's main requires CI (.github/rulesets/main.json), so a second full local run at merge only repeats it.
+  assert.ok(rulesetRequiredChecks().length > 0, 'teamrig\'s main requires CI');
+  for (const slug of repoSlugs(profiles)) assert.equal(profileFor(profiles, slug).mergeChecks, slug === 'GeneralA6/teamrig' ? 'changed' : 'full', slug);
 });
 
 test('the shipped repos.json names each repo\'s every-check-passed job its summary', () => {
@@ -82,7 +131,7 @@ test('the shipped repos.json names each repo\'s every-check-passed job its summa
 test('the shipped repos.json calls regenerated exactly the dist, the version files and the release manifest a ship writes again', () => {
   const profiles = readProfiles();
   assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig').regenerated, [`${DIST}/`, ...[...TEAMRIG_VERSION_FILES, TEAMRIG_RELEASE_MANIFEST].map(file => file.path)]);
-  assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig-pane').regenerated, ['plugins/teamrig-pane/.claude-plugin/plugin.json']);
+  assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig-pane').regenerated, ['plugins/teamrig-pane/.claude-plugin/plugin.json', TEAMRIG_RELEASE_MANIFEST.path]);
 });
 
 /** The status checks main's ruleset requires before GitHub accepts a merge. */
@@ -127,16 +176,21 @@ test('the shipped repos.json still lists every job a teamrig pull request runs, 
   for (const job of jobs) assert.ok(teamrig.checks.includes(job), `ci.yml job "${job}" is missing from repos.json, so a CI merge would not wait for it`);
   const tests = teamrig.checks.filter(check => check.startsWith('test ('));
   assert.deepEqual(tests, ['ubuntu-latest', 'windows-latest', 'macos-latest'].map(os => `test (${os}, node 22)`));
-  const matrix = (key: string): string[] => (new RegExp(`^ {8}${key}: \\[([^\\]]+)\\]$`, 'm').exec(workflow)?.[1] ?? '').split(',').map(item => item.trim());
-  const run = matrix('os').flatMap(os => matrix('node').map(node => `test (${os}, node ${node})`));
-  assert.deepEqual(tests, run, 'repos.json must wait for exactly the test runs ci.yml\'s matrix makes');
+  const nodes = (/^ {8}node: \[([^\]]+)\]$/m.exec(workflow)?.[1] ?? '').split(',').map(item => item.trim());
+  const leg = (os: string): string[] => nodes.map(node => `test (${os}, node ${node})`);
+  assert.match(workflow, /^ {8}os: \$\{\{ fromJSON\(needs\.changes\.outputs\.systems\) \}\}$/m, 'the matrix runs the systems change-kind-cli.ts names');
+  assert.deepEqual(tests, TEST_SYSTEMS.flatMap(leg), 'repos.json must wait for exactly the test runs ci.yml\'s matrix makes for a code change');
+  const leftOut = TEST_SYSTEMS.filter(os => !testSystems('docs').includes(os)).flatMap(leg);
+  assert.deepEqual(teamrig.conditional, leftOut, 'a docs run leaves these legs out, so a merge must not wait for them once the summary passed');
   assert.equal(teamrig.checks.length, jobs.length + tests.length);
 });
 
-test('teamrig-pane waits for its plugin version gate; teamrig has none, as its release pull request raises the version', () => {
+test('neither repo waits for a plugin version gate, as each release pull request raises the version; the pane waits for its commit subject gate (T4678)', () => {
   const profiles = readProfiles();
-  assert.ok(profileFor(profiles, 'GeneralA6/teamrig-pane').checks.includes('plugin version gate'));
-  assert.ok(!profileFor(profiles, 'GeneralA6/teamrig').checks.includes('plugin version gate'));
+  for (const slug of ['GeneralA6/teamrig', 'GeneralA6/teamrig-pane']) {
+    assert.ok(!profileFor(profiles, slug).checks.includes('plugin version gate'), slug);
+  }
+  assert.ok(profileFor(profiles, 'GeneralA6/teamrig-pane').checks.includes('commit subject gate'));
 });
 
 test('both repos keep their own local CI runner, which a ship runs before it pushes', () => {
@@ -160,6 +214,23 @@ test('the shipped repos.json re-runs only teamrig\'s test legs once as flaky (T2
   const profiles = readProfiles();
   assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig').flaky, ['test (ubuntu-latest, node 22)', 'test (windows-latest, node 22)', 'test (macos-latest, node 22)']);
   assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig-pane').flaky, []);
+});
+
+test('reads the conditional checks, and refuses them without a summary, or one not among the checks, the summary, a blank or a repeat (T4617)', () => {
+  const entry = (conditional: string, summary = '"all"'): string => `{"O/R":{"main":"main","gate":"ci","checks":["a","t","all"],"summary":${summary},"conditional":${conditional}}}`;
+  assert.deepEqual(profileFor(parseProfiles(entry('["t"]')), 'O/R').conditional, ['t']);
+  assert.deepEqual(profileFor(parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a"]}}'), 'O/R').conditional, []);
+  assert.throws(() => parseProfiles('{"O/R":{"main":"main","gate":"ci","checks":["a","t"],"conditional":["t"]}}'), /O\/R "conditional" needs a "summary"/);
+  for (const conditional of ['["b"]', '["all"]', '[""]', '"t"']) {
+    assert.throws(() => parseProfiles(entry(conditional)), /O\/R "conditional" needs a list of its "checks", the summary apart/, conditional);
+  }
+  assert.throws(() => parseProfiles(entry('["t","t"]')), /O\/R lists a conditional check twice/);
+});
+
+test('the shipped repos.json leaves teamrig\'s windows and macOS test legs conditional, which a docs-only run does not make (T4617)', () => {
+  const profiles = readProfiles();
+  assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig').conditional, ['test (windows-latest, node 22)', 'test (macos-latest, node 22)']);
+  assert.deepEqual(profileFor(profiles, 'GeneralA6/teamrig-pane').conditional, []);
 });
 
 test('finds a repo under each of its aliases, any case, as the same profile, and lists it once by its own name (T3275)', () => {

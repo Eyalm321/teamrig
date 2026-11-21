@@ -21,20 +21,23 @@ describe('ship cli', () => {
     assert.equal(result.stderr, `${SHIP_USAGE}\n`);
   });
 
-  it('hands check, merge and leftovers to their own commands', () => {
+  it('hands check, merge, pr and leftovers to their own commands', () => {
     const check = repo.run(CLI, ['check']);
     assert.equal(check.status, 1, check.stdout);
     assert.equal(check.stderr, 'usage: ship.ts check <repo dir>\n');
     const merge = repo.run(CLI, ['merge']);
     assert.equal(merge.status, 1, merge.stdout);
-    assert.match(merge.stderr, /^usage: ship\.ts merge <repo dir> \[--head <branch>\]/);
+    assert.match(merge.stderr, /^usage: ship\.ts merge <repo dir> \[--head <branch> \| --release <task>\]/);
+    const pr = repo.run(CLI, ['pr']);
+    assert.equal(pr.status, 1, pr.stdout);
+    assert.equal(pr.stderr, 'usage: ship.ts pr <repo dir> --head <branch> --approved <sha> [--note-file <path>]\n');
     const leftovers = repo.run(CLI, ['leftovers']);
     assert.equal(leftovers.status, 1, leftovers.stdout);
     assert.equal(leftovers.stderr, 'usage: ship.ts leftovers <repo dir>\n');
   });
 
-  it('refuses a plan with no chunks before it touches the repo', () => {
-    const plan = repo.write('plan.json', '{ "chunks": [] }');
+  it('refuses a plan with no chunk list before it touches the repo', () => {
+    const plan = repo.write('plan.json', '{ "chunks": {} }');
     const result = repo.run(CLI, [repo.dir, plan]);
     assert.equal(result.status, 1, result.stdout);
     assert.equal(result.stderr, `${plan}: expected { "chunks": [ ... ] }\n`);

@@ -16,12 +16,12 @@ import {
   type ProbeRound,
   type WatchLease,
 } from '../../github/watch.ts';
-import type { WatchMarks } from '../../issues/host.ts';
+import { GITHUB_REPOS_HOST, type WatchMarks } from '../../issues/host.ts';
 import { runsClaude } from '../../open/session-processes.ts';
 import { SessionRecordStore } from '../../sessions/record.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
 import { fileLockOf } from '../file-locks.ts';
-import { hostOf } from '../issue-hosts.ts';
+import { hostsOf } from '../issue-hosts.ts';
 import { openTeamKit, requireConfig, type Kit } from '../kit.ts';
 import { EXIT, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { GITHUB_OFF, githubOff } from './issue-sync-auto.ts';
@@ -29,7 +29,7 @@ import { issueSync } from './issue-sync.ts';
 
 /**
  * `issue watch`: the team's one watch on its GitHub repositories, started hidden by the hooks (`ensureWatch`). Every
- * `github.probeSeconds` it asks GitHub whether each repository changed (IssueHost.watch: conditional reads, free when
+ * `github.probeSeconds` it asks GitHub whether each repository changed (IssueEvents.watch: conditional reads, free when
  * nothing changed) and runs `issue sync --auto` in this process only when one did (github/watch.ts readDue). It holds
  * a lease file with its pid and a beat, so one runs per team; it stops when the lease is another's, when the config
  * lists no repository or sets 0 seconds, under TEAMRIG_GITHUB=off, once no team session ran for 10 minutes, and once
@@ -39,7 +39,7 @@ import { issueSync } from './issue-sync.ts';
 const HOUR_MS = 3_600_000;
 
 /** The sync a change calls for, as the Stop hook used to start it: every repository, written, with its reports. */
-const AUTO_SYNC: ParsedArgs = { command: 'issue sync', positionals: [], flags: new Map(), switches: new Set(['auto']), rest: [], help: false };
+const AUTO_SYNC: ParsedArgs = { command: 'issue sync', positionals: [], flags: new Map(), switches: new Set(['auto']), rest: [], help: false, common: new Map() };
 
 /** Why no watch runs for this config and machine, or undefined when one should. */
 export function watchOffReason(config: KitConfig, env: CliRuntime['env']): string | undefined {
@@ -212,7 +212,8 @@ async function probeRound(
   config: KitConfig,
   marks: ReadonlyMap<string, WatchMarks>,
 ): Promise<{ readonly round: ProbeRound; readonly pending: ReadonlyMap<string, WatchMarks> }> {
-  const host = hostOf('github', runtime, new SecretScanner(config.register.secretPatterns), config.github.stamp);
+  // The probe goes over github.repos, GitHub's list, and asks its tracker.
+  const host = (await hostsOf(GITHUB_REPOS_HOST, runtime, new SecretScanner(config.register.secretPatterns), config.github.stamp)).tracker;
   const pending = new Map<string, WatchMarks>();
   let failed = false;
   for (const repo of config.github.repos) {

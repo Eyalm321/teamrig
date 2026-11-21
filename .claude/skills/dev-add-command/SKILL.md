@@ -7,7 +7,10 @@ description: Add a teamrig CLI command, or a flag to one, with its help text, gu
 
 A command is for all users (CONTRIBUTING.md, Where a change lives): build it for any team, with what differs per team
 read from the team config, never one team's names or paths. A command is an entry in `COMMANDS` in `src/cli/run.ts`. Three docs are held to the CLI by specs, so a command or
-flag missing from any of them fails `npm test`.
+flag missing from any of them fails `npm test`. Hold it to
+[What a change is held to](../../../CONTRIBUTING.md#what-a-change-is-held-to): reuse the helpers its group's file
+already has, keep the handler to one job behind the ports the fakes in `src/testing/` stand in for, and name its
+risks in the pull request.
 
 1. Write the handler in `src/cli/commands/` (a new file, or its group's file such as `inbox.ts`), with its spec
    beside it, using the fakes in `src/testing/` for time, disks and git.
@@ -23,8 +26,8 @@ flag missing from any of them fails `npm test`.
 6. Add its row to `docs/features.md` (held by `tools/docs/features-doc.test.ts`).
 7. Run `npm run docs:images`: the commands picture is drawn by running the CLI, and `npm run check` fails while it is
    stale.
-8. Land it with `dev-ship-change` as a `feat` commit: the change is under `src/`, so it rebuilds the dist, and the
-   release pull request raises the version.
+8. Land it with `dev-ship-change` as a `feat` commit: the release pull request raises the version, and the release
+   workflow builds the dist.
 
 ## Traps
 

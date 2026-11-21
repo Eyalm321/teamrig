@@ -238,11 +238,16 @@ const COMMANDS: Readonly<Record<string, CommandSpec>> = {
   'issue sync': { effect: 'write', flags: ['repo'], switches: ['yes', 'auto', 'push'], load: async () => (await issueSyncCommands()).issueSync },
   'issue watch': { effect: 'internal', flags: [], load: async () => (await issueWatchCommands()).issueWatch },
   'issue migrate': { effect: 'write', flags: ['session', 'out'], switches: ['yes'], load: async () => (await issueMigrateCommands()).issueMigrate },
-  'issue comment': { effect: 'write', flags: ['session', 'body'], load: async () => (await issueCommands()).issueComment },
+  'issue reply': {
+    effect: 'write',
+    flags: ['session', 'body-file', 'status', 'pr', 'followup', 'followup-body-file', 'assign', 'note', 'evidence', 'skill', 'followups', 'waits', 'proof'],
+    load: async () => (await issueCommands()).issueReply,
+  },
   'issue edit': { effect: 'write', flags: ['session', 'body-file'], load: async () => (await issueCommands()).issueEdit },
   'issue close': { effect: 'write', flags: ['session', 'comment', 'reason', 'duplicate-of'], load: async () => (await issueCommands()).issueClose },
   'issue label': { effect: 'write', flags: ['session', 'add', 'remove'], load: async () => (await issueCommands()).issueLabel },
   'issue similar': { effect: 'read', flags: [], load: async () => (await issueCommands()).issueSimilar },
+  'issue assign': { effect: 'write', flags: ['session', 'add', 'remove'], load: async () => (await issueCommands()).issueAssign },
   'pr conflicts': { effect: 'write', flags: ['base'], load: async () => (await prCommands()).prConflicts },
   'issue links': { effect: 'write', flags: ['repo'], switches: ['yes'], load: async () => (await issueLinksCommands()).issueLinks },
   follow: { effect: 'write', flags: ['session'], switches: ['list'], load: async () => (await followCommands()).follow },
@@ -374,7 +379,7 @@ export const COMMAND_REST: CommandRest = new Set(Object.entries(COMMANDS).flatMa
 /** The table a line is read with, and each command's effect: what `/teamrig` plans a line from (src/slash/plan.ts). */
 export const COMMAND_TABLE: CommandTable = { flags: COMMAND_FLAGS, switches: COMMAND_SWITCHES, renamed: RENAMED, rest: COMMAND_REST, effects: COMMAND_EFFECTS };
 
-export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session})
+export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|name>, else $${ENV.session}; every command takes --session <id|name> and --team <team>)
   team create <team> --sessions <id,id> [--lead <id>] [--project <dir>] [--parent <team>] [--dry-run]
       writes the team config, ties the project folder to the team (the lead defaults to lead) and
       starts a root team's lead on its first task, setting the team up; --parent hangs it under
@@ -540,7 +545,7 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       again, alone or behind a task or a time, with a note naming no new head; any other set is refused,
       since a merge on it would be: record progress with update --note, or give the approval up for a
       new ask with --drop-approval
-      verifying needs --waits for when its proof runs: a time, or a task in progress or verifying (the
+      verifying needs --waits for when its proof runs: a time, or a task in progress or verifying, or an open one of your own (the
       owner's approval may stand beside one); set verifying again without --waits keeps them, --waits none clears them
       a wait on the owner's decision or approval needs a card the owner decides from alone
       (register.requireDecisionCard): --question "<what is decided>" --options "<a, its numbers> | <b>"
@@ -663,7 +668,10 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       --wake now: also wakes each receiver idle at its prompt within about 3 minutes and says what
       that costs; a group only from a leader, another team only from a team lead: a team below its
       own, any team's lead, or a session its config names in roles; a receiver teamrig closed has
-      its reopen started at once when the host has room (REOPENS), else CLOSED says why
+      its reopen started at once when the host has room (REOPENS), else CLOSED says why; a line
+      with neither flag that names unfinished p0 (or more urgent) work by id wakes as --wake now,
+      or posts with no wake where that gate refuses it, and a NOTE says which; to many receivers it
+      wakes only the work's owner and the owners of work it waits on, the rest read it at their prompt
       --wake-by <time>: wakes each receiver at that time instead, only if it has not seen the line by
       then and its tab is idle; the same gate
       --from host:<job>: a line from a host scheduled job, which runs as no session: no --session,
@@ -715,7 +723,7 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
   demote <id|name> [--yes]     (its own leader) takes a sub-lead's members back; without --yes it shows it
   roles grant <role> --holder <id|name|team> [--commands <a,b>] [--yes]
       (the owner) lets the holder run a service role's teamrig commands past every permission check, from its
-      own tab only: names from teamrig's table (issue close, issue comment, queue ship, queue merge); team for
+      own tab only: names from teamrig's table (issue close, issue migrate, queue ship, queue merge); team for
       every session only where each command checks its caller; teamrig's guard asks before a session's call;
       without --yes it writes nothing
   roles revoke <role> [--holder <id|name>] [--yes]   (the owner) takes the role off one holder, or off the
@@ -740,7 +748,7 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       changes, writes nothing; --auto, which issue watch runs when GitHub changed, writes and
       tells each owner its new tasks, and the lead when repositories start or stop failing and when
       it leaves out an outsider's issue not left out before; with github.statusPush on, --auto then
-      sends the status push's labels and assignees too (a close it plans is held for --push --yes,
+      sends the status push's labels, assignees, fields and types too (a close it plans is held for --push --yes,
       printed HELD), and assigns an outside person who claims an open issue by a /take comment,
       taking the assignee off after 7 days with no linked pull request,
       its writes lowered so an hour of runs sends at most 250
@@ -766,22 +774,32 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       other status: label taken off; done closes it as completed, dropped as not planned; never
       reopens an issue a person closed, and names it; an open issue of a scheduled task (started or
       with a due date), not a design issue, no one is assigned to is assigned to the login
-      github.owners maps to its task's session, else the repository's owner; at most 40 writes a run; without --yes it writes nothing;
+      github.owners maps to its task's session, else the login the sync runs as, never the repository's owner;
+      a login the repository may not assign takes no write; at most 40 writes a run; without --yes it writes nothing;
       --yes sends them, a repository stopping at its first failed write; a status label the repository
-      lacks is made first (MADE)
+      lacks is made first (MADE); after the labels, each held open issue's github.fields (priority,
+      start and target day, score) and type are set where they differ, on a repository that has them
   issue migrate <file> [--out <preview.md>] [--yes]   moves the team's tasks to issues of github.repos
       from a JSON-lines file: per task {id, decision "issue", repo, type bug|task, priority p1-p3,
       title, body} with its public wording, or {id, decision "local", reason}; without --yes writes
       nothing but the --out preview of every issue in full; --yes opens each issue through gh and
       sets the task's ref to it, so issue sync adds no second task; stops at the first failure, and a
       rerun skips each task already holding its issue
-  issue comment <owner/name#n> --body <text>   posts one comment on an issue or pull request of the
-      team's repositories (github.repos; GitHub is the only host so far), with the token saved for the
-      owner, never the gh login; refuses an empty body, a secret shape, private data (a home folder
+  issue reply <owner/name#n> --body-file <path> [--status <status>] [--pr <n>] [--followup <title>
+      [--followup-body-file <path>]] [--assign <login,...>]   a maintainer's reply that takes the
+      thread's state with its words, on an issue or pull request of the team's repositories
+      (github.repos; GitHub is the only host so far), with the token saved for the owner, never the gh
+      login: reads first and writes nothing on a refusal, then --status sets the task holding the issue
+      (teamrig set, with --note, --evidence, --skill, --followups, --waits, --proof; status words as the
+      label shows them, such as 'in review', also go), and it sends the issue's status label and
+      assignee from the register, --assign, the --pr link (a closing line in its body, the issue's
+      labels on it), the --followup issue (named in the comment), then the comment last; the first
+      failure stops it, saying what was done, the comment not posted; a pull request needs labels and
+      takes no --status or --pr; refuses an empty text, a secret shape, private data (a home folder
       path, an e-mail address) or a task id in it; no saved token, or one that cannot be read, stops it
   issue edit <owner/name#n> --body-file <path>   replaces the body (the description) of one issue or
       pull request of the team's repositories with the file's text, with the same access and checks as
-      issue comment; the title, state, labels and assignees stay; the host keeps the old body in its
+      issue reply; the title, state, labels and assignees stay; the host keeps the old body in its
       edit history
   issue close <owner/name#n> [--comment <text>] [--reason completed|not-planned|duplicate]
       [--duplicate-of <owner/name#n>]   closes one issue or pull request of the team's repositories,
@@ -791,11 +809,15 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
   issue label <owner/name#n> [--add <label,...>] [--remove <label,...>]   adds labels to and takes
       labels off one issue or pull request of the team's repositories, with the same access; each
       label to add must already be one of the repository's, but design (talk only, not work to take
-      until agreed) and a label the repository's .github/labels.json defines, which it makes first
-      (MADE); the first failure stops it
+      until agreed), a label the repository's .github/labels.json defines and one the team's
+      github.areaOwners names, which it makes first (MADE); the first failure stops it
   issue similar <owner/name#n>   the issues the task list mirrors that may be duplicates of this one,
       best first: at most 3 at or above github.similarThreshold by TF-IDF over their titles and bodies,
       with no model and no GitHub call; reads the task list only, so issue sync must have added the issue
+  issue assign <owner/name#n> [--add <login,...>] [--remove <login,...>]   gives one issue or pull
+      request of the team's repositories to its takers, with the same access: each login to add is
+      read as one the host may assign to that item (access to the repository, or a part in the item,
+      such as a comment asking to take it), at most 3 logins in all; refused on a design issue
   pr conflicts <owner/name#n> [--base <branch>]   in a clone of that repository, fetches the pull
       request's head and prints the files it conflicts on against origin's newest base (its default
       branch unless --base) and the rebase it needs; changes no local branch or file of the clone and
@@ -928,9 +950,10 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       (a build, a test run, a database script) in its turn under the host lock, so the host runs only what its memory allows, and at
       below-normal CPU priority (nice 10 on POSIX), which every process it starts inherits, so your
       terminal and apps win the CPU: waits in line for the lock, kills the step and every process it started after
-      delivery.queue.maxRunMinutes (--max-minutes) and records its start and end in the delivery
+      delivery.queue.maxRunMinutes (--max-minutes; the time its share is set aside by teamrig step-away does
+      not count) and records its start and end in the delivery
       ledger, with its --kind (build, test, lint, push, merge, deploy, other or ship; default read from the
-      command; a ship, merge or deploy holds the host's one ship slot: a second one waits as shipSlot while other steps
+      command; a ship, merge or deploy holds its repository's ship slot: a second one there waits as shipSlot while other steps
       pass it) and --task (default the first task id in --what, else for a ship tool's step the task its worktree's branch
       names); once the shell that started it ends, it kills a running step (exit 129); a
       waiting one goes on as a detached run that keeps its place in line while the tab's Claude Code runs (not a git hook's
@@ -944,9 +967,10 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       delivery.queue.memoryFloorMb plus the MB held for it, for the small steps running and for the tabs
       still loading (at most half the host's RAM), and the commit charge under open.headroom.commitMaxPct
       with its MB and those tabs' counted. A step
-      holds the need its latest 20 runs under its session and --what show (their most held and a
-      quarter, or their median host drop, whichever is more; with no such run, its session's runs of
-      the same --kind and size, never other), or its --memory-mb when more; at least
+      holds the need its latest 20 runs under its session and --what (commit ids, re-run aside) show
+      (their most held, one outlier aside, and a quarter, or their median host drop, whichever is
+      more; with no such run, its session's runs of the same --kind and size, never other), or
+      its --memory-mb when more; at least
       delivery.queue.heavyReserveMb without --small, else with neither delivery.queue.smallReserveMb.
       The wait line says where a learned or declared need came from. --small (a spec run, a lint):
       shares the host with other small steps, waiting in a line of its own, never behind a heavy step,
@@ -1148,6 +1172,11 @@ export async function runCli(given: readonly string[], runtime: CliRuntime): Pro
       throw new UsageError(`unknown command "${args.command}"`);
     }
     refuseSettingsWrite(args.command, args.switches, runtime);
+    if (args.common.size > 0) {
+      // Loaded only then, as it reads the team's config: a hook passes neither flag and loads only its own code.
+      const common = await import('./common-flags.ts');
+      await common.checkCommonFlags(args, runtime);
+    }
     if (spec.effect === 'write' && spec.bindsTab !== true) {
       // A write runs only as the tab's own session, whatever --session says (T3082); a tab's binding has its own rule.
       await (await tabSessionCommands()).refuseAnotherTabSession(args, runtime);

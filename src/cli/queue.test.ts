@@ -186,6 +186,21 @@ describe('teamrig queue', () => {
     assert.equal(request?.timeoutMs, 45 * MINUTE);
   });
 
+  it('lets the run read the time its step spent with its share set aside, which its time limit does not count (T4218)', async () => {
+    const { kit, steps } = harness();
+    let away: number | undefined;
+    steps.ends(0, 5 * MINUTE).whileRunning(async (request) => {
+      const [name] = await kit.files.list(SHARED);
+      const path = `${SHARED}/${name}`;
+      const held: unknown = JSON.parse(kit.files.get(path) ?? '{}');
+      assert.ok(isRecord(held), 'the build shares the host');
+      await kit.files.write(path, JSON.stringify({ ...held, awayMs: 7 * MINUTE }));
+      away = await request.awayMs?.();
+    });
+    await kit.run(BUILD, { steps });
+    assert.equal(away, 7 * MINUTE);
+  });
+
   it('starts the command without the credential variables delivery.passEnv does not name', async () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { passEnv: ['NPM_TOKEN'] } });
     const env = { PROBE: 'yes', GH_TOKEN: 'not-a-real-credential', NPM_TOKEN: 'not-a-real-credential' };
@@ -742,7 +757,7 @@ describe('teamrig queue --small', () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     await kit.files.append(`${SHARED}/other.json`, sharedBy());
     const result = await kit.run(SPECS, { steps, memory: new FakeHostMemory(6000), sessionProcesses: otherRuns() });
-    const held = '1 small step: po (heavy: specs) since 2030-01-08 09:50 UTC; host memory: 6000 MB free, 2048 MB held for it, 6144 MB needed (4096 floor + 2048 for this step)';
+    const held = '1 small step: po (heavy: specs) since 2030-01-08 09:50 UTC; host memory: 6000 MB free, 2048 MB held for it, 6144 MB needed (4096 kept free for the host + 2048 for this step)';
     assert.deepEqual(result, { code: 2, stdout: [`2030-01-08 10:00:00 UTC waiting to share the host: ${held}`, `REFUSED host memory still short: ${held}`], stderr: [] });
     assert.deepEqual([ledgerOf(kit), kit.files.get(`${SHARED}/id-1.json`)], [[memoryRefused(SPECS_STEP, 6000, 'waiting to share the host', held)], undefined]);
   });
@@ -750,7 +765,7 @@ describe('teamrig queue --small', () => {
   it('keeps a lone small step waiting while free memory is under the floor plus its own MB, then refuses (T2192)', async () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     const result = await kit.run(SPECS, { steps, memory: new FakeHostMemory(6000) });
-    const short = 'host memory: 6000 MB free, 6144 MB needed (4096 floor + 2048 for this step)';
+    const short = 'host memory: 6000 MB free, 6144 MB needed (4096 kept free for the host + 2048 for this step)';
     assert.deepEqual(result, { code: 2, stdout: [`2030-01-08 10:00:00 UTC waiting to share the host: ${short}`, `REFUSED host memory still short: ${short}`], stderr: [] });
     assert.deepEqual([steps.ran, ledgerOf(kit), await kit.files.list(SHARED)], [[], [memoryRefused(SPECS_STEP, 6000, 'waiting to share the host', short)], []]);
   });
@@ -758,7 +773,7 @@ describe('teamrig queue --small', () => {
   it('keeps a heavy step waiting while free memory is under the floor plus delivery.queue.heavyReserveMb, then refuses (T2192)', async () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     const result = await kit.run(BUILD, { steps, memory: new FakeHostMemory(5000) });
-    const short = 'host memory: 5000 MB free, 6144 MB needed (4096 floor + 2048 for this step)';
+    const short = 'host memory: 5000 MB free, 6144 MB needed (4096 kept free for the host + 2048 for this step)';
     assert.deepEqual(result, { code: 2, stdout: [`2030-01-08 10:00:00 UTC waiting for the host lock: ${short}`, `REFUSED host memory still short: ${short}`], stderr: [] });
     assert.deepEqual([steps.ran, ledgerOf(kit), kit.files.get(LOCK)], [[], [memoryRefused(BUILD_STEP, 5000, 'waiting for the host lock', short)], undefined]);
   });
@@ -766,7 +781,7 @@ describe('teamrig queue --small', () => {
   it('names the programs holding the most memory when it refuses after its wait on host memory, printed and recorded (T2209)', async () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     const result = await kit.run(BUILD, { steps, memory: new FakeHostMemory(5000).holds(BUSY_HOLDERS) });
-    const short = 'host memory: 5000 MB free, 6144 MB needed (4096 floor + 2048 for this step)';
+    const short = 'host memory: 5000 MB free, 6144 MB needed (4096 kept free for the host + 2048 for this step)';
     const reason = `host memory still short: ${short}; ${BUSY_HOLDERS_TEXT}`;
     assert.deepEqual(result.stdout, [`2030-01-08 10:00:00 UTC waiting for the host lock: ${short}`, `REFUSED ${reason}`]);
     assert.deepEqual(ledgerOf(kit), [{ ...memoryRefused(BUILD_STEP, 5000, 'waiting for the host lock', short), reason }]);
@@ -786,7 +801,7 @@ describe('teamrig queue --small', () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     await kit.files.append(LEDGER, `${[ranBefore('alpha', 'build api', 2000), ranBefore('alpha', 'build api', 6000), ranBefore('bravo', 'build api', 9000)].join('\n')}\n`);
     const result = await kit.run(BUILD, { steps, memory: new FakeHostMemory(10_000) });
-    const short = 'host memory: 10000 MB free, 11596 MB needed (4096 floor + 7500 for this step, learned from 2 runs)';
+    const short = 'host memory: 10000 MB free, 11596 MB needed (4096 kept free for the host + 7500 for this step, learned from 2 runs)';
     assert.deepEqual(result, { code: 2, stdout: [`2030-01-08 10:00:00 UTC waiting for the host lock: ${short}`, `REFUSED host memory still short: ${short}`], stderr: [] });
   });
 
@@ -794,7 +809,7 @@ describe('teamrig queue --small', () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     await kit.files.append(LEDGER, `${[ranBefore('alpha', 'build api', 1000, { startFreeMb: 12_000, lowFreeMb: 4000 }), ranBefore('alpha', 'build api', 1200, { startFreeMb: 12_000, lowFreeMb: 6000 })].join('\n')}\n`);
     const result = await kit.run(BUILD, { steps, memory: new FakeHostMemory(10_000) });
-    const short = 'host memory: 10000 MB free, 11096 MB needed (4096 floor + 7000 for this step, learned from 2 runs)';
+    const short = 'host memory: 10000 MB free, 11096 MB needed (4096 kept free for the host + 7000 for this step, learned from 2 runs)';
     assert.deepEqual(result.stdout, [`2030-01-08 10:00:00 UTC waiting for the host lock: ${short}`, `REFUSED host memory still short: ${short}`]);
   });
 
@@ -802,7 +817,7 @@ describe('teamrig queue --small', () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     await kit.files.append(LEDGER, `${ranBefore('alpha', 'T8 build', 6000, { kind: 'build' })}\n`);
     const result = await kit.run(BUILD, { steps, memory: new FakeHostMemory(10_000) });
-    const short = 'host memory: 10000 MB free, 11596 MB needed (4096 floor + 7500 for this step, learned from 1 build run)';
+    const short = 'host memory: 10000 MB free, 11596 MB needed (4096 kept free for the host + 7500 for this step, learned from 1 build run)';
     assert.deepEqual(result.stdout, [`2030-01-08 10:00:00 UTC waiting for the host lock: ${short}`, `REFUSED host memory still short: ${short}`]);
   });
 
@@ -810,7 +825,7 @@ describe('teamrig queue --small', () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     const declared = ['queue', '--session', 'alpha', '--what', 'build api', '--memory-mb', '9000', '--', 'npm', 'run', 'build'];
     const result = await kit.run(declared, { steps, memory: new FakeHostMemory(10_000) });
-    const short = 'host memory: 10000 MB free, 13096 MB needed (4096 floor + 9000 for this step, declared with --memory-mb)';
+    const short = 'host memory: 10000 MB free, 13096 MB needed (4096 kept free for the host + 9000 for this step, declared with --memory-mb)';
     assert.deepEqual(result, { code: 2, stdout: [`2030-01-08 10:00:00 UTC waiting for the host lock: ${short}`, `REFUSED host memory still short: ${short}`], stderr: [] });
     assert.deepEqual(steps.ran, []);
   });
@@ -819,7 +834,7 @@ describe('teamrig queue --small', () => {
     const { kit, steps } = harness({ ...TEAM, delivery: { queue: { waitMinutes: 1 }, wait: { pollSeconds: 30 } } });
     await kit.files.append(LEDGER, `${ranBefore('alpha', 'build api', 1200)}\n`);
     const result = await kit.run(BUILD, { steps, memory: new FakeHostMemory(5000) });
-    const short = 'host memory: 5000 MB free, 6144 MB needed (4096 floor + 2048 for this step)';
+    const short = 'host memory: 5000 MB free, 6144 MB needed (4096 kept free for the host + 2048 for this step)';
     assert.deepEqual(result.stdout, [`2030-01-08 10:00:00 UTC waiting for the host lock: ${short}`, `REFUSED host memory still short: ${short}`]);
   });
 
@@ -1365,6 +1380,7 @@ describe("teamrig queue runs a configured ship tool only from main's current cod
     const sleep = async (ms: number): Promise<void> => {
       git.heads.set('/repo/ship', 'next');
       git.tracking.set('origin/main', 'next');
+      git.origin.set('main', 'next');
       await kit.clock.sleep(ms);
     };
     const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
@@ -1411,7 +1427,7 @@ describe("teamrig queue refuses a waiting ship only when the code its tool runs 
    */
   function movedTwice(kit: CliHarness, changed: readonly string[], to = 'b1'): { git: FakeMergeGit; sleep: (ms: number) => Promise<void> } {
     const git = shipGit();
-    for (const commit of ['base', to]) {
+    for (const commit of ['base', to, 'b2']) {
       git.files.set(`${commit}:tools/ship/ship.ts`, "import { profiles } from './repos.ts';\nimport { teamHome } from '../../src/core/home.ts';\n");
       git.files.set(`${commit}:tools/ship/ship.roots.json`, '{"roots": ["src/cli/main.ts"]}');
       git.files.set(`${commit}:tools/ship/repos.ts`, "import { join } from 'node:path';\nexport const PROFILES_PATH = new URL('./repos.json', import.meta.url);\n");
@@ -1425,6 +1441,7 @@ describe("teamrig queue refuses a waiting ship only when the code its tool runs 
     const sleep = async (ms: number): Promise<void> => {
       git.heads.set('/repo/ship', to);
       git.tracking.set('origin/main', 'b2');
+      git.origin.set('main', 'b2');
       await kit.clock.sleep(ms);
     };
     return { git, sleep };
@@ -1449,6 +1466,28 @@ describe("teamrig queue refuses a waiting ship only when the code its tool runs 
       const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
       const named = changed.filter((file) => file !== 'src/app.ts').join(', ');
       assert.deepEqual([result.code, result.stdout.at(-1), steps.ran], [EXIT.refused, `REFUSED ${movedFrom(` (${named})`)}`, []], named);
+    }
+  });
+
+  it("runs it when only a CLI command the ship never runs changed, and refuses it when a command it runs did (#1686)", async () => {
+    /** A CLI whose command table loads each command when it runs, the ship running only step-aside. */
+    const withCommandTable = (git: FakeMergeGit): void => {
+      for (const commit of ['base', 'b1']) {
+        git.files.set(`${commit}:tools/ship/ship.roots.json`, '{"roots": ["src/cli/main.ts", "src/cli/commands/step-aside.ts"], "staticOnly": ["src/cli/run.ts"]}');
+        git.files.set(`${commit}:src/cli/main.ts`, "import './run.ts';\n");
+        git.files.set(`${commit}:src/cli/run.ts`, "export const table = { 'step-away': () => import('./commands/step-aside.ts'), queue: () => import('./commands/queue.ts') };\n");
+        git.files.set(`${commit}:src/cli/commands/step-aside.ts`, "export {};\n");
+        git.files.set(`${commit}:src/cli/commands/queue.ts`, "export {};\n");
+      }
+    };
+    for (const [changed, refused] of [[['src/cli/commands/queue.ts'], false], [['src/cli/commands/step-aside.ts'], true]] as const) {
+      const { kit, steps } = harness(SHIPPING);
+      await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
+      const { git, sleep } = movedTwice(kit, changed);
+      withCommandTable(git);
+      const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
+      const want = refused ? [EXIT.refused, `REFUSED ${movedFrom(` (${changed.join(', ')})`)}`, 0] : [EXIT.ok, result.stdout.at(-1), 1];
+      assert.deepEqual([result.code, result.stdout.at(-1), steps.ran.length], want, changed.join());
     }
   });
 
@@ -1488,6 +1527,73 @@ describe("teamrig queue refuses a waiting ship only when the code its tool runs 
   });
 });
 
+describe("teamrig queue checks a waiting ship's tool against the remote's own head at its start, not the local ref alone (#1466)", () => {
+  /**
+   * The ship tool's checkout pinned and still at `base`, the local origin/main at `base`, and origin itself gone on to
+   * `b2` with `base..b2` differing in `changed`; the tool imports repos.ts at both.
+   */
+  function remoteAhead(kit: CliHarness, changed: readonly string[]): { git: FakeMergeGit; sleep: (ms: number) => Promise<void> } {
+    const git = shipGit();
+    for (const commit of ['base', 'b2']) {
+      git.files.set(`${commit}:tools/ship/ship.ts`, "import { profiles } from './repos.ts';\n");
+      git.files.set(`${commit}:tools/ship/repos.ts`, 'export const profiles = {};\n');
+    }
+    git.ancestry.add('base>b2');
+    git.diffs.set('base..b2', changed);
+    const sleep = async (ms: number): Promise<void> => {
+      git.origin.set('main', 'b2');
+      await kit.clock.sleep(ms);
+    };
+    return { git, sleep };
+  }
+
+  async function started(git: FakeMergeGit, sleep: (ms: number) => Promise<void>, kit: CliHarness, steps: FakeSteps): Promise<readonly unknown[]> {
+    await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
+    const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
+    return [result.code, result.stdout.at(-1)];
+  }
+
+  it('runs it when the local ref is behind the remote head and none of the code the tool runs changed between them', async () => {
+    const { kit, steps } = harness(SHIPPING);
+    const { git, sleep } = remoteAhead(kit, ['src/app.ts']);
+    assert.deepEqual([...(await started(git, sleep, kit, steps)).slice(0, 1), steps.ran.length], [EXIT.ok, 1]);
+  });
+
+  it('refuses it when the local ref is behind the remote head and a file the tool runs changed between them', async () => {
+    const { kit, steps } = harness(SHIPPING);
+    const { git, sleep } = remoteAhead(kit, ['tools/ship/repos.ts', 'src/app.ts']);
+    const refusal = `the ship tool ${SHIP_TOOL} at base (tools/ship/repos.ts) is not origin/main's current code in a checkout with no change: ${MOVE}`;
+    assert.deepEqual([...(await started(git, sleep, kit, steps)), steps.ran], [EXIT.refused, `REFUSED ${refusal}`, []]);
+  });
+
+  it('refuses it when the remote head is not in the repository yet, naming the fetch', async () => {
+    const { kit, steps } = harness(SHIPPING);
+    const { git, sleep } = remoteAhead(kit, ['src/app.ts']);
+    git.absent.add('b2');
+    const refusal = `origin's main is at b2, which the checkout of the ship tool has not fetched: ${MOVE}`;
+    assert.deepEqual([...(await started(git, sleep, kit, steps)), steps.ran], [EXIT.refused, `REFUSED ${refusal}`, []]);
+  });
+
+  it('refuses it when the local ref is neither the remote head nor an ancestor of it', async () => {
+    const { kit, steps } = harness(SHIPPING);
+    const { git, sleep } = remoteAhead(kit, ['src/app.ts']);
+    git.ancestry.delete('base>b2');
+    const refusal = `origin's main is at b2, and origin/main in /repo/ship (base) is not on its history: ${MOVE}`;
+    assert.deepEqual([...(await started(git, sleep, kit, steps)), steps.ran], [EXIT.refused, `REFUSED ${refusal}`, []]);
+  });
+
+  it('refuses it, naming the read, when the remote keeps giving no head, and reads it again first', async () => {
+    const { kit, steps } = harness(SHIPPING);
+    const git = shipGit();
+    const sleep = async (ms: number): Promise<void> => {
+      git.origin.delete('main');
+      await kit.clock.sleep(ms);
+    };
+    const unread = `could not read the checkout of the ship tool ${SHIP_TOOL}, so the step did not run: git ls-remote origin main in /repo/ship gave no head, at each of ${SHIP_TOOL_READS} reads 15 s apart; git gave no answer, which says nothing of the tool, so queue the step again once git answers on this host`;
+    assert.deepEqual([...(await started(git, sleep, kit, steps)), steps.ran], [EXIT.refused, `REFUSED ${unread}`, []]);
+  });
+});
+
 describe("teamrig queue gives a ship step the task its worktree's branch names (T3286)", () => {
   const WORKTREE = '/repo/app/.claude/worktrees/t1-cli';
   const PLAN = '/tasks/T1/plan.json';
@@ -1517,6 +1623,77 @@ describe("teamrig queue gives a ship step the task its worktree's branch names (
       assert.deepEqual([result.code, tasksOf(kit)], [EXIT.ok, [task, task]]);
     });
   }
+
+  /** The repository the share of a step queued with `args` records, its folder APP read through `git`. */
+  async function heldRepo(team: Readonly<Record<string, unknown>>, args: readonly string[], git: FakeMergeGit): Promise<unknown> {
+    const { kit, steps } = harness(team);
+    let held: unknown;
+    steps.ends(0, MINUTE).whileRunning(async () => {
+      const share: unknown = JSON.parse(kit.files.get(`${SHARED}/id-1.json`) ?? kit.files.get(LOCK) ?? '{}');
+      const request = isRecord(share) ? share['request'] : undefined;
+      held = isRecord(request) ? request['repo'] : 'no request';
+    });
+    const result = await kit.run(['queue', '--session', 'alpha', '--what', 'step', ...args], { steps, mergeGit: git });
+    assert.equal(result.code, EXIT.ok, [...result.stdout, ...result.stderr].join('\n'));
+    return held;
+  }
+
+  /** APP a worktree of the app repository, whose main checkout holds run.ts, and /repo/other another repository. */
+  function appGit(inRepo = true): FakeMergeGit {
+    const git = new FakeMergeGit();
+    if (inRepo) {
+      git.checkouts.set(APP, { top: APP, branch: 'feat/t1-cli', mainCheckout: MAIN_CHECKOUT, linked: true });
+      git.checkouts.set(MAIN_CHECKOUT, { top: MAIN_CHECKOUT, branch: 'main', mainCheckout: MAIN_CHECKOUT, linked: false });
+    }
+    git.checkouts.set('/repo/other', { top: '/repo/other', branch: 'main', mainCheckout: '/repo/other', linked: false });
+    return git;
+  }
+
+  it("records on a ship's share the repository its folder is in, and none for a build or a ship outside a repository (#1711)", async () => {
+    const team = { ...TEAM, delivery: { queue: { maxHeavyParallel: 3 } } };
+    const repoOf = (kind: string, inRepo: boolean): Promise<unknown> => heldRepo(team, ['--kind', kind, '--', 'node', '/repo/app/run.ts'], appGit(inRepo));
+    assert.equal(await repoOf('ship', true), `${MAIN_CHECKOUT}/.git`, 'a worktree names its main checkout, so every worktree of it shares the slot');
+    assert.equal(await repoOf('build', true), undefined);
+    assert.equal(await repoOf('ship', false), undefined);
+  });
+
+  it('records none, holding every slot, for a ship whose words may move another repository than its folder (#1711)', async () => {
+    const team = { ...TEAM, delivery: { queue: { maxHeavyParallel: 3 } } };
+    for (const words of [
+      ['git', '-C', '/repo/other', 'push'],
+      ['git', '-C/repo/other', 'push'],
+      ['gh', 'pr', 'merge', '7', '-R', 'acme/other'],
+      ['gh', 'pr', 'merge', '7', '--repo=acme/other'],
+      ['git', '--git-dir=/repo/other/.git', 'push'],
+      ['env', 'GIT_DIR=/repo/other/.git', 'git', 'push'],
+      ['bash', '-c', 'cd /repo/other && git push'],
+      ['node', '/repo/other/deploy.ts'],
+      ['node', '/nowhere/deploy.ts'],
+      ['/repo/other/deploy.sh'],
+      ['/repo/other/deploy.sh', 'main'],
+      // One word runs as a whole shell line, whose words are not read.
+      ['git -C /repo/other push'],
+      ['cd /repo/other && git push'],
+      ['$OTHER/deploy.sh'],
+      ['git push'],
+    ]) {
+      assert.equal(await heldRepo(team, ['--kind', 'ship', '--', ...words], appGit()), undefined, words.join(' '));
+    }
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'git', 'push', 'origin', 'HEAD'], appGit()), `${MAIN_CHECKOUT}/.git`, 'words naming no place');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', '/usr/bin/git', 'push', 'origin', 'HEAD'], appGit()), `${MAIN_CHECKOUT}/.git`, 'a program in no repository');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', '/repo/app/deploy.sh'], appGit()), `${MAIN_CHECKOUT}/.git`, "a program of the folder's own repository");
+  });
+
+  it("records for a ship tool's merge the repository of the worktree it merges, not of the folder it was queued in (#1711)", async () => {
+    const git = shipGit();
+    const worktree = '/repo/b/.claude/worktrees/t1-cli';
+    git.checkouts.set(APP, { top: APP, branch: 'main', mainCheckout: '/repo/a', linked: true });
+    git.checkouts.set(worktree, { top: worktree, branch: 'feat/t1-cli', mainCheckout: '/repo/b', linked: true });
+    const team = { ...SHIPPING, delivery: { ...SHIPPING.delivery, queue: { maxHeavyParallel: 3 } } };
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'node', SHIP_TOOL, 'merge', worktree], git), '/repo/b/.git');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'node', SHIP_TOOL, worktree, '/tasks/T1/plan.json', '--merge'], git), '/repo/b/.git');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'node', SHIP_TOOL, '/repo/none', '--merge'], git), undefined, 'a worktree in no repository');
+  });
 
   it('names no task for a step that runs no ship tool, whatever the branch of a folder it names', async () => {
     const { kit, steps } = harness(SHIPPING);

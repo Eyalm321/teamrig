@@ -1,19 +1,22 @@
 import { spawn } from 'node:child_process';
 import type { Env } from '../core/home.ts';
-import { endOf, type ShellEnd } from '../test-run/shell.ts';
+import { endOf, type ShellEnd } from '../core/shell-end.ts';
 import type { CloseReason, IssueDraft, LabelSpec } from '../issues/host.ts';
 import { LABEL_FILE, parseLabelFile } from '../issues/label-file.ts';
-import { MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
+import { areaLabelSpec, MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
+import { labelRefusal } from '../issues/write.ts';
+import { GH_PROGRAM } from './gh-program.ts';
 import { QUERY_VARIABLES, RAW_FIELD } from './queries.ts';
 
 /**
  * The kinds of `gh` command line teamrig runs: a page of a shipped query (the issue import, the links read and the
  * pull request monitor, which never write to GitHub), the creation of one issue (issue migrate, which opens an issue for a team task), one
- * comment on or the close of one issue or pull request (issue comment and issue close, a close with or without its
+ * comment on or the close of one issue or pull request (issue reply and issue close, a close with or without its
  * reason), its body replaced (issue edit), its labels: the read of one label of a repository, labels added to one
  * issue, one label taken off it (issue label), the read of one issue, for the id a duplicate close names (issue close
  * --duplicate-of), logins added to one issue's assignees, the read of one user, for the case GitHub spells its login
- * in, and the read of whether one login may be assigned (the status push), one login taken off one issue's
+ * in, the read of whether one login may be assigned (the status push) or assigned to one issue (issue assign, which
+ * also reads the issue for its labels), one login taken off one issue's
  * assignees (a claim the sync made that ran out), the creation of one of the labels teamrig makes (the status push
  * and issue label), one sub-issue or blocked-by link added (issue links), and `issue watch`'s two probes,
  * conditional reads that tell whether a repository changed (isWatchProbe), the read of one failed Actions job's log
@@ -126,7 +129,7 @@ export function issueCloseArgs(target: IssueNumber, reason?: CloseReason, duplic
   return ['api', `repos/${target.repo}/issues/${target.number}`, '-X', 'PATCH', RAW_FIELD, 'state=closed', ...why, ...of];
 }
 
-/** The command line that reads one issue or pull request, for its id. */
+/** The command line that reads one issue or pull request, for its id or its labels. */
 export function issueReadArgs(target: IssueNumber): string[] {
   return ['api', `repos/${target.repo}/issues/${target.number}`, '-X', 'GET'];
 }
@@ -175,9 +178,25 @@ export function assigneeReadArgs(repo: string, login: string): string[] {
   return ['api', `repos/${repo}/assignees/${login}`];
 }
 
+/**
+ * The command line that reads whether `login` may be assigned to one issue or pull request, which fails when it may
+ * not: GitHub takes one with access to the repository, and also one who took part in that item (issue assign).
+ */
+export function issueAssigneeReadArgs(target: IssueNumber, login: string): string[] {
+  return ['api', `repos/${target.repo}/issues/${target.number}/assignees/${login}`];
+}
+
 /** The command line that reads one GitHub user, whose `login` is spelled in the case GitHub keeps; it fails when there is no such user. */
 export function userReadArgs(login: string): string[] {
   return ['api', `users/${login}`];
+}
+
+/**
+ * The command line that reads the user the token belongs to, the login the sync runs as: the status push assigns it
+ * an issue whose session maps to no login (T4581). Only its `login` is read from the answer.
+ */
+export function viewerReadArgs(): string[] {
+  return ['api', 'user'];
 }
 
 /** The command line that makes `label` in `repo`: its name, colour and description, each a raw field. */
@@ -348,8 +367,9 @@ export function isIssueAssign(args: readonly string[]): boolean {
 /**
  * True for `gh api repos/<owner>/<name>/issues/<number>/assignees -X DELETE -f assignees[]=<login>` and nothing more:
  * exactly one login, of a login's shape, taken off one issue or pull request. The sync sends it only for a claim it
- * made itself whose login is still the assignee (issues/claim.ts); two logins, no login, another field or flag is
- * refused, so no run can clear an issue's assignees.
+ * made itself whose login is still the assignee (issues/claim.ts), and issue assign once for each login a maintainer
+ * names (issues/assign.ts); two logins, no login, another field or flag is refused, so no run can clear an issue's
+ * assignees at once.
  */
 export function isIssueUnassign(args: readonly string[]): boolean {
   const call = issueCall(args);
@@ -370,6 +390,18 @@ export function isAssigneeRead(args: readonly string[]): boolean {
   return args[0] === 'api' && args.length === 2 && match !== null && REPO_NAME.test(match[1] ?? '') && isLogin(match[2] ?? '');
 }
 
+/** `repos/<owner>/<name>/issues/<number>/assignees/<login>`: whether one login may be assigned to one issue. */
+const ISSUE_ASSIGNEE_PATH = /^repos\/([^/]+\/[^/]+)\/issues\/[1-9][0-9]{0,9}\/assignees\/([^/]+)$/u;
+
+/**
+ * True for `gh api repos/<owner>/<name>/issues/<number>/assignees/<login>` and nothing more: a read, gh's default
+ * GET, of whether the login may be assigned to that issue or pull request. A method or field is refused.
+ */
+export function isIssueAssigneeRead(args: readonly string[]): boolean {
+  const match = ISSUE_ASSIGNEE_PATH.exec(args[1] ?? '');
+  return args[0] === 'api' && args.length === 2 && match !== null && REPO_NAME.test(match[1] ?? '') && isLogin(match[2] ?? '');
+}
+
 /** `users/<login>`: one GitHub user. */
 const USER_PATH = /^users\/([^/]+)$/u;
 
@@ -382,6 +414,14 @@ export function isUserRead(args: readonly string[]): boolean {
   return args[0] === 'api' && args.length === 2 && match !== null && isLogin(match[1] ?? '');
 }
 
+/**
+ * True for `gh api user` and nothing more, as viewerReadArgs builds it: a read, gh's default GET, of the user the
+ * token belongs to. A method, a field, a filter or a path below the user (such as its e-mails or keys) is refused.
+ */
+export function isViewerRead(args: readonly string[]): boolean {
+  return args.length === 2 && args[0] === 'api' && args[1] === 'user';
+}
+
 /** `repos/<owner>/<name>/labels`: the labels of a repository, where a POST makes one. */
 const LABELS_PATH = /^repos\/([^/]+\/[^/]+)\/labels$/u;
 
@@ -391,11 +431,23 @@ export type FileLabels = (repo: string) => readonly LabelSpec[];
 /**
  * True for the command line labelCreateArgs builds for one of the labels teamrig makes (MANAGED_LABEL_SPECS: the
  * status push's own and the design label) and nothing more: its name, colour and description word for word, in that
- * order. So the runner makes no other label (beside one isFileLabelCreate takes), and edits or deletes none, whatever
- * a caller passes.
+ * order. So the runner makes no other label (beside one isAreaLabelCreate or isFileLabelCreate takes), and edits or
+ * deletes none, whatever a caller passes.
  */
 export function isLabelCreate(args: readonly string[]): boolean {
   return labelCreateIn(args, () => MANAGED_LABEL_SPECS);
+}
+
+/**
+ * True for the command line labelCreateArgs builds for an area label (areaLabelSpec): a name a host takes, in the one
+ * area colour and description, word for word. Which names are areas is the team's github.areaOwners, which issue label
+ * checks before the create (issues/write.ts); the runner holds the create to that one look, so it makes no label in a
+ * look of the caller's choosing.
+ */
+export function isAreaLabelCreate(args: readonly string[]): boolean {
+  const field = args[5] ?? '';
+  const name = field.startsWith('name=') ? field.slice('name='.length) : '';
+  return labelRefusal(name) === undefined && labelCreateIn(args, () => [areaLabelSpec(name)]);
 }
 
 /**
@@ -646,16 +698,83 @@ export function isLinkAdd(args: readonly string[]): boolean {
   );
 }
 
-/** A command line the runner will not start: none of a shipped query's page, a watch probe, one issue's creation, comment, body, labels, close or link, a failed job's log, or a mention scan's read. */
+/** `repos/<owner>/<name>/issues/<number>/issue-field-values`: the values of one issue's fields. */
+const FIELD_VALUES_PATH = /^repos\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]{0,9})\/issue-field-values$/;
+
+/** The id of the field a value is for. */
+const FIELD_ID_KEY = 'issue_field_values[][field_id]';
+
+/** The value itself: text, a day or an option's name as a raw field, a number as a typed one. */
+const FIELD_VALUE_KEY = 'issue_field_values[][value]';
+
+/** A number field's value as a typed field takes it: a whole number of digits only, so no `@file` or other gh form rides on it. */
+const FIELD_NUMBER = /^-?(0|[1-9][0-9]{0,14})$/;
+
+/** A field's text, day, option or type name: one bounded line, so nothing beside the value can be read into it. */
+const FIELD_TEXT = /^[^\p{Cc}]{1,1024}$/u;
+
+/**
+ * The command line that sets one field of `target` to `value`: the field by its id, a number as a typed field, else
+ * raw text (a day as `YYYY-MM-DD`, a single-select by its option's name). Only that field changes; the others stay.
+ */
+export function fieldValueSetArgs(target: IssueNumber, fieldId: number, value: string | number): string[] {
+  const set = typeof value === 'number' ? [TYPED_FIELD, `${FIELD_VALUE_KEY}=${value}`] : [RAW_FIELD, `${FIELD_VALUE_KEY}=${value}`];
+  return ['api', `repos/${target.repo}/issues/${target.number}/issue-field-values`, '-X', 'POST', TYPED_FIELD, `${FIELD_ID_KEY}=${fieldId}`, ...set];
+}
+
+/**
+ * True for `gh api repos/<owner>/<name>/issues/<number>/issue-field-values -X POST -F <field_id>=<id>` then the value,
+ * `-f <value>=<line>` or `-F <value>=<whole number>`, and nothing more: one field of one issue set, its id digits only.
+ * A second value, another method (a PUT that replaces every value, a DELETE), field or flag is refused.
+ */
+export function isFieldValueSet(args: readonly string[]): boolean {
+  const match = FIELD_VALUES_PATH.exec(args[1] ?? '');
+  const repo = match?.[1];
+  const id = args[5] ?? '';
+  const value = args[7] ?? '';
+  const valuePrefix = `${FIELD_VALUE_KEY}=`;
+  const shown = value.slice(valuePrefix.length);
+  const valueOk = value.startsWith(valuePrefix) && ((args[6] === RAW_FIELD && FIELD_TEXT.test(shown)) || (args[6] === TYPED_FIELD && FIELD_NUMBER.test(shown)));
+  return (
+    args.length === 8 &&
+    args[0] === 'api' &&
+    repo !== undefined &&
+    REPO_NAME.test(repo) &&
+    args[2] === '-X' &&
+    args[3] === 'POST' &&
+    args[4] === TYPED_FIELD &&
+    id.startsWith(`${FIELD_ID_KEY}=`) &&
+    HOST_ID.test(id.slice(FIELD_ID_KEY.length + 1)) &&
+    valueOk
+  );
+}
+
+/** The command line that sets the type of one issue to `type`, by its name, a raw field. */
+export function issueTypeSetArgs(target: IssueNumber, type: string): string[] {
+  return ['api', `repos/${target.repo}/issues/${target.number}`, '-X', 'PATCH', RAW_FIELD, `type=${type}`];
+}
+
+/**
+ * True for `gh api repos/<owner>/<name>/issues/<number> -X PATCH -f type=<name>` and nothing more: the type of one
+ * issue set, its name one line. Any other field beside it, or in its place, is refused.
+ */
+export function isIssueTypeSet(args: readonly string[]): boolean {
+  const call = issueCall(args);
+  const pairs = rawPairs(args.slice(4));
+  const pair = pairs?.length === 1 ? pairs[0] : undefined;
+  return call?.method === 'PATCH' && call.part === 'issue' && pair?.[0] === 'type' && FIELD_TEXT.test(pair[1]);
+}
+
+/** A command line the runner will not start: none of a shipped query's page, a watch probe, one issue's creation, comment, body, labels, close, link, type or field, a failed job's log, or a mention scan's read. */
 export class GhRefusedError extends Error {
   override readonly name = 'GhRefusedError';
 
   constructor(args: readonly string[]) {
-    super(`teamrig only runs gh for its shipped issue queries, its two watch probes, to open, read, comment on, edit the body of, label, assign, close or link an issue, to read a failed job's log, and to read the posts that may mention a user: it refuses gh ${args.slice(0, 2).join(' ')} with these arguments`);
+    super(`teamrig only runs gh for its shipped issue queries, its two watch probes, to open, read, comment on, edit the body of, label, assign, close, link, type or set a field of an issue, to read a failed job's log, and to read the posts that may mention a user: it refuses gh ${args.slice(0, 2).join(' ')} with these arguments`);
   }
 }
 
-/** True for each fixed command line the runner starts; it also makes a label a read label file named (isFileLabelCreate). */
+/** True for each fixed command line the runner starts, an area label's create among them; it also makes a label a read label file named (isFileLabelCreate). */
 export function isAllowedGh(args: readonly string[]): boolean {
   return (
     isIssueQuery(args) ||
@@ -672,9 +791,14 @@ export function isAllowedGh(args: readonly string[]): boolean {
     isIssueAssign(args) ||
     isIssueUnassign(args) ||
     isAssigneeRead(args) ||
+    isIssueAssigneeRead(args) ||
     isUserRead(args) ||
+    isViewerRead(args) ||
     isLabelCreate(args) ||
+    isAreaLabelCreate(args) ||
     isLinkAdd(args) ||
+    isFieldValueSet(args) ||
+    isIssueTypeSet(args) ||
     isWatchProbe(args) ||
     isJobLogRead(args) ||
     isMentionRead(args) ||
@@ -737,7 +861,7 @@ export function isReviewRead(args: readonly string[]): boolean {
  * GhOutputCapError. It keeps what each repository's label file named when it read one, so it makes only those
  * labels beside its own.
  */
-export function nodeGhRunner(program = 'gh', leading: readonly string[] = [], timeoutMs = GH_TIMEOUT_MS, maxBytes = GH_OUTPUT_MAX_BYTES): GhRunner {
+export function nodeGhRunner(program: string = GH_PROGRAM, leading: readonly string[] = [], timeoutMs = GH_TIMEOUT_MS, maxBytes = GH_OUTPUT_MAX_BYTES): GhRunner {
   const labelFiles = new LabelFileReads();
   return {
     run: async (request) => {

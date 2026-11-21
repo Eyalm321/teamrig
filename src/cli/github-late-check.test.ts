@@ -47,4 +47,49 @@ describe('check GH-LATE (T3028)', () => {
     await kit.files.write(CLOCKS, clocks(bug(now - 24 * MS_PER_HOUR)));
     assert.equal(await told(), 2);
   });
+
+  it('flags 50 late threads as one GH-LATE with their count, told again only when a newer wait goes late (#1475)', async () => {
+    const kit = new CliHarness(TEAM);
+    const now = kit.clock.now();
+    const late = (n: number, hours: number): Clock => ({ ...bug(now - hours * MS_PER_HOUR), ref: `gh:acme/web#${n}` });
+    const fifty = Array.from({ length: 50 }, (_, index) => late(index + 1, 80 - index));
+    await kit.files.write(CLOCKS, clocks(...fifty));
+    const rows = await lateRows(kit);
+    assert.equal(rows.length, 1, rows.join('\n'));
+    assert.match(rows[0] ?? '', /GH-LATE 50 GitHub threads waited past their answer target for an answer of ours, oldest first: gh:acme\/web#1 \(bug, alpha, 80 h\), gh:acme\/web#2 \(bug, alpha, 79 h\), gh:acme\/web#3 \(bug, alpha, 78 h\) and 47 more: have their owners answer them on GitHub/);
+    const told = async (): Promise<number> => {
+      assert.equal((await kit.run(['start'], AS_ALPHA)).code, EXIT.ok);
+      const inbox = (await kit.files.read(join(TEAM_HOME, 'state', 'inbox', 'lead.md'))) ?? '';
+      return inbox.split('\n').filter((line) => line.includes('GH-LATE ')).length;
+    };
+    assert.equal(await told(), 1);
+    assert.equal(await told(), 1);
+    await kit.files.write(CLOCKS, clocks(...fifty.slice(1)));
+    assert.equal(await told(), 1, 'an older one answered: no new line');
+    await kit.files.write(CLOCKS, clocks(...fifty.slice(1, 49)));
+    assert.equal(await told(), 1, 'the newest one answered: no new line');
+    await kit.files.write(CLOCKS, clocks(...fifty.slice(1, 48)));
+    assert.equal(await told(), 1, 'the next newest answered too: still no new line');
+    await kit.files.write(CLOCKS, clocks(...fifty.slice(1, 48), late(51, 25)));
+    assert.equal(await told(), 2, 'a newer wait went late: told again');
+    await kit.files.write(CLOCKS, clocks(...fifty.slice(1, 48)));
+    assert.equal(await told(), 2, 'that newer one answered: no new line');
+  });
+
+  it('tells a late thread again once every earlier late thread was answered hours before (#1475)', async () => {
+    const kit = new CliHarness(TEAM);
+    const now = kit.clock.now();
+    const told = async (): Promise<number> => {
+      assert.equal((await kit.run(['start'], AS_ALPHA)).code, EXIT.ok);
+      const inbox = (await kit.files.read(join(TEAM_HOME, 'state', 'inbox', 'lead.md'))) ?? '';
+      return inbox.split('\n').filter((line) => line.includes('GH-LATE ')).length;
+    };
+    await kit.files.write(CLOCKS, clocks({ ...bug(now - 30 * MS_PER_HOUR), ref: 'gh:acme/web#5' }));
+    assert.equal(await told(), 1);
+    await kit.files.write(CLOCKS, clocks());
+    assert.equal(await told(), 1);
+    kit.clock.advance(3 * MS_PER_HOUR);
+    await kit.files.write(CLOCKS, clocks({ ...bug(now - 40 * MS_PER_HOUR), ref: 'gh:acme/web#6' }));
+    assert.equal(await told(), 2, 'an older wait late in a newly watched repo, nothing late before it for hours: told');
+  });
 });

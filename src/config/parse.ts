@@ -26,6 +26,7 @@ import {
   DEFAULT_CHECK_TIMEOUT_SECONDS,
   DEFAULT_PASS_ENV,
   DEFAULT_GITHUB,
+  DEFAULT_ISSUE_FIELDS,
   DEFAULT_QUEUE,
   DEFAULT_HIRING,
   DEFAULT_EXEC,
@@ -74,6 +75,7 @@ import {
   DB_WRITE_ENTRYPOINT_LIMITS,
   DB_WRITE_NAME_LIMITS,
   GITHUB_LABEL_MAX_LENGTH,
+  ISSUE_FIELD_NAME_MAX_LENGTH,
   MEETING_COLOUR_PATTERN,
   MEETING_HELD_TEXT_MAX_LENGTH,
   NODE_MODULE_PATTERN,
@@ -121,6 +123,7 @@ import {
   isSecretWrites,
   isSkipHooks,
   isTerminalChoice,
+  isExpiringResetKind,
   isResetKind,
   isReviewMode,
   isVerifyGate,
@@ -164,6 +167,8 @@ import {
   type DeployCheckConfig,
   type CommitsConfig,
   type GithubConfig,
+  type IssueFieldsConfig,
+  type IssueKind,
   type HiringConfig,
   type RuleConflict,
   type ServiceRoleConfig,
@@ -753,6 +758,7 @@ function parseGithub(read: ConfigReader, raw: JsonRecord, sessions: readonly str
     closedDays: read.integer(raw, 'closedDays', 'github', DEFAULT_GITHUB.closedDays, CONFIG_LIMITS.closedDays),
     probeSeconds: readProbeSeconds(read, raw),
     statusPush: read.boolean(raw, 'statusPush', 'github', DEFAULT_GITHUB.statusPush),
+    fields: parseIssueFields(read, read.section(raw, 'fields', 'github')),
     acceptLabel: read.string(raw, 'acceptLabel', 'github', DEFAULT_GITHUB.acceptLabel, shortLine(GITHUB_LABEL_MAX_LENGTH)),
     similarThreshold: read.number(raw, 'similarThreshold', 'github', DEFAULT_GITHUB.similarThreshold, CONFIG_LIMITS.similarThreshold),
     activity: read.boolean(raw, 'activity', 'github', DEFAULT_GITHUB.activity),
@@ -771,6 +777,48 @@ function readIssueAtAdd(read: ConfigReader, raw: JsonRecord, repos: readonly str
     return undefined;
   }
   return repo;
+}
+
+/** A field or type name: one line without control characters, which the host shows as written. */
+const ISSUE_NAME = shortLine(ISSUE_FIELD_NAME_MAX_LENGTH, (value) => (/\p{Cc}/u.test(value) ? 'expected no control characters' : undefined));
+
+/**
+ * `github.fields` (T3406): the push switch, the name of the field each value goes to (an empty name writes none, so
+ * a team turns one field off alone), and the issue types each kind is set as, each list tried in order.
+ */
+function parseIssueFields(read: ConfigReader, raw: JsonRecord): IssueFieldsConfig {
+  const path = 'github.fields';
+  const name = (key: 'priority' | 'startDate' | 'targetDate' | 'score'): string =>
+    raw[key] === '' ? '' : read.string(raw, key, path, DEFAULT_ISSUE_FIELDS[key], ISSUE_NAME);
+  const typesRaw = read.section(raw, 'types', path);
+  const { maxItems } = CONFIG_LIMITS.issueTypeNames;
+  const typeOf = (kind: IssueKind): readonly string[] => read.stringList(typesRaw, kind, `${path}.types`, DEFAULT_ISSUE_FIELDS.types[kind], ISSUE_NAME, maxItems);
+  return {
+    push: read.boolean(raw, 'push', path, DEFAULT_ISSUE_FIELDS.push),
+    priority: name('priority'),
+    priorityOptions: readPriorityOptions(read, read.section(raw, 'priorityOptions', path), maxItems),
+    startDate: name('startDate'),
+    targetDate: name('targetDate'),
+    score: name('score'),
+    types: { task: typeOf('task'), bug: typeOf('bug'), goal: typeOf('goal'), design: typeOf('design') },
+  };
+}
+
+/** A priority level as `github.fields.priorityOptions` names it: `p` and its number. */
+const PRIORITY_LEVEL = /^p[0-9]{1,2}$/;
+
+/** `github.fields.priorityOptions`: each listed level's option names over the default's; a key that is not a level is reported and left out. */
+function readPriorityOptions(read: ConfigReader, raw: JsonRecord, maxItems: number): Readonly<Record<string, readonly string[]>> {
+  const path = 'github.fields.priorityOptions';
+  const options: Record<string, readonly string[]> = { ...DEFAULT_ISSUE_FIELDS.priorityOptions };
+  for (const level of Object.keys(raw)) {
+    if (!PRIORITY_LEVEL.test(level)) {
+      read.report(`${path}.${level}`, 'expected a priority level: p and its number, such as p1');
+      continue;
+    }
+    options[level] = read.stringList(raw, level, path, DEFAULT_ISSUE_FIELDS.priorityOptions[level] ?? [], ISSUE_NAME, maxItems);
+  }
+  return options;
 }
 
 /** Below this, a probe every few seconds would spend gh starts for nothing GitHub shows that fast. */
@@ -1364,16 +1412,24 @@ function parseResetStock(read: ConfigReader, value: unknown, path: string): Rese
   if (section['count'] === undefined) {
     read.report(`${path}.count`, 'is required');
   }
-  const expiresUtc = read.requiredString(section, 'expiresUtc', path, isUtcMinute);
+  // Another account never expires (types.ts RESET_KINDS), so an expiry on one is a mistake worth naming.
+  const expiresUtc = kind === 'account' ? undefined : read.requiredString(section, 'expiresUtc', path, isUtcMinute);
+  if (kind === 'account' && section['expiresUtc'] !== undefined) {
+    read.report(`${path}.expiresUtc`, 'is not for kind account: another account never expires, each comes back a week after its use');
+  }
   const usedUtc = read.stringList(section, 'usedUtc', path, [], isUtcMinute, CONFIG_LIMITS.budgetResetCount.max);
   const note = read.optionalString(section, 'note', path, shortLine(RESET_NOTE_MAX_LENGTH));
   if (count !== undefined && usedUtc.length > count) {
     read.report(`${path}.usedUtc`, `lists ${usedUtc.length} uses of a grant of ${count}`);
   }
-  if (read.issues.length > issues || !isResetKind(kind) || count === undefined) {
+  if (read.issues.length > issues || count === undefined) {
     return undefined;
   }
-  return { kind, count, expiresUtc, usedUtc, ...(note === undefined ? {} : { note }) };
+  const base = { count, usedUtc, ...(note === undefined ? {} : { note }) };
+  if (kind === 'account') {
+    return { kind, ...base };
+  }
+  return isExpiringResetKind(kind) && expiresUtc !== undefined ? { kind, expiresUtc, ...base } : undefined;
 }
 
 /** A model prefix: one short line, as model ids are. */

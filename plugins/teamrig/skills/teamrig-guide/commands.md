@@ -757,17 +757,24 @@ window has reached 80% [budget.fiveHourWarnPct] or rises fast enough to fill bef
 session stalls until that reset; it is raised once a window, and a plan with no such window never shows it,
 RESET-EXPIRING: a reset grant in [budget.resets] with uses left expires within 14 days, and one not spent by then is
 lost; it is raised once a grant and again after each use, LOG-SIZE: a file of the team's `state` or `inbox` folder
-has reached 3 MiB, near the 4 MiB the task pane reads of a file at once, past which the pane stops reading it; it is
-raised once a file, GH-LATE: a GitHub issue or pull request has waited past its answer target
+has reached 3 MiB, near the 4 MiB the task pane reads of a file at once, past which the pane stops reading it, with
+that file's remedy (compact for the register and the hooks' aged logs, none yet for an inbox); it is raised once a
+file, GH-LATE: a GitHub issue or pull request has waited past its answer target
 (security 4 h, bug, pull request or a comment on an issue a task tracks 24 h, else 72 h) for an answer of ours, by the clocks the
-last writing `teamrig issue sync` kept; it is raised once a wait, and from
+last writing `teamrig issue sync` kept; one GH-LATE names every late thread, with their count and the oldest three,
+and is raised once, and again only when a newer wait goes late, and from
 the restore's record (`<kit home>/bin/launchers.json`, written by [restore install](#teamrig-restore-install),
 `uninstall` and a newer version's first session start) RESTORE-DEAD: a logon entry or shortcut teamrig set up that
 starts a Node or launcher that is gone, such as one left on a Node an upgrade removed, and RESTORE-STRAY: a `Restore
 Claude Sessions` shortcut or logon entry that starts something else; `teamrig restore install --yes` repoints both,
-and PROMPT-HELD: a tab of the team has waited 10 minutes or more on a permission prompt nobody answered, so its
+PROMPT-HELD: a tab of the team has waited 10 minutes or more on a permission prompt nobody answered, so its
 session and every session waiting on it stand still; the [idle pass](hooks.md#the-idle-pass) pages the owner once a
-hold, and only a person at that tab can answer it.
+hold, and only a person at that tab can answer it, and RESTART-STALLED: a session the automatic restart covers
+(`refresh.autoRestart`) sits quiet with its handover ready and noticed, no restart pending or parked, for longer than
+`refresh.restartDelaySeconds` plus 10 minutes (a prompt cancelled its restart, or its runner died where no hook
+re-arms it), its Claude Code still running (with its tab gone, its next start takes the handover); the row names how
+long it sat and its last row in the restart log (`refresh/restarts.jsonl`), it is raised once a handover, and typing
+/clear in its tab gives it its fresh start.
 Each row names the check it came from; the
 lead fixes it, hands it on (`teamrig add --owner <session>`) or settles the check. The lead's `start` shows them
 too, and any session's `start` posts the lead one inbox line per warning it was not told of yet, at most 5 per
@@ -1277,7 +1284,7 @@ Imports GitHub issues into the task list, inbound only. For each repository in `
 issues and those closed in the last `github.closedDays` days (14 by default) through the GitHub CLI, `gh`. It only
 ever lists issues: it never creates, edits, comments on, labels, assigns or closes anything on GitHub, and a task
 added with `teamrig add` stays in the task list and never goes to GitHub. Only commands run by hand write:
-`teamrig issue migrate` opens issues, `teamrig issue comment`, `teamrig issue edit` and `teamrig issue close`
+`teamrig issue migrate` opens issues, `teamrig issue reply`, `teamrig issue edit` and `teamrig issue close`
 comment on, rewrite and close them, and `teamrig issue links` links them as the task tree does;
 `teamrig issue similar` lists likely duplicates from the task list alone.
 Its old name, gh sync, is refused with this one (exit 64). Setup, tokens and every failure's fix:
@@ -1338,7 +1345,7 @@ unmerged, or one that starts to conflict with its base, to fail its checks, or g
 and with [github.activity] on one whose checks pass after failing or running; each is told once, never again while
 it lasts, and the first read of a repository only marks what is there. It goes to the owner of the task the pull
 request's branch names (`t<id>-...`) when an author inside the repository pushed that branch to the repository
-itself, else to `[github.watcher]` (unset: the first holder of a service role holding `issue comment`, else the
+itself, else to `[github.watcher]` (unset: the first holder of a service role holding `issue close`, else the
 lead). With [github.activity] on, an unwoken copy also goes to the owner of the task holding the pull request or a
 same-repository issue it closes, and to each session following it (`teamrig follow`). A run by hand prints a
 `PULL NEWS <session>` line per session and keeps nothing; `--auto` posts it. Titles are outside input, quoted as data.
@@ -1371,9 +1378,11 @@ Flags:
   is told to the watcher and goes on from the cut next run; a failed one fails the repository and keeps its scan. A
   run without `--auto` reads no posts. It reads every
   repository, so it refuses `--repo`. With `github.statusPush` on it
-  then sends the status push (`--push --yes`) too, labels only: a close it plans is printed as a `HELD` line and
-  sent only by a session's `--push --yes`. Its writes per run are lowered so an hour of runs sends at most 250
-  (4 a run at the default `github.probeSeconds` of 60, 20 at 300); a failed write is told to the lead like a
+  then sends the status push (`--push --yes`) too, labels, assignees, fields and types only: a close it plans is printed as a `HELD` line and
+  sent only by a session's `--push --yes`. It counts its writes over the rolling hour in
+  `state/github-push-hour.json`: 40 a run until the hour has sent 250, then only what the hour has left; a count it
+  cannot read or write gives the even share (4 a run at the default `github.probeSeconds` of 60, 20 at 300) and a
+  `NOTE`; a failed write is told to the lead like a
   repository that fails.
   With the push on it also handles claims: an outside person's comment starting `/take`, "I'll take", "I'm working
   on" or "I can take", on an open issue with no assignee that is not `design` or `security` and is the repository's
@@ -1391,7 +1400,8 @@ Flags:
   assigned to no one; a done task closes it as completed, a
   dropped one as not planned. It plans against the issues as GitHub lists them now, so a label someone changed by
   hand is set back and a run that stopped half way is planned again whole. It never reopens an issue a person
-  closed: a `KEPT` line names it, and an `UNLISTED` line an active task's issue that is not open on GitHub. A run
+  closed: a `KEPT` line names it, an `UNLISTED` line an active task's issue that is not open on GitHub, and a `PULL`
+  line a task on an open pull request, which the push leaves as it is. A run
   sends at most 40 writes (half GitHub's limit of 80 a minute), shared by the repositories in order, and leaves the
   rest for the next. On its own it only
   plans: it reads the issues and writes nothing. With `--yes` a session on the team sends the plan, a `SET` line for
@@ -1402,6 +1412,13 @@ Flags:
   and an imported one hold the same issue, the team task speaks for it; when two or more active team tasks hold it,
   the push writes nothing to it and a `SHARED` line names them. One active team task speaks over finished ones; with
   none active, the newest finished one speaks.
+  After the labels it sets each held open issue's fields and type, one way from the task list, on a repository
+  that has them ([github.fields]): the priority as an option of the `Priority` field (`P<n>`, else Urgent, High,
+  Medium or Low by level, [github.fields.priorityOptions]), the day the task
+  first went in progress to `Start date`, its due day to `Target date`, its score, rounded, to `Score`, and the
+  issue type (a task `Task`, a bug `Bug`, a goal `Feature`, a design issue `Design`), each a `FIELD` or `TYPE`
+  line and only where it differs, in the same writes per run. A field or type the repository lacks is skipped with
+  a `NOTE`; a repository with none prints nothing; nothing is ever cleared, and the labels stay.
 
 Example:
 
@@ -1514,42 +1531,80 @@ NO ROW 1 live task(s) no row names: T44
 PREVIEW nothing was written; teamrig issue migrate <file> --yes opens the issues and sets each task's ref
 ```
 
-### teamrig issue comment
+### teamrig issue reply
 
-Posts one comment on an issue or pull request of the team's repositories, named as `owner/name#number`. A security
-hole is never its subject: that goes only to private reporting ([security skill](../security/SKILL.md#a-security-hole)). GitHub is
-the only host so far: the repository must be in `github.repos`, and the comment goes through `gh api` with the
-token saved for the owner as `teamrig-gh-<owner>`, never the `gh auth login` account (an `ACCESS` line names it).
-The token needs Issues and Pull requests: Read and write. It refuses, posting nothing, a caller not on the team, a
-target that is not `owner/name#number`, a repository not in `github.repos`, and a body that is empty, past 65,536
-characters, looks like it holds a secret, holds private data (a path inside a home folder, an e-mail address, an
-IPv4 address or an internal host name: the refusal names the shape, never the text), or names a task id (`T12`: ids
-are the team's own, so link issues by `#number`). A saved token the store cannot read stops it, never the `gh` login in its place. `TEAMRIG_GITHUB=off`
-prints an `OFF` line and posts nothing. It prints `COMMENTED <target>`, or `FAILED <target>: <reason>` with the fix
-(a token without the permission, an issue not there). Exit 1 when it failed, 2 when refused, else 0.
+A maintainer's reply on an issue or pull request of the team's repositories, named as `owner/name#number`, that
+takes the thread's state with its words, so a thread never says more than it shows: a "Picking this up" comment on an
+issue still `status:open`, unassigned, with its pull request unlinked, is the case it ends. It is the only way a
+session posts a comment; `teamrig issue close --comment` posts one as it closes. A security hole is never its
+subject: that goes only to private reporting ([security skill](../security/SKILL.md#a-security-hole)).
+
+It reads first and, on a refusal, writes nothing: the thread, the `--pr` (an open pull request of the same
+repository) and each `--assign` login. Then, in this order:
+
+1. `--status` sets the task holding the issue, through `teamrig set` with its own gates (`--note`, `--evidence`,
+   `--skill`, `--followups`, `--waits` and `--proof` go to it); a status may be given as the label shows it, such as
+   `'in review'` for verifying. A `set` that refuses stops the reply before GitHub.
+2. The issue's status label and assignee as the register now holds them (the same plan as `teamrig issue sync
+   --push`), and the `--assign` logins.
+3. `--pr`: a `Closes #<n>` line added to the pull request's body when no line there closes the issue (GitHub links
+   them by it), and the issue's labels it lacks, but for `status:` and `design`.
+4. `--followup`: a new issue for the part left over, its body from `--followup-body-file` with a `Split from #<n>.`
+   line; the comment gets a `Follow-up: #<k>` line.
+5. The comment, last.
+
+The first failure stops it with `FAILED <target>: <reason>; it already <what was done>; the comment was not posted`,
+so words never run ahead of the state. An issue no task holds is refused (`teamrig issue sync` adds the task). A pull
+request shows no status of its own: a reply on one takes no `--status` or `--pr` and needs labels on it first
+(`teamrig issue label`).
+
+GitHub is the only host so far: the repository must be in `github.repos`, and every write goes through `gh api` with
+the token saved for the owner as `teamrig-gh-<owner>`, never the `gh auth login` account (an `ACCESS` line names
+it). The token needs Issues and Pull requests: Read and write. It refuses, writing nothing, a caller not on the
+team, a target that is not `owner/name#number`, a repository not in `github.repos`, and a text (the body file, the
+follow-up's title and body) that is empty, past 65,536 characters, looks like it holds a secret, holds private data
+(a path inside a home folder, an e-mail address, an IPv4 address or an internal host name: the refusal names the
+shape, never the text), or names a task id (`T12`: ids are the team's own, so link issues by `#number`). The text
+comes from a file, so a reply of many lines survives the shell; a file the secret guard keeps is never read. No
+saved token, or one the store cannot read, stops it, never the `gh` login in its place. `TEAMRIG_GITHUB=off` prints
+an `OFF` line and writes nothing. Exit 1 when it failed, 2 when refused, else 0.
 
 Flags:
 
 - `--session <id|name>`: the caller, a session of the team.
-- `--body <text>`: the comment, required.
+- `--body-file <path>`: the comment, required.
+- `--status <status>`: the status the task holding the issue gets, as `teamrig set` takes it or as the label shows it.
+- `--note <text>`: passed to `teamrig set`, as are the five below; each is refused without `--status`.
+- `--evidence <text>`: the evidence `teamrig set` takes on done.
+- `--skill <name|none>`: the skill `teamrig set` takes on done.
+- `--followups <tasks|none>`: the tasks it leaves, which `teamrig set` takes on verifying and done.
+- `--waits <on>`: what it waits on, for `teamrig set` on waiting.
+- `--proof <text>`: the proof `teamrig set` takes on verifying.
+- `--pr <n>`: the open pull request of the same repository that answers the issue.
+- `--followup <title>`: the title of the issue to open for the part left over.
+- `--followup-body-file <path>`: that issue's body.
+- `--assign <login,...>`: logins to assign, each read first as one the repository may assign.
 
 Example:
 
 ```sh
-teamrig issue comment acme/web#7 --body "Fixed in #9, thank you."
+teamrig issue reply acme/web#7 --body-file reply.md --status 'in review' --followups none --pr 9
 ```
 
 Output:
 
 ```text
 ACCESS acme: writes with the token saved as teamrig-gh-acme
+SET acme/web#7 T12 verifying: add status:in review, take off status:in progress
+LINKED acme/web#9: its body now closes #7
+LABELED acme/web#9: "bug"
 COMMENTED acme/web#7
 ```
 
 ### teamrig issue edit
 
 Replaces the body (the description) of one issue or pull request of the team's repositories with the text of a file,
-with the same access and checks as `teamrig issue comment`: the text is refused, changing nothing, when it is empty,
+with the same access and checks as `teamrig issue reply`: the text is refused, changing nothing, when it is empty,
 past 65,536 characters, looks like it holds a secret, holds private data or names a task id. The title, state,
 labels and assignees stay, and GitHub keeps the old body in the issue's edit history. The text comes from a file, as
 a full description runs to many lines a shell argument would mangle; a byte-order mark at its start is dropped, and a
@@ -1578,7 +1633,7 @@ EDITED acme/web#7: its body is now 1832 characters
 ### teamrig issue close
 
 Closes one issue or pull request of the team's repositories (a pull request closes unmerged), first posting
-`--comment` when given, with the same access and checks as `teamrig issue comment`. When the comment fails nothing
+`--comment` when given, with the same access and checks as `teamrig issue reply`. When the comment fails nothing
 is closed. When the close fails after the comment was posted, the `FAILED` line says the comment is posted: rerun
 `teamrig issue close` without `--comment`. Exit 1 when it failed, 2 when refused, else 0.
 
@@ -1609,20 +1664,22 @@ CLOSED acme/web#12
 ### teamrig issue label
 
 Adds labels to and takes labels off one issue or pull request of the team's repositories, with the same access as
-`teamrig issue comment`. `--add` and `--remove` are comma-separated lists; give at least one, and no label in both.
+`teamrig issue reply`. `--add` and `--remove` are comma-separated lists; give at least one, and no label in both.
 Each label to add must already be one of the repository's, read before any change, so a typo never makes a new
-label: make it on the host first. Two kinds are made where the repository lacks them, each with a `MADE` line:
-`design`, the label of a design issue (talk about how something should work, not work to take until agreed), and a
+label: make it on the host first. Three kinds are made where the repository lacks them, each with a `MADE` line:
+`design`, the label of a design issue (talk about how something should work, not work to take until agreed); a
 label the repository's own `.github/labels.json` defines, made with that file's colour and description (the file is
-read from the default branch, once, only when such a label is missing). Labels to add go in one call, then each label to remove comes off in turn; the
+read from the default branch, once, only when such a label is missing); and an area label `[github.areaOwners]`
+names, made in teamrig's one area colour and description unless that file defines it. Labels to add go in one call,
+then each label to remove comes off in turn; the
 first failure stops it, and a `FAILED` line after a change says what it already did. Exit 1 when it failed, 2 when
 refused, else 0.
 
 Flags:
 
 - `--session <id|name>`: the caller, a session of the team.
-- `--add <label,...>`: the labels to add, each already one of the repository's, `design`, or one its
-  `.github/labels.json` defines.
+- `--add <label,...>`: the labels to add, each already one of the repository's, `design`, one its
+  `.github/labels.json` defines, or one `[github.areaOwners]` names.
 - `--remove <label,...>`: the labels to take off.
 
 Example:
@@ -1665,12 +1722,44 @@ SIMILAR acme/web#31 (T412): 2 of 18 mirrored issues at or above 0.35 (github.sim
 0.41 acme/web#27 T405 Reset email never arrives
 ```
 
+### teamrig issue assign
+
+Gives one issue or pull request of the team's repositories to its takers, with the same access as `teamrig issue
+reply`: use it once someone says they take the item, such as a commenter asking for it. `--add` and `--remove` are
+comma-separated lists of GitHub logins (a leading `@` is dropped); give at least one, no login in both, and at most 3
+logins in all. Before any change it reads the item's labels and each login to add: an add to a design issue (one
+labelled `design`, talk not yet agreed) is refused, as no one takes design talk until it is agreed and the label
+comes off; and a login GitHub would drop is refused, as GitHub assigns only someone with access to the repository or
+someone who took part in the item (a comment counts). The logins to add go in one call, as GitHub spells them, then
+each login to remove comes off in turn; the first failure stops it, and a `FAILED` line after a change says what it
+already did. It prints `ASSIGNED <target>: <logins>` and `UNASSIGNED <target>: <login>`. Exit 1 when it failed, 2
+when refused, else 0.
+
+Flags:
+
+- `--session <id|name>`: the caller, a session of the team.
+- `--add <login,...>`: the logins to assign, each one GitHub may assign to the item.
+- `--remove <login,...>`: the logins to take off.
+
+Example:
+
+```sh
+teamrig issue assign acme/web#12 --add octocat
+```
+
+Output:
+
+```text
+ACCESS acme: writes with the token saved as teamrig-gh-acme
+ASSIGNED acme/web#12: octocat
+```
+
 ### teamrig pr conflicts
 
 Run in a clone of the pull request's repository, it fetches the pull request's head (a fork's too) and the newest
 base from `origin`, then prints each file the two conflict on, without a merge: no local branch, file or index of the
 clone changes, and nothing is written to GitHub. Use it to tell an outside author which files to rebase, in a
-comment through `teamrig issue comment`, or to see what to redo before re-shipping a team pull request on the newest
+comment through `teamrig issue reply`, or to see what to redo before re-shipping a team pull request on the newest
 base under a new branch name. A folder whose `origin` is another repository, or not on GitHub, fails before any
 fetch. Exit 1 when it failed, 2 when refused, else 0, for a clean merge too.
 
@@ -1869,6 +1958,15 @@ Flags:
   to wake, so it is never counted in `WAKES`: its reopen starts at once through the idle pass's own reopen, judged and
   limited as the pass does, and `REOPENS <id>` says so, or `CLOSED: <id> was not woken: <why>` when the host has no room,
   an install is not settled or the idle pass is off; the next pass tries again each minute, or `teamrig open <id>`.
+  A line sent with neither `--wake now` nor `--wake-by` that names right-now work by id (an open, in-progress,
+  verifying or waiting task at p0 or more urgent, read as `teamrig show` reads the id) wakes as `--wake now`, since
+  such work never waits for a prompt, and a `NOTE` on stderr says so; where `--wake now` would be refused (a group
+  from a session that leads no one, another team from a member), the line posts with no wake and the `NOTE` says why.
+  A line to more than one receiver wakes only those of them who act on the work now: its owner, the owner of each
+  unfinished task it is planned after or waits on, and each session asked for one of its open decisions or approvals;
+  the rest read it at their next prompt, and when none of them acts on it the line wakes no one. A p0 named to `all`
+  so wakes one tab, not the whole team. A finished task wakes no one, so set a task's status before the line that says
+  it is done.
 - `--wake-by <time>`: wakes each receiver at that time instead (`HH:MM` on the team's clock, or `YYYY-MM-DD HH:MM`),
   and only if it has not seen the line by then: a receiver that read it, or was shown it at a prompt or a tool
   call's end, before the time is not woken. One idle at its prompt then is woken at its tab's next wake check, one busy in a
@@ -2235,7 +2333,7 @@ DRY RUN nothing is written
 TEAM front under shop: lead web (shop-web); sessions web (shop-web), ui (shop-ui)
 WOULD CREATE /home/you/.teamrig/teams/front/config.json:
 {
-  "configVersion": 8,
+  "configVersion": 9,
   "team": {
     "id": "front",
     "parent": "shop"
@@ -2693,10 +2791,11 @@ NOTE backend has an inbox line: lead took back the sessions you led (importer, s
 Service roles (`teamrig roles grant`, `revoke` and `list`) let a named session run a few teamrig commands for an outside
 service past every permission check, from its own tab only: the team's `serviceRoles` config [serviceRoles] maps
 each role to its holders and its commands. The commands come from teamrig's table, each a reviewed shape
-(`issue close`, `issue comment`, `queue ship`, `queue merge`); a name outside it fails the config load. `team` holds
-a role for every session only where each command checks its caller itself, as a ship or merge does (it runs only on
-the session's own task branch); the others name their sessions. `hook route-allow` lets the holder's own tab run them
-with no permission check, up to `prompts.serviceRoleDailyCap` closes and comments a role in 24 hours
+(`issue close`, `issue migrate`, `queue ship`, `queue merge`); a name outside it fails the config
+load. `team` holds a role for every session only where each command checks its caller itself, as a ship or merge
+does (it runs only on the session's own task branch); the others name their sessions. `hook route-allow` lets the
+holder's own tab run them with no permission check, up to `prompts.serviceRoleDailyCap` closes and migrate runs
+a role in 24 hours
 ([the service-role allow](hooks.md#before-a-shell-command-the-service-role-allow)). See also
 [the service-role guard](hooks.md#before-a-write-or-a-shell-command-the-service-role-guard).
 
@@ -2708,7 +2807,7 @@ config goes into the backups folder and `serviceRoles` is rewritten; the next ca
 `roles grant <role> --holder <id|name|team> [--commands <a,b>]` creates the role (it needs `--commands`), or adds
 the holder and any new commands to it. It refuses a grant that changes nothing. Its preview and its result add a
 `REACH` line for each command of the role, saying what it acts on: GitHub numbers issues and pull requests as one,
-so `issue close` and `issue comment` reach every pull request of `github.repos` too, an outside author's included.
+so `issue close` reaches every pull request of `github.repos` too, an outside author's included.
 
 Flags:
 
@@ -2719,15 +2818,14 @@ Flags:
 Example:
 
 ```sh
-teamrig roles grant github --holder backend --commands "issue close,issue comment" --yes
+teamrig roles grant github --holder backend --commands "issue close" --yes
 ```
 
 Output:
 
 ```text
-GRANTED github: held by backend; runs issue close, issue comment; the old config is at ~/.teamrig/teams/shop/backups/config.roles-grant.json
+GRANTED github: held by backend; runs issue close; the old config is at ~/.teamrig/teams/shop/backups/config.roles-grant.json
 REACH issue close: closes any issue or pull request of github.repos, an outside author's too (a pull request closes unmerged), posting its --comment first
-REACH issue comment: posts a comment on any issue or pull request of github.repos, an outside author's too
 ```
 
 ### teamrig roles revoke
@@ -2768,7 +2866,7 @@ teamrig roles list
 Output:
 
 ```text
-github: held by backend; runs issue close, issue comment
+github: held by backend; runs issue close
 ```
 
 ### teamrig rules
@@ -4288,7 +4386,7 @@ Output:
 
 ```text
 ARCHIVE events.jsonl (3 event(s), 548 B) as archive/events-000001.jsonl
-SNAPSHOT snapshot.jsonl: 3 event(s), 733 B, covering segments 1-1; folded from the history (3 event(s))
+SNAPSHOT snapshot.jsonl: 0 task line(s), 3 event(s), 791 B, covering segments 1-1; folded from the history (3 event(s))
 TASKS 2 kept (2 unchanged, 0 changed), 0 retired now, 0 before
 HISTORY 2 task(s) from 3 event(s): the working set holds every active one as the history does
 TAIL events.jsonl starts again with the rotation marker (67 B)
@@ -5021,17 +5119,19 @@ holds the MB it was counted at for `open.headroom.loadMinutes` (5), as free memo
 loads; the wait line names them (`..., 1500 MB held for 1 tab still loading, ...`). Free memory is read 3 times 1 s apart and the least read counts, since a step
 that just ended or started gives back or takes its memory in a burst. On a host with less than twice that RAM, half
 the host's RAM is enough. Until then it waits first in line (`...; host memory: 7000 MB free, 4096 MB held for them,
-6144 MB needed (4096 floor + 2048 for this step)`), and when its wait runs out it is refused with `host memory still
+6144 MB needed (4096 kept free for the host + 2048 for this step)`), and when its wait runs out it is refused with `host memory still
 short: ...`.
 
 The MB held for a step is its need, learned from its latest 20 ended runs under the same session and `--what` in the
-ledger: the most their process tree held, plus a quarter, or the median of what the host's free memory fell by while
+ledger, a commit id and a `re-run` word in the label set aside (7 to 40 hex characters with a digit and a letter, so a re-run at a new
+commit matches its earlier runs): the most their process tree held, plus a quarter (from 3 runs on, one run that held
+more than twice the next highest is set aside, so a single heavier run does not pin the need), or the median of what the host's free memory fell by while
 they ran (`startFreeMb` less `lowFreeMb`), whichever is more. With no such run, it learns from its session's runs of
 the same `--kind` and size (`--small` or not), never for kind `other`, which spans ships, checks and installs. A run
 that measured nothing teaches nothing. `--memory-mb <MB>` declares a need, held when it is at least the learned one. A
 step without `--small` holds at least `delivery.queue.heavyReserveMb` (2048); a small step with neither a learned nor
 a declared need holds `delivery.queue.smallReserveMb` (2048). The wait line says where a need came from:
-`(4096 floor + 7500 for this step, learned from 2 runs)`, `learned from 1 build run` when its kind's runs taught it,
+`(4096 kept free for the host + 7500 for this step, learned from 2 runs)`, `learned from 1 build run` when its kind's runs taught it,
 `declared with --memory-mb`.
 
 With `--small` (a spec run, a lint) the step shares the host with other small steps instead of taking the lock.
@@ -5059,7 +5159,9 @@ Then it runs the command in the shell at below-normal CPU priority (nice 10 on P
 inherits, so the owner's terminal and apps win the CPU and the step takes what they leave; a step started at a lower
 priority keeps it. A merge's or deploy's commands and checks run at that priority too. Its output streams as it
 comes, and it kills the command with every process it started
-after `delivery.queue.maxRunMinutes` (45), a `--small` step after `delivery.queue.smallMaxRunMinutes` (10): a
+after `delivery.queue.maxRunMinutes` (45), a `--small` step after `delivery.queue.smallMaxRunMinutes` (10). The
+time its share is set aside (`teamrig step-away` until `teamrig step-back` takes it back, a merge waiting on its
+pull request's checks) does not count, as the step holds nothing on the host meanwhile. A
 step that shares the host holds back every step waiting for the lock, so a hung one is cut short. The step ends, and frees the lock, only once that kill is done; on
 Windows the kill lists the host's processes again after each round and ends any process the step started while it was
 being killed. The step's start and end go to the delivery ledger,
@@ -5067,7 +5169,7 @@ being killed. The step's start and end go to the delivery ledger,
 it (`kit`), the kind of work it is (`kind`), the task it works for (`task`, when it names one) and that task's
 register priority as it queued (`priority`, 1 for `p1`; left out when the register lacks the task), when it began to
 wait (`queuedAt`), the host's free memory then (`queueFreeMb`), the ms its wait took by cause (`waits`: `lock`,
-`line`, `draining`, `memory`, `commit`, `freeze`, `check`, `session`, `heavyCap`, `cpu`, each one that took time) and, sampled every
+`line`, `draining`, `memory`, `commit`, `freeze`, `check`, `session`, `heavyCap`, `cpu`, `shipSlot`, each one that took time) and, sampled every
 `delivery.queue.memorySampleSeconds` (15; 0 samples nothing), the host's free memory as it started (`startFreeMb`),
 the most memory its process tree held at once (`peakTreeMb`) and the least free memory the host had (`lowFreeMb`),
 and `shared: true` for a small step. A step killed at its limit or as its shell ended also records the host's free
@@ -5087,13 +5189,20 @@ wait the checkout must still be at that commit or at the newest main, or at a co
 no file the tool runs at either commit changed: the tool; the files its roots file beside it names as data
 (`<tool>.roots.json`, such as `tools/ship/ship.roots.json` holding `{"roots": ["src/cli/main.ts", "package.json"]}`:
 a CLI it spawns by a joined path, the package files that set how its modules load), and that file itself; every file
-those reach through their relative imports, read from the code and never from a comment or a string; and the data
+those reach through their relative imports, read from the code and never from a comment or a string, except the
+`import('…')` calls of a module its roots file names under `"staticOnly"` (a CLI's command table, which loads a
+command's module only when that command runs: `{"roots": ["src/cli/main.ts", "src/cli/commands/step-aside.ts"],
+"staticOnly": ["src/cli/run.ts"]}` counts only the commands the ship runs); and the data
 files they open beside themselves (`new URL('./repos.json', import.meta.url)`). So a ship that waited while main moved
 on still runs when the tool's own code is the same. A closure that cannot be read whole (a file missing, an import
 outside the checkout, a roots file that is not that JSON or names a path outside the checkout, more than 2000 files) runs only at the queued commit or the newest main (`REFUSED the ship tool ... is not
 origin/main's current code in a checkout with no change: run git -C <checkout> fetch -q origin && git -C <checkout>
 checkout -q --detach origin/main, then queue the step again`), and the refusal of a changed tool names its changed
-files (`REFUSED the ship tool ... changed from <commit> while the step waited (tools/ship/repos.ts) and is not ...`). A git read of that checkout that got no answer (git did not start, was
+files (`REFUSED the ship tool ... changed from <commit> while the step waited (tools/ship/repos.ts) and is not ...`).
+The newest main is the remote's own head, asked with `git ls-remote` as the step starts, not the local origin/main
+alone: the code the tool runs must be the same as at that head, so a local ref that is only behind decides nothing. A
+head the checkout has not fetched, or a local origin/main that is neither that head nor behind it, is REFUSED with the
+same fetch and checkout to run. A remote that gives no head counts as a read that got no answer, below. A git read of that checkout that got no answer (git did not start, was
 stopped, or died starting, as under a burst of new processes) says nothing of the tool: as the step is queued it pins
 no commit, so only the newest main runs, and the check reads again up to 4 times, 15 s apart, before it is REFUSED
 naming the read and git's error (`REFUSED could not read the checkout of the ship tool ..., so the step did not run:
@@ -5101,7 +5210,13 @@ git rev-parse ... did not answer: ...`), never as a changed tool. Such a step is
 kind does not fit it: a run without `--merge` moves no main branch, so it is `--kind test` and runs beside other
 steps while a merge holds the ship slot (`REFUSED a ship tool run without --merge moves no main branch, so it takes
 no ship slot: queue it with --kind test, not --kind ship`), and a run that merges (`--merge`, or the `merge` form)
-is `--kind ship` or `merge`, never a kind that takes no slot.
+is `--kind ship` or `merge`, never a kind that takes no slot. The slot is held per repository, by its shared git
+folder, so every worktree of one repository shares it: for a ship tool run, the repository of the worktree it ships;
+for any other step, that of the folder it queued in. A ship of another repository runs beside it. A step whose
+repository is in doubt holds the slot of every repository: one queued outside any repository or by an older teamrig,
+and one whose words may move another (`-C <dir>`, `-R`/`--repo`, `--git-dir`, `--work-tree`, `cd`, `pushd`, a
+`NAME=value` word, a shell script in one word, or a path in another repository or none), or whose program is a path
+in another repository (`/repo/other/deploy.sh`; a program in no repository, such as `/usr/bin/git`, keeps the folder's), or that is one quoted shell line (`'git -C /repo/other push'`), whose words are not read.
 
 The lock is `host.lock` in the kit home, one for every team on the host, unless `delivery.queue.lockPath` names
 another. It lasts `delivery.queue.lockTtlMinutes` (150); a lock past that, or one whose process is gone, is
@@ -5195,10 +5310,12 @@ Flags:
   whole number from 1 to `lockTtlMinutes` less 10, so the step never outlives its lock; with `--small`, from 1 to
   `smallMaxRunMinutes` (a longer step runs without `--small`).
 - `--kind <kind>`: the kind of work the step is, recorded on its ledger records: `build`, `test`, `lint`, `push`,
-  `merge`, `deploy` or `other`. Default: read from the command. A `git push` pushes; `node --test`, a test runner or a
-  package's `test` script tests; a linter or a `lint` script lints; `tsc`, a bundler or a `build` or `typecheck`
-  script builds; anything else (`npm run check`, a script of the team's own) is `other`. Any other value is refused
-  (exit 64).
+  `merge`, `deploy`, `ship` or `other`. Default: read from the command. A `git push` pushes; `node --test`, a test
+  runner or a package's `test` script tests; a linter or a `lint` script lints; `tsc`, a bundler or a `build` or
+  `typecheck` script builds; anything else (`npm run check`, a script of the team's own) is `other`. Any other value
+  is refused (exit 64). A `ship`, `merge` or `deploy` step holds the host's one ship slot (T2727): while one does, a
+  second waits in its place as `shipSlot`, and other steps pass it. A ship or merge script is read as `other`, so
+  queue it with `--kind ship` or `--kind merge`, or it takes no slot and two ships still race to main.
 - `--task <T id>`: the register task the step works for, recorded on its ledger records with that task's register
   priority; default the first task id `--what` names (`--what "T12 specs"`), else, for a step that runs a configured
   ship tool (`delivery.repos.<name>.shipTool`), the task its worktree's branch names (`feat/t12-parser` is T12), so a
@@ -5271,7 +5388,8 @@ WITHDRAWN heavy: build api, waiting since 2030-01-08 11:58 IST: it stops at its 
 Run inside a queued step (`teamrig queue`) while the step only waits on a remote service, such as a merge waiting
 on its pull request's checks: it sets the step's host share aside, so the ship slot, its heavy place and the MB it
 held go to the next step in line, and the step goes on running. `teamrig step-back` takes the share back before the
-step does local work again. A share set aside is dropped when the step ends, or at the next step's look once the
+step does local work again. The time from stepping away until the share is taken back, its wait in line included, does
+not count against the step's `delivery.queue.maxRunMinutes`. A share set aside is dropped when the step ends, or at the next step's look once the
 step's process is gone. `KEPT` when the step holds the whole host (an exclusive step), or when a teamrig older than
 0.448.0 runs the queue (it would not drop the share), which it keeps; `NONE` when it holds nothing. Refused outside a queued step, which
 `$TEAMRIG_HOST_LOCK` names. Exit 0 set aside, 1 `KEPT` or `NONE`.
@@ -6078,7 +6196,12 @@ or near what it ends (`..., it ends near 18%.`). A plan with no such window, or 
 When the account lists reset grants in [budget.resets] (Claude Code tells a session nothing of them, so the team
 writes each down as it is granted and used), the day's view ends with what is left of each and when it expires
 (`Resets in stock:` then `  fable: 2 of 3 left, expire 2027-03-09 09:59 IST (in 116 days)`); a recount of a past
-day leaves them out.
+day leaves them out. A person with several Claude accounts lists the others there too, as
+`{ "kind": "account", "count": 2, "usedUtc": [...] }` with no `expiresUtc`: teamrig never switches accounts, the user
+signs in to the next one, and the meter reads that as a full reset. `usedUtc` holds the last switch to each; one is
+free again a week after its switch, so the line says how many are free now and when the next comes back
+(`  account: 1 of 2 left, the next back 2030-01-06 11:00 IST (in 4 days)`), and the lead plans the week on them as on
+a grant.
 The period, the meter log (below) and the extra-usage log ([teamrig budget extra](#teamrig-budget-extra)) are the
 account's: a team under a parent on its Claude
 account reads and writes them in the folder of the highest team above it reached through teams all on that account,
@@ -6982,8 +7105,8 @@ write and the count or dry run to show the owner first, and under `ask` (the def
 ### teamrig hook exec-guard
 
 Before a Bash or PowerShell call, refuses a `teamrig exec approve`, `refuse` or `escalate` run as anyone but the
-tab's own session, and any `exec` call while the installed teamrig client differs from what its build
-hashed. See [Hooks and permissions](hooks.md#before-a-shell-command-the-exec-guard).
+tab's own session, any `exec` call while the installed teamrig client differs from what its build
+hashed, and a raw `gh` write on a repository in `github.repos`, or one it cannot place. See [Hooks and permissions](hooks.md#before-a-shell-command-the-exec-guard).
 
 Flags: none.
 
@@ -7769,7 +7892,7 @@ teamrig help
 Output: the usage, starting:
 
 ```text
-teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION)
+teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION; every command takes --session <id|name> and --team <team>)
 ```
 
 ### teamrig version

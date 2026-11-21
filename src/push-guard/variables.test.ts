@@ -183,6 +183,54 @@ describe('resolveLiteralVariables: what resolves', () => {
       assert.equal(pushCommand(line), 'git push origin feat', line);
     }
   });
+
+  it('resolves the commands that run before a program that may set variables unseen', () => {
+    for (const line of [
+      'B=feat; git push origin $B; read B',
+      'B=feat; git push origin $B; eval "$X"',
+      'B=feat; git push origin $B && $T test',
+      'B=feat; node a && T=/p/bin/teamrig && git push origin $B; $T test',
+      'B=feat; git push origin $B | read B',
+      'B=feat; git push origin $B; while read B; do :; done',
+    ]) {
+      assert.equal(pushCommand(line), 'git push origin feat', line);
+    }
+  });
+
+  it('keeps every command from a program that may set variables unseen, or from the compound that may rerun it', () => {
+    for (const line of [
+      'B=feat; read B; git push origin $B',
+      'B=feat; $T test; git push origin $B',
+      'B=feat; true && $T test || git push origin $B',
+      'B=feat; while true; do git push origin $B; read B; done',
+      'B=feat; until false; do git push origin $B; $T; done',
+      'B=feat; while $T; do git push origin $B; done',
+      'B=feat; { git push origin $B; read B; }',
+      'B=feat; if true; then git push origin $B; else read B; fi',
+      'B=feat; f() { read B; }; f; git push origin $B',
+      'B=feat; read B; git push origin $B; }',
+    ]) {
+      assert.match(pushCommand(line), /~\$/, line);
+    }
+  });
+
+  it('resolves a redirection target to the one word bash writes to, and keeps a heredoc delimiter', () => {
+    const rows: readonly (readonly [line: string, expected: readonly string[]])[] = [
+      ["S=/s; cat > $S/x.cjs <<'EOF'\nbody\nEOF", ['>/s/x.cjs', '<<EOF']],
+      ['S=/s; echo hi >> "$S/a b.log" 2>&1', ['>>/s/a b.log', '2>&1']],
+      ['S=/s; wc -l < ${S}/in <<< $S', ['</s/in', '<<</s']],
+      // Unresolved: a value bash splits (an ambiguous redirect), a pattern, a name never bound, a binding after its use.
+      ['S="/a b"; echo hi > $S', ['>~$S']],
+      ['S=/s/*; echo hi > $S', ['>~$S']],
+      ['echo hi > $S/x', ['>~$S/x']],
+      ['echo hi > $S/x; S=/s', ['>~$S/x']],
+    ];
+    for (const [line, expected] of rows) {
+      const command = resolveLiteralVariables(parseShell(line, 'bash'), undefined).find((candidate) => candidate.redirections.length > 0);
+      const written = command?.redirections.map(({ operator, target }) => `${operator}${target === undefined ? '' : `${target.dynamic ? '~' : ''}${target.text}`}`);
+      assert.deepEqual(written, expected, line);
+    }
+  });
 });
 
 describe('resolveLiteralVariables: the home folder', () => {
@@ -240,8 +288,8 @@ describe('resolveLiteralVariables: the home folder', () => {
     ]) {
       assert.match(pushCommand(line, HOME), /^~/, line);
     }
-    // A program with an unknown piece stays the variable, as for `G=$C/git`; elsewhere the piece shows as HOME.
-    assert.equal(pushCommand('G=~/git; $G push'), '~$G push');
+    // An unknown piece shows as HOME and keeps its word dynamic, a program's too: a program only known when it runs.
+    assert.equal(pushCommand('G=~/git; $G push'), '~${HOME}/git push');
     assert.equal(pushCommand('G=~/r; git -C $G push'), 'git -C ~${HOME}/r push');
     assert.equal(pushCommand('$HOME/git push'), '~$HOME/git push');
   });
@@ -330,6 +378,7 @@ describe('resolveLiteralVariables: what stays unresolved', () => {
       'cat <<$D\nB=feat\n$D\ngit push origin $B',
       'cat <<EOF\nB=feat\ngit push origin $B',
       'B=feat; wait -p B; git push origin $B',
+      'B=feat; jobs -x read B; git push origin $B',
       'B=feat; trap "B=main" DEBUG; git push origin $B',
     ]) {
       assert.match(pushCommand(line), /~\$/, line);

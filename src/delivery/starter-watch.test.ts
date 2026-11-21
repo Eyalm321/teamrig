@@ -195,6 +195,24 @@ describe('starterWatch', () => {
     }
   });
 
+  it('lists its starters once more when the first listing failed or left them out, as a listing under load can (#908)', async () => {
+    for (const how of ['failed', 'short'] as const) {
+      const processes = tab().failLineages(1, how);
+      const manual = new ManualEvery();
+      const watching = await starterWatch(processes, { pid: SELF.pid, shells: [] }, manual.every).watch();
+      assert.deepEqual([watching.starters, processes.lineages, manual.periods], [[SHELL, CLAUDE], [SELF.pid, SELF.pid], [STARTER_CHECK_MS]], how);
+      processes.exit(SHELL.pid);
+      manual.tick();
+      assert.equal(watching.stop.aborted, true, `${how}: the watch still finds a starter ended`);
+    }
+  });
+
+  it('lists its starters at most twice, and then watches none, when every listing goes wrong (#908)', async () => {
+    const processes = tab().failLineages(2, 'failed');
+    const watching = await starterWatch(processes, { pid: SELF.pid, shells: [] }, new ManualEvery().every).watch();
+    assert.deepEqual([watching.starters, processes.lineages], [[], [SELF.pid, SELF.pid]]);
+  });
+
   it('stops checking once closed', async () => {
     const manual = new ManualEvery();
     const watching = await starterWatch(tab(), { pid: SELF.pid, shells: [] }, manual.every).watch();
@@ -393,14 +411,35 @@ describe('starterWatch on this machine', () => {
     writeFileSync(global, '');
     const identity = { GIT_AUTHOR_NAME: 'spec', GIT_AUTHOR_EMAIL: 'spec', GIT_COMMITTER_NAME: 'spec', GIT_COMMITTER_EMAIL: 'spec' };
     const env = { ...gitEnvironment(shellEnv ?? process.env), GIT_CONFIG_GLOBAL: global, GIT_CONFIG_NOSYSTEM: '1', ...identity };
-    assert.equal(spawnSync('git', ['init', '-q', repo], { env, stdio: 'ignore', windowsHide: true }).status, 0, 'git init');
+    const slashed = (path: string): string => path.replaceAll('\\', '/');
+    const decoyRepo = join(plugin.home, 'decoy');
+    for (const folder of [repo, decoyRepo]) {
+      assert.equal(spawnSync('git', ['init', '-q', folder], { env, stdio: 'ignore', windowsHide: true }).status, 0, `git init ${folder}`);
+    }
+    // Git for Windows links the hook shell to git by its `env` stub's arguments, the hook's path as git passes it
+    // (session-processes.ts, execStubOf), and only where one stub matches. The hook sits in a folder of its own named in
+    // full, as no other repo's hook is: a default `.git/hooks/pre-commit` is the same path for every repo, so any other
+    // hook running on the machine, as other specs' and sessions' commits do, would make that link ambiguous (T4173).
+    const hooks = join(plugin.home, 'hooks');
+    mkdirSync(hooks);
+    assert.equal(spawnSync('git', ['-C', repo, 'config', 'core.hooksPath', slashed(hooks)], { env, stdio: 'ignore', windowsHide: true }).status, 0, 'hooks path');
     // As husky's hook runner: a `#!/usr/bin/env sh` hook that runs the hook in `sh -e`, which runs teamrig. Git for
     // Windows runs it as `env <hook>`, and the hook shell's own starter is a second env that has ended at once.
-    const hook = join(repo, '.git', 'hooks', 'pre-commit');
+    const hook = join(hooks, 'pre-commit');
     const body = join(repo, '.git', 'pre-commit');
-    writeFileSync(hook, ['#!/usr/bin/env sh', `sh -e "${body.replaceAll('\\', '/')}"`, 'exit $?', ''].join('\n'));
+    writeFileSync(hook, ['#!/usr/bin/env sh', `sh -e "${slashed(body)}"`, 'exit $?', ''].join('\n'));
     writeFileSync(body, [`"${plugin.launcher}"`, 'exit $?', ''].join('\n'));
     chmodSync(hook, 0o755);
+    // Another repo's commit in its default-path hook while this one runs, as on a busy machine: it holds until released.
+    const started = join(plugin.home, 'decoy-started.txt');
+    const release = join(plugin.home, 'decoy-release.txt');
+    const decoyHook = join(decoyRepo, '.git', 'hooks', 'pre-commit');
+    const hold = `i=0; while [ ! -e "${slashed(release)}" ] && [ $i -lt 150 ]; do sleep 0.2; i=$((i+1)); done`;
+    writeFileSync(decoyHook, ['#!/usr/bin/env sh', `echo started > "${slashed(started)}"`, hold, 'exit 0', ''].join('\n'));
+    chmodSync(decoyHook, 0o755);
+    const decoy = spawn('git', ['-C', decoyRepo, 'commit', '-q', '--allow-empty', '-m', 'decoy'], { env, stdio: 'ignore', windowsHide: true });
+    const decoyEnded = new Promise<void>((resolve) => decoy.once('exit', () => resolve()));
+    assert.equal(await until(() => written(started), REAL_WAIT_MS), true, 'the other repo runs its hook');
     const git = spawn('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'spec'], { env, stdio: 'ignore', windowsHide: true });
     try {
       assert.equal(await until(() => written(plugin.ready), REAL_WAIT_MS), true, 'the CLI listed its starters');
@@ -411,6 +450,8 @@ describe('starterWatch on this machine', () => {
       assert.equal(readFileSync(plugin.ended, 'utf8'), String(target));
     } finally {
       git.kill();
+      writeFileSync(release, '');
+      await decoyEnded;
       await endWatcher(plugin.ready, plugin.ended);
     }
   });

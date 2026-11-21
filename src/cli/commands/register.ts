@@ -21,7 +21,7 @@ import { formatTaskLines, taskLinesOf } from '../../inbox/task-lines.ts';
 import { WakeAsks } from '../../wake/asks.ts';
 import { teamDayStartAt } from '../../wake/day-start.ts';
 import { waitAnswerersOf } from '../../register/approval.ts';
-import { byFlagKind, checkTasks, leaderWaitFlags, noIssueFlags, peerWaitFlags, runFileFlags, untriagedFlags } from '../../register/check.ts';
+import { byFlagKind, checkTasks, leaderWaitFlags, noIssueFlags, peerWaitFlags, runFileFlags, unknownGoalFlags, untriagedFlags } from '../../register/check.ts';
 import { currentWeekOf } from '../../register/week.ts';
 import type { ApprovalVerdict, TaskFields } from '../../register/events.ts';
 import { fitLines, leftOfWeek, overLimitFlag, weekFit, type WeekFit } from '../../register/fit.ts';
@@ -38,7 +38,7 @@ import { overSizeFlags } from '../../register/over-size.ts';
 import type { AddInput, AskInput, StatusInput, Verdict } from '../../register/policy.ts';
 import type { GoalTagsReader, Register, RotationOutcome, WriteResult } from '../../register/register.ts';
 import { ACTIVE_STATUSES, type TaskStatus } from '../../register/model.ts';
-import type { RegisterSnapshot, RetiredTasks } from '../../register/snapshot.ts';
+import { windowOpensAfter, type RegisterSnapshot } from '../../register/snapshot.ts';
 import { readStopgapTags, stopgapFlags, stopgapTags } from '../../register/stopgap.ts';
 import { dueStartHolds, dueVerifyHold, heldStart, heldStartNotice, metStartNotice, startHolds, verifyQueue, watchQueue, type DueVerify } from '../../register/verify.ts';
 import { readAs, TaskTree, type TaskElsewhere } from '../../register/tree.ts';
@@ -57,9 +57,11 @@ import { addInputOf, callerOf, changesOf, criticalOf, deadlineOf, dropApprovalOf
 import { findTeam, openKit, pastOrPresentIdOf, projectFolder, sessionIdOf, teamZone } from '../kit.ts';
 import { checkLines, listLines, SHORT_TITLE_CHARS, waitingOnLines, type CheckReport, type CheckSection, type LeadDecisions, type TaskRow } from '../reports.ts';
 import { fiveHourWarnings } from '../five-hour-check.ts';
+import { transcriptsIfKept } from '../host.ts';
 import { logSizeWarnings } from '../log-size-check.ts';
 import { githubLateWarnings } from '../github-late-check.ts';
 import { promptHoldWarnings } from '../prompt-hold-page.ts';
+import { restartStalledWarnings } from '../restart-stalled-check.ts';
 import { resetExpiryWarnings } from '../reset-expiry-check.ts';
 import { idlePassWarnings } from '../idle-pass-check.ts';
 import { restoreLauncherWarnings } from '../launcher-record-check.ts';
@@ -84,7 +86,7 @@ import { markBoundary } from './refresh.ts';
 import { markKeepWorkingAsk } from './keep-working.ts';
 import { markLastTaskAsk } from './last-task-ask.ts';
 import { readSpentClasses } from '../class-share.ts';
-import { openTeam, postNamed, teamOf, tellAnswer, tellAssigned, tellLine, type Team } from './register-team.ts';
+import { openTeam, postNamed, teamOf, tellAnswer, tellAssigned, tellLine, wakeWaitedOn, type Team } from './register-team.ts';
 import { askTeam, treeCallerOf } from './team-ask.ts';
 
 /** What a time the caller types is read against: this moment and the zone of the caller's own team. */
@@ -227,7 +229,7 @@ async function addHere(args: ParsedArgs, runtime: CliRuntime, caller: string): P
   const ids = addInputIds(team, issue.value.kind === 'local' ? { ...input, ref: issue.value.ref } : input);
   const end =
     issue.value.kind === 'open'
-      ? await addWithIssue((line) => runtime.out.stdout(line), team.register, addIssueHost(runtime, scanner, team.config.github.stamp), by, ids, issue.value.draft)
+      ? await addWithIssue((line) => runtime.out.stdout(line), team.register, await addIssueHost(runtime, scanner, team.config.github.stamp), by, ids, issue.value.draft)
       : { kind: 'written' as const, verdict: await team.register.add(by, ids), ref: undefined };
   if (end.kind === 'stopped') {
     return end.code;
@@ -239,7 +241,7 @@ async function addHere(args: ParsedArgs, runtime: CliRuntime, caller: string): P
       runtime.out.stdout(`OPENED ${end.verdict.value.task.id} ${end.ref}`);
     }
   }
-  await tellNewOwner(runtime, team, by, end.verdict);
+  await wakeWaitedOn(runtime, team, by, end.verdict, await tellNewOwner(runtime, team, by, end.verdict));
   return code;
 }
 
@@ -514,6 +516,10 @@ async function runOf(flags: Flags, runtime: CliRuntime): Promise<Pick<StatusInpu
 
 export async function set(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const id = taskIdOf(onePositional(args, 'id'));
+  // A note alone is progress, not a status: `update --note` keeps the answer a restated `set` would clear (#701).
+  if (!args.flags.has('status') && args.flags.has('note')) {
+    throw new UsageError(`--status is required; a note alone goes through ${KIT_NAME} update ${id} --note "..", which keeps the status and any answer given (a set restating the same waits asks again)`);
+  }
   const caller = callerOf(args.flags, runtime.env);
   const team = await openTeam(runtime, 'write');
   const typed = setInputOf(args.flags, typedTimes(runtime, team.zone));
@@ -559,7 +565,7 @@ export async function set(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCo
   if (verdict.ok && input.status === 'waiting') {
     await markKeepWorkingAsk(runtime, paths, verdict.value);
   }
-  noteRegisterOnly(runtime, team, by, input.note, verdict, told);
+  noteRegisterOnly(runtime, team, by, input.note, verdict, [...told, ...(await wakeWaitedOn(runtime, team, by, verdict, told))]);
   return exit;
 }
 
@@ -577,7 +583,8 @@ async function setAsking(runtime: CliRuntime, team: Team, by: string, id: string
   const exit = report(runtime, verdict, 'SET', team);
   const assigned = verdict.ok && verdict.value.asked.owner !== by && (await tellAssigned(runtime, team, by, verdict.value.asked)) ? [verdict.value.asked.owner] : [];
   const told = await tellLeadersOfWaits(runtime, team, by, verdict);
-  noteRegisterOnly(runtime, team, by, input.note, verdict, [...assigned, ...told]);
+  const lined = [...assigned, ...told];
+  noteRegisterOnly(runtime, team, by, input.note, verdict, [...lined, ...(await wakeWaitedOn(runtime, team, by, verdict, lined))]);
   if (verdict.ok) {
     await markKeepWorkingAsk(runtime, team.paths, verdict.value);
   }
@@ -751,7 +758,8 @@ export async function update(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
   const sizeBase = typeof changes.size === 'number' ? await readSizeBase(runtime, team.paths, team.config.sessions, id, runtime.clock.now()) : undefined;
   const verdict = await team.register.update(by, id, changeIds(team.roster, changes), args.flags.get('note'), sizeBase);
   const code = report(runtime, verdict, 'UPDATED', team);
-  noteRegisterOnly(runtime, team, by, args.flags.get('note'), verdict, await tellNewOwner(runtime, team, by, verdict));
+  const told = await tellNewOwner(runtime, team, by, verdict);
+  noteRegisterOnly(runtime, team, by, args.flags.get('note'), verdict, [...told, ...(await wakeWaitedOn(runtime, team, by, verdict, told))]);
   return code;
 }
 
@@ -835,17 +843,17 @@ export async function readRegisters(args: ParsedArgs, runtime: CliRuntime): Prom
 }
 
 /**
- * True when the working set may lack a task a command shows: only then does it read the whole history.
- * `retired` is what a compaction left in the archive (snapshot.ts).
+ * True when the working set may lack what a command shows: a task a compaction retired (`working.retired`), or a
+ * task's events from before the snapshot's event window (`working.window`, snapshot.ts). Only then does the command
+ * read the whole history.
  */
-type HistoryNeed = (retired: RetiredTasks, working: RegisterSnapshot) => boolean;
+type HistoryNeed = (working: RegisterSnapshot) => boolean;
 
 /** Each register as the command needs it, each naming its damaged lines once, as read. */
 async function settle(runtime: CliRuntime, { own, teams }: RollUp, needsHistory: HistoryNeed): Promise<RollUp> {
   const settled: RolledTeam[] = [];
   for (const rolled of teams) {
-    const { retired } = rolled.snapshot;
-    const snapshot = retired !== null && needsHistory(retired, rolled.snapshot) ? await rolled.history() : rolled.snapshot;
+    const snapshot = needsHistory(rolled.snapshot) ? await rolled.history() : rolled.snapshot;
     warnDamage(runtime, snapshot, rolled.paths.events);
     settled.push({ ...rolled, snapshot });
   }
@@ -861,12 +869,25 @@ export function taskTreeOf({ snapshot, config, elsewhere, ranking }: Pick<Rolled
 
 /** A filter that selects finished tasks, the only ones a compaction retires. */
 function selectsFinished(filter: ListFilter): HistoryNeed {
-  return () => (filter.statuses ?? ACTIVE_STATUSES).some((status) => !ACTIVE_STATUSES.includes(status));
+  return ({ retired }) => retired !== null && (filter.statuses ?? ACTIVE_STATUSES).some((status) => !ACTIVE_STATUSES.includes(status));
 }
 
 /** A week plan no newer than the newest one among the retired tasks may name some of them. */
 function weekMayBeRetired(week: string): HistoryNeed {
-  return (retired) => retired.lastWeek !== null && week <= retired.lastWeek;
+  return ({ retired }) => retired !== null && retired.lastWeek !== null && week <= retired.lastWeek;
+}
+
+/**
+ * `show` prints a task's history and counts its events, so it reads the whole history for a task the working set
+ * lacks (retired) or one created before the snapshot's event window, whose older events only the history holds. That
+ * second case also covers every task whose task line left its description out (T4781): a snapshot holds a task as a
+ * line only once its create event is before the window, so `show` prints such a description from the history.
+ */
+function showNeedsHistory(id: string): HistoryNeed {
+  return (snapshot) => {
+    const task = snapshot.state.tasks.get(id);
+    return task === undefined ? snapshot.retired !== null : windowOpensAfter(snapshot, Date.parse(task.createdAt));
+  };
 }
 
 /** The filter with `list`'s switches read for one team, as `--untriaged` asks for that team's own leaders. */
@@ -926,7 +947,7 @@ export async function list(args: ParsedArgs, runtime: CliRuntime): Promise<ExitC
  */
 export async function show(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const id = taskIdOf(onePositional(args, 'id'));
-  const { own } = await settle(runtime, await ownRegister(runtime), (_retired, working) => !working.state.tasks.has(id));
+  const { own } = await settle(runtime, await ownRegister(runtime), showNeedsHistory(id));
   const { snapshot } = own;
   const task = snapshot.state.tasks.get(id);
   if (task === undefined) {
@@ -1019,7 +1040,8 @@ function weekFor(args: ParsedArgs, snapshot: RegisterSnapshot, now: Date, zone: 
  * covers every team read). A wait on another register's task of the tree is judged against that task, and one on the
  * parent team's lead, `above`, is the lead's own approver's (T1140). `runFiles` is what each card's hand step file
  * hashes to now (RUN-CHANGED). `goals` are the register's own team's goal records, whose slices past their ship day
- * with no proof raise SLICE-LATE (T2203).
+ * with no proof raise SLICE-LATE (T2203); `goalTags` are the goal records of the team and the teams above it
+ * (UNKNOWN-GOAL).
  */
 function checkRegister(
   { snapshot, config, elsewhere, above, ranking }: Pick<RolledTeam, 'snapshot' | 'config' | 'elsewhere' | 'above' | 'ranking'>,
@@ -1029,6 +1051,7 @@ function checkRegister(
   week: string | null,
   leftPct: number | undefined,
   runFiles: RunFiles,
+  goalTags: ReadonlySet<string>,
   team?: string,
 ): CheckSection {
   const tasks = [...snapshot.state.tasks.values()];
@@ -1045,6 +1068,7 @@ function checkRegister(
     ...leaderWaitFlags(tree.inPlanOrder(tasks), leads, config.focus, now.getTime()),
     ...untriagedFlags(tasks, leads),
     ...noIssueFlags(tasks, config.github.issueAtAdd),
+    ...unknownGoalFlags(tasks, goalTags),
     ...(progress === undefined ? [] : [progress]),
   ];
   return { team, flags: flags.sort(byFlagKind), tree };
@@ -1101,8 +1125,9 @@ function withOverLimit(sections: readonly CheckSection[], fit: WeekFit): CheckSe
  * each GitHub thread past its answer target (GH-LATE, src/cli/github-late-check.ts), each part of this machine that
  * starts the restore and starts a file gone or something install did not set up (RESTORE-DEAD, RESTORE-STRAY,
  * src/cli/launcher-record-check.ts), each of its tabs held on a permission prompt (PROMPT-HELD,
- * src/cli/prompt-hold-page.ts) and each file of its state or inbox near the task pane's read limit (LOG-SIZE,
- * src/cli/log-size-check.ts) are the unowned
+ * src/cli/prompt-hold-page.ts), each file of its state or inbox near the task pane's read limit (LOG-SIZE,
+ * src/cli/log-size-check.ts) and each session left ready with no restart coming (RESTART-STALLED,
+ * src/cli/restart-stalled-check.ts) are the unowned
  * warnings, which go to the lead (src/cli/unowned.ts, T951).
  */
 export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promise<CheckReport> {
@@ -1119,7 +1144,7 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
   // retires (limits.ts); a stopgap tag may name a finished task it retired, so only a tag the own team's working set
   // lacks makes it read that team's whole history.
   const working = read.own.snapshot;
-  const { own, teams } = await settle(runtime, read, (_retired, snapshot) => snapshot === working && tags.some((tag) => !snapshot.state.tasks.has(tag.id)));
+  const { own, teams } = await settle(runtime, read, (snapshot) => snapshot.retired !== null && snapshot === working && tags.some((tag) => !snapshot.state.tasks.has(tag.id)));
   const zone = teamZone(own.config, runtime);
   const week = weekFor(args, own.snapshot, now, zone);
   const bursts = await readBursts(runtime, own.paths, own.config.budget, now.getTime());
@@ -1133,8 +1158,9 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
     teams.flatMap((rolled) => [...rolled.snapshot.state.tasks.values()]),
   );
   const goals = await Promise.all(teams.map(async (rolled) => ownGoalsOf(runtime, rolled)));
+  const goalTags = await Promise.all(teams.map((rolled) => new KitTreeGoals(runtime, rolled.paths, rolled.config).recorded()));
   const checked = teams.map((rolled, index) => {
-    const section = checkRegister(rolled, goals[index] ?? new Map(), now, teamZone(rolled.config, runtime), week, leftPct, runFiles, tree ? rolled.team : undefined);
+    const section = checkRegister(rolled, goals[index] ?? new Map(), now, teamZone(rolled.config, runtime), week, leftPct, runFiles, goalTags[index] ?? new Set<string>(), tree ? rolled.team : undefined);
     const ownFlags =
       rolled.team === own.team
         ? [...stopgapFlags(tags, rolled.snapshot.state.tasks, zone), ...(spent === undefined ? [] : overSizeFlags(rolled.snapshot.state.tasks.values(), spent, overSizeMultiple))]
@@ -1163,12 +1189,13 @@ export async function checkReport(args: ParsedArgs, runtime: CliRuntime): Promis
   const off = await secretGuardOffWarnings(runtime.files, own.config.secretGuard, settings);
   const fiveHour = await fiveHourWarnings(runtime.files, snapshotDirOf(own.config.budget, own.paths), own.config.budget, zone, now.getTime());
   const resets = resetExpiryWarnings(own.config.budget, zone, now.getTime());
-  const late = await githubLateWarnings(runtime.files, own.paths.githubClocks, zone, now.getTime());
+  const late = await githubLateWarnings(runtime.files, { clocks: own.paths.githubClocks, notices: own.paths.unownedNotices }, zone, now.getTime());
   const restore = await restoreLauncherWarnings(runtime.files, resolveKitHome(runtime.env, runtime.userHome));
   const holds = await promptHoldWarnings(runtime, own.paths, zone, new SecretScanner(own.config.register.secretPatterns), now.getTime());
   const logs = await logSizeWarnings(runtime.files, own.paths);
+  const stalled = await restartStalledWarnings(transcriptsIfKept(runtime), runtime.files,runtime.sessionProcesses, own.paths, own.config, zone, now.getTime());
   const lead = own.config.roles.lead;
-  return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: [...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs], lead, decisions };
+  return { sections, scope, skills, skillsDir: own.paths.skills, hires, unowned: [...unowned, ...idle, ...hooks, ...off, ...fiveHour, ...resets, ...restore, ...late, ...holds, ...logs, ...stalled], lead, decisions };
 }
 
 /**

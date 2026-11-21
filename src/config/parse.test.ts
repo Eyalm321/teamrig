@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_BUDGET, DEFAULT_BURST, DEFAULT_RUSH, DEFAULT_CHECK_TIMEOUT_SECONDS, DEFAULT_FREEZES, DEFAULT_COMMITS, DEFAULT_FOCUS, DEFAULT_QUEUE, DEFAULT_HIRING, DEFAULT_IDLE, DEFAULT_OPEN, DEFAULT_PERMISSIONS, DEFAULT_REFRESH, DEFAULT_REGISTER, DEFAULT_STATUS_LINE, DEFAULT_WAKE, DEFAULT_STABLE_PERIODS, DEFAULT_MEETING, DEFAULT_BRANCHES } from './defaults.ts';
+import { DEFAULT_BUDGET, DEFAULT_BURST, DEFAULT_RUSH, DEFAULT_CHECK_TIMEOUT_SECONDS, DEFAULT_FREEZES, DEFAULT_COMMITS, DEFAULT_FOCUS, DEFAULT_ISSUE_FIELDS, DEFAULT_QUEUE, DEFAULT_HIRING, DEFAULT_IDLE, DEFAULT_OPEN, DEFAULT_PERMISSIONS, DEFAULT_REFRESH, DEFAULT_REGISTER, DEFAULT_STATUS_LINE, DEFAULT_WAKE, DEFAULT_STABLE_PERIODS, DEFAULT_MEETING, DEFAULT_BRANCHES } from './defaults.ts';
 import { HIRE_CAP_DROPPED, IDLE_RETIRE_DROPPED } from './migrate.ts';
 import { GITHUB_LABEL_MAX_LENGTH } from './limits.ts';
 import { parseConfig } from './parse.ts';
@@ -28,7 +28,7 @@ describe('parseConfig', () => {
     assert.deepEqual(config.needsYou, { enabled: true, kinds: ['permission', 'question', 'elicitation', 'decision'], osToast: false });
     assert.deepEqual(config.meetingNotices, { enabled: true, beforeMinutes: 10, atStart: true, missedAfterMinutes: 5, osToast: true, tabToast: true, leadInbox: true });
     assert.deepEqual(config.tests, { maxFailureChars: 4000 });
-    assert.deepEqual(config.github, { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35, activity: true, followMax: 20, stamp: true });
+    assert.deepEqual(config.github, { repos: [], owners: {}, areaOwners: {}, sessions: {}, closedDays: 14, probeSeconds: 60, statusPush: false, acceptLabel: 'teamrig', similarThreshold: 0.35, activity: true, followMax: 20, stamp: true, fields: DEFAULT_ISSUE_FIELDS });
     assert.deepEqual(config.register, DEFAULT_REGISTER);
     assert.deepEqual(config.budget, DEFAULT_BUDGET);
     assert.deepEqual(config.delivery, {
@@ -423,6 +423,45 @@ describe('parseConfig', () => {
     }
   });
 
+  it("reads github.fields: the push switch, a field name or an empty one that writes none, each priority level's options over the default's, and each kind's type list (T3406)", () => {
+    assert.deepEqual(parseConfig(ROSTER).config.github.fields, {
+      push: true,
+      priority: 'Priority',
+      priorityOptions: { p0: ['P0', 'Urgent'], p1: ['P1', 'Urgent'], p2: ['P2', 'High'], p3: ['P3', 'Medium'], p4: ['P4', 'Low'], p5: ['P5', 'Low'] },
+      startDate: 'Start date',
+      targetDate: 'Target date',
+      score: 'Score',
+      types: { task: ['Task'], bug: ['Bug'], goal: ['Feature', 'Goal'], design: ['Design'] },
+    });
+    const { config, issues } = parseConfig({ ...ROSTER, github: { fields: { push: false, score: '', priority: 'Urgency', priorityOptions: { p2: ['Normal'], p6: ['Lowest'] }, types: { goal: ['Epic'], design: [] } } } });
+    assert.deepEqual(issues, []);
+    assert.deepEqual(config.github.fields, {
+      push: false,
+      priority: 'Urgency',
+      priorityOptions: { ...DEFAULT_ISSUE_FIELDS.priorityOptions, p2: ['Normal'], p6: ['Lowest'] },
+      startDate: 'Start date',
+      targetDate: 'Target date',
+      score: '',
+      types: { task: ['Task'], bug: ['Bug'], goal: ['Epic'], design: [] },
+    });
+    const wrongs: ReadonlyArray<readonly [unknown, string]> = [
+      [{ push: 'yes' }, 'github.fields.push'],
+      [{ priority: 'a\u0007b' }, 'github.fields.priority'],
+      [{ startDate: 'x'.repeat(101) }, 'github.fields.startDate'],
+      [{ targetDate: 3 }, 'github.fields.targetDate'],
+      [{ types: { bug: ['A', 'B', 'C', 'D', 'E', 'F'] } }, 'github.fields.types.bug'],
+      [{ types: { task: ['Task', 'line\nbreak'] } }, 'github.fields.types.task[1]'],
+      [{ types: 'Task' }, 'github.fields.types'],
+      [{ priorityOptions: { high: ['High'] } }, 'github.fields.priorityOptions.high'],
+      [{ priorityOptions: { p1: 'Urgent' } }, 'github.fields.priorityOptions.p1'],
+    ];
+    for (const [fields, path] of wrongs) {
+      const parsed = parseConfig({ ...ROSTER, github: { fields } });
+      assert.deepEqual(paths(parsed.issues), [path], path);
+      assert.deepEqual(parsed.config.github.fields, DEFAULT_ISSUE_FIELDS, path);
+    }
+  });
+
   it('reads github repos and owners in lowercase, closedDays within 1 to 365 and probeSeconds 0 or within 30 to 3600', () => {
     const { config, issues } = parseConfig({
       ...ROSTER,
@@ -437,6 +476,7 @@ describe('parseConfig', () => {
       closedDays: 365,
       probeSeconds: 0,
       statusPush: false,
+      fields: DEFAULT_ISSUE_FIELDS,
       acceptLabel: 'teamrig',
       similarThreshold: 0.35,
       activity: true,
@@ -540,14 +580,15 @@ describe('parseConfig', () => {
   });
 
   it('reads a service role whose commands come from the table and whose holders are sessions of the team (T2984)', () => {
-    const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close', 'issue comment'] } } });
+    const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close'] } } });
     assert.deepEqual(issues, []);
-    assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close', 'issue comment'] } });
+    assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close'] } });
   });
 
   it('fails the load on an unknown command, a holder off the roster or a misspelt key, and leaves the role out (T2984 C3)', () => {
     const cases: readonly [unknown, readonly string[]][] = [
       [{ holders: ['bravo'], commands: ['issue delete'] }, ['serviceRoles.github.commands[0]']],
+      [{ holders: ['bravo'], commands: ['issue close', 'issue comment'] }, ['serviceRoles.github.commands[1]']],
       [{ holders: ['bravo'], commands: ['issue *'] }, ['serviceRoles.github.commands[0]']],
       [{ holders: ['bravo'], commands: ['issue close', 'issue close'] }, ['serviceRoles.github.commands[1]']],
       [{ holders: ['bravo'], commands: [] }, ['serviceRoles.github.commands']],
@@ -571,8 +612,8 @@ describe('parseConfig', () => {
     const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'queue merge'] } } });
     assert.deepEqual(issues, []);
     assert.deepEqual(config.serviceRoles, { ship: { holders: 'team', commands: ['queue ship', 'queue merge'] } });
-    const mixed = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'issue comment'] } } });
-    assert.match(mixed.issues[0]?.message ?? '', /every session issue comment,/);
+    const mixed = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'issue close'] } } });
+    assert.match(mixed.issues[0]?.message ?? '', /every session issue close,/);
   });
 
   it('refuses "team" holders for a command that acts as whoever runs it (T2984 C4)', () => {
@@ -2066,10 +2107,19 @@ describe('parseConfig budget', () => {
     assert.deepEqual(parseConfig({ ...ROSTER, budget: { resets: [] } }).config.budget.resets, []);
   });
 
+  it('reads the other accounts as a stock with no expiry (T939)', () => {
+    const accounts = { kind: 'account', count: 2, usedUtc: ['2026-11-12 10:00'], note: 'two more seats' };
+    const { config, issues } = parseConfig({ ...ROSTER, budget: { resets: [accounts, { kind: 'account', count: 1 }] } });
+    assert.deepEqual(issues, []);
+    assert.deepEqual(config.budget.resets, [accounts, { kind: 'account', count: 1, usedUtc: [] }]);
+  });
+
   it('drops a reset grant it cannot read whole and keeps the others (T2450)', () => {
     const good = { kind: 'full', count: 1, expiresUtc: '2026-12-10 22:00', usedUtc: [] };
     for (const [grant, path, message] of [
-      [{ kind: 'opus', count: 1, expiresUtc: '2026-12-10 22:00' }, 'budget.resets[0].kind', 'expected one of fable, full (got "opus")'],
+      [{ kind: 'opus', count: 1, expiresUtc: '2026-12-10 22:00' }, 'budget.resets[0].kind', 'expected one of fable, full, account (got "opus")'],
+      [{ kind: 'account', count: 2, expiresUtc: '2026-12-10 22:00' }, 'budget.resets[0].expiresUtc', 'is not for kind account'],
+      [{ kind: 'account', count: 1, usedUtc: ['2026-11-12 10:00', '2026-11-13 10:00'] }, 'budget.resets[0].usedUtc', 'lists 2 uses of a grant of 1'],
       [{ kind: 'full', expiresUtc: '2026-12-10 22:00' }, 'budget.resets[0].count', 'is required'],
       [{ kind: 'full', count: 0, expiresUtc: '2026-12-10 22:00' }, 'budget.resets[0].count', 'expected an integer from 1 to 20, got 0'],
       [{ kind: 'full', count: 1, expiresUtc: '2026-02-30 10:00' }, 'budget.resets[0].expiresUtc', 'expected a UTC time as YYYY-MM-DD HH:MM'],

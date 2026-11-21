@@ -6,14 +6,20 @@ import { join } from 'node:path';
 import {
   assigneeReadArgs,
   blockedByAddArgs,
+  fieldValueSetArgs,
+  issueTypeSetArgs,
+  isFieldValueSet,
+  isIssueTypeSet,
   COMMENTS_PAGE,
   commentsReadArgs,
   GhOutputCapError,
   GhRefusedError,
   isAllowedGh,
+  isAreaLabelCreate,
   isAssigneeRead,
   isCommentsRead,
   isIssueAssign,
+  isIssueAssigneeRead,
   isIssueBodyEdit,
   isIssueClose,
   isIssueComment,
@@ -33,6 +39,7 @@ import {
   isReviewRead,
   isWatchProbe,
   issueAssignArgs,
+  issueAssigneeReadArgs,
   issueBodyArgs,
   issueCloseArgs,
   issueCommentArgs,
@@ -57,10 +64,12 @@ import {
   WATCH_PATHS,
   watchProbeArgs,
   userReadArgs,
+  isViewerRead,
+  viewerReadArgs,
   type IssueNumber,
 } from './gh.ts';
 import type { IssueDraft, LabelSpec } from '../issues/host.ts';
-import { MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
+import { areaLabelSpec, MANAGED_LABEL_SPECS } from '../issues/managed-labels.ts';
 import { CLOSED_ISSUES_QUERY, closedPageArgs, OPEN_ISSUES_QUERY, openPageArgs, PULL_REQUESTS_QUERY, pullPageArgs } from './queries.ts';
 
 const DIR = mkdtempSync(join(tmpdir(), 'teamrig-gh-'));
@@ -399,6 +408,37 @@ describe('the managed label create (T2999, T3096)', () => {
   });
 });
 
+describe('the area label create (T4053)', () => {
+  const AREA = areaLabelSpec('area:cli');
+
+  it('takes the create of a label name a host takes, in the one area colour and description', () => {
+    for (const name of ['area:cli', 'Area: The Pane', 'a'.repeat(50)]) {
+      const args = labelCreateArgs('acme/web', areaLabelSpec(name));
+      assert.ok(isAreaLabelCreate(args) && isAllowedGh(args), name);
+    }
+  });
+
+  it('refuses another colour or description, a name no host takes, and any other method, field or path', () => {
+    const good = labelCreateArgs('acme/web', AREA);
+    for (const args of [
+      labelCreateArgs('acme/web', { ...AREA, color: '000000' }),
+      labelCreateArgs('acme/web', { ...AREA, description: 'x' }),
+      labelCreateArgs('acme/web', areaLabelSpec('')),
+      labelCreateArgs('acme/web', areaLabelSpec(' area:cli')),
+      labelCreateArgs('acme/web', areaLabelSpec('area:\ncli')),
+      labelCreateArgs('acme/web', areaLabelSpec('a'.repeat(51))),
+      labelCreateArgs('acme/..', AREA),
+      good.map((arg) => (arg === 'POST' ? 'PATCH' : arg)),
+      good.map((arg) => (arg === '-f' ? '-F' : arg)),
+      [...good, '-f', 'new_name=x'],
+      good.map((arg, at) => (at === 1 ? 'repos/acme/web/labels/area%3Acli' : arg)),
+    ]) {
+      assert.equal(isAreaLabelCreate(args), false, args.slice(1).join(' '));
+      assert.equal(isAllowedGh(args), false, args.slice(1).join(' '));
+    }
+  });
+});
+
 describe("the repository's label file: its read, and the create of a label it names", () => {
   const AREA: LabelSpec = { name: 'area:cli', color: '1d76db', description: 'Area: the command line' };
   const FILE = JSON.stringify({ labels: [AREA] });
@@ -475,10 +515,30 @@ describe('the assignee calls (T2999)', () => {
       ['api', 'users/octo--cat'],
       ['api', 'users/../user'],
       ['api', 'users/octocat?per_page=1'],
-      ['api', 'user'],
       ['api', '/users/octocat'],
     ]) {
       assert.equal(isUserRead(args), false, args.slice(1).join(' '));
+      assert.equal(isAllowedGh(args), false, args.slice(1).join(' '));
+    }
+    assert.equal(isUserRead(['api', 'user']), false);
+  });
+
+  it('takes the read of the user the token belongs to, and refuses one with a method, a field or a path past it (T4581)', () => {
+    assert.deepEqual(viewerReadArgs(), ['api', 'user']);
+    assert.ok(isViewerRead(viewerReadArgs()) && isAllowedGh(viewerReadArgs()));
+    for (const args of [
+      ['api', 'user', '-X', 'GET'],
+      ['api', 'user', '-X', 'PATCH', '-f', 'name=x'],
+      ['api', 'user', '--jq', '.email'],
+      ['api', 'user/emails'],
+      ['api', 'user/keys'],
+      ['api', 'user/repos'],
+      ['api', '/user'],
+      ['api', 'user?per_page=1'],
+      ['api', 'users'],
+      ['api'],
+    ]) {
+      assert.equal(isViewerRead(args), false, args.slice(1).join(' '));
       assert.equal(isAllowedGh(args), false, args.slice(1).join(' '));
     }
   });
@@ -536,6 +596,26 @@ describe('the assignee calls (T2999)', () => {
       ['api', 'repos/../web/assignees/octocat'],
     ]) {
       assert.equal(isAssigneeRead(args), false, args.slice(1).join(' '));
+    }
+  });
+
+  it('takes the one-issue assignee read issueAssigneeReadArgs builds, and refuses a method, a field or another shape', () => {
+    const read = issueAssigneeReadArgs(ISSUE, 'OctoCat');
+    assert.deepEqual(read, ['api', 'repos/acme/web/issues/7/assignees/OctoCat']);
+    assert.ok(isIssueAssigneeRead(read) && isAllowedGh(read) && !isAssigneeRead(read));
+    for (const args of [
+      ['api', 'repos/acme/web/issues/7/assignees/octocat', '-X', 'GET'],
+      ['api', 'repos/acme/web/issues/7/assignees/octocat', '-X', 'DELETE'],
+      ['api', 'repos/acme/web/issues/7/assignees/octocat', '-f', 'x=1'],
+      ['api', 'repos/acme/web/issues/7/assignees/..'],
+      ['api', 'repos/acme/web/issues/7/assignees/octo%2Fcat'],
+      ['api', 'repos/acme/web/issues/7/assignees/octocat/x'],
+      ['api', 'repos/acme/web/issues/0/assignees/octocat'],
+      ['api', 'repos/acme/web/issues/x/assignees/octocat'],
+      ['api', 'repos/../web/issues/7/assignees/octocat'],
+    ]) {
+      assert.equal(isIssueAssigneeRead(args), false, args.slice(1).join(' '));
+      assert.equal(isAllowedGh(args), false, args.slice(1).join(' '));
     }
   });
 });
@@ -663,6 +743,69 @@ describe('isLinkAdd', () => {
     assert.ok([SUB, BLOCKED].every((args) => !isIssueQuery(args) && !isIssueCreate(args) && !isIssueComment(args) && !isIssueClose(args)));
     assert.ok([SUB, BLOCKED].every((args) => !isLabelAdd(args) && !isLabelRemove(args) && !isLabelRead(args)));
     assert.ok([SUB, BLOCKED].every(isAllowedGh));
+  });
+});
+
+describe('the issue field and type writes (T3406)', () => {
+  const DAY = fieldValueSetArgs(ISSUE, 1234567, '2030-01-09');
+  const OPTION = fieldValueSetArgs(ISSUE, 12, 'P1 - high $(x) @file');
+  const NUMBER = fieldValueSetArgs(ISSUE, 12, 18);
+  const TYPE = issueTypeSetArgs(ISSUE, 'Bug @file $(x)');
+  const FIELD_PATH = 'repos/acme/web/issues/7/issue-field-values';
+
+  it('builds one field value, text raw and a number typed, and the type as a raw field, each one the runner starts', () => {
+    assert.deepEqual(DAY, ['api', FIELD_PATH, '-X', 'POST', '-F', 'issue_field_values[][field_id]=1234567', '-f', 'issue_field_values[][value]=2030-01-09']);
+    assert.deepEqual(NUMBER, ['api', FIELD_PATH, '-X', 'POST', '-F', 'issue_field_values[][field_id]=12', '-F', 'issue_field_values[][value]=18']);
+    assert.deepEqual(TYPE, ['api', 'repos/acme/web/issues/7', '-X', 'PATCH', '-f', 'type=Bug @file $(x)']);
+    assert.ok([DAY, OPTION, NUMBER, fieldValueSetArgs(ISSUE, 12, -3), fieldValueSetArgs(ISSUE, 12, 0)].every((args) => isFieldValueSet(args) && isAllowedGh(args)));
+    assert.ok(isIssueTypeSet(TYPE) && isAllowedGh(TYPE));
+  });
+
+  it('refuses a value set past one field: another id, value form, method, path or a second value', () => {
+    const id = '-F';
+    for (const args of [
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=@id.txt', '-f', 'issue_field_values[][value]=x'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=0', '-f', 'issue_field_values[][value]=x'],
+      ['api', FIELD_PATH, '-X', 'POST', '-f', 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=x'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-F', 'issue_field_values[][value]=@secret.txt'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-F', 'issue_field_values[][value]=true'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-F', 'issue_field_values[][value]=1.5'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=a\nb'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]='],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', `issue_field_values[][value]=${'x'.repeat(1025)}`],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][name]=x'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=x', '-f', 'issue_field_values[][value]=y'],
+      ['api', FIELD_PATH, '-X', 'POST', id, 'issue_field_values[][field_id]=12'],
+      ['api', FIELD_PATH, '-X', 'PUT', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=x'],
+      ['api', FIELD_PATH, '-X', 'DELETE', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=x'],
+      ['api', 'repos/acme/../issues/7/issue-field-values', '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=x'],
+      ['api', 'repos/acme/web/issues/7/issue-field-values/12', '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=x'],
+      ['api', 'repos/acme/web/pulls/7/issue-field-values', '-X', 'POST', id, 'issue_field_values[][field_id]=12', '-f', 'issue_field_values[][value]=x'],
+    ]) {
+      assert.equal(isFieldValueSet(args), false, args.join(' '));
+      assert.equal(isAllowedGh(args), false, args.join(' '));
+    }
+  });
+
+  it('refuses a type set with any other field, a typed or empty type, a line break or another method', () => {
+    for (const args of [
+      ['api', 'repos/acme/web/issues/7', '-X', 'PATCH', '-f', 'type=Bug', '-f', 'state=closed'],
+      ['api', 'repos/acme/web/issues/7', '-X', 'PATCH', '-f', 'type=Bug', '-f', 'body=b'],
+      ['api', 'repos/acme/web/issues/7', '-X', 'PATCH', '-F', 'type=@type.txt'],
+      ['api', 'repos/acme/web/issues/7', '-X', 'PATCH', '-f', 'type='],
+      ['api', 'repos/acme/web/issues/7', '-X', 'PATCH', '-f', 'type=Bug\nx'],
+      ['api', 'repos/acme/web/issues/7', '-X', 'POST', '-f', 'type=Bug'],
+      ['api', 'repos/acme/web/issues/7/comments', '-X', 'PATCH', '-f', 'type=Bug'],
+    ]) {
+      assert.equal(isIssueTypeSet(args), false, args.join(' '));
+      assert.equal(isAllowedGh(args), false, args.join(' '));
+    }
+  });
+
+  it('is never taken for a body edit, a close or a link, nor they for a field or type write', () => {
+    assert.ok(!isIssueBodyEdit(TYPE) && !isIssueClose(TYPE) && !isFieldValueSet(TYPE));
+    assert.ok([DAY, NUMBER].every((args) => !isLinkAdd(args) && !isIssueTypeSet(args) && !isLabelAdd(args)));
+    assert.ok([issueBodyArgs(ISSUE, 'b'), issueCloseArgs(ISSUE, 'completed'), subIssueAddArgs(ISSUE, 12)].every((args) => !isIssueTypeSet(args) && !isFieldValueSet(args)));
   });
 });
 
@@ -836,7 +979,7 @@ describe('nodeGhRunner', () => {
     }
     await assert.rejects(
       nodeGhRunner(process.execPath, [gh]).run({ args: ['issue', 'close', '7'], env: ENV }),
-      /teamrig only runs gh for its shipped issue queries, its two watch probes, to open, read, comment on, edit the body of, label, assign, close or link an issue, to read a failed job's log, and to read the posts that may mention a user: it refuses gh issue close with these arguments/,
+      /teamrig only runs gh for its shipped issue queries, its two watch probes, to open, read, comment on, edit the body of, label, assign, close, link, type or set a field of an issue, to read a failed job's log, and to read the posts that may mention a user: it refuses gh issue close with these arguments/,
     );
     assert.equal(existsSync(marker), false);
   });

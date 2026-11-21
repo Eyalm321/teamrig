@@ -73,7 +73,8 @@ child teams, hires and retires, and setting up a team with a tab for each sessio
 ## Updating the plugin
 
 Claude Code installs the version that the plugin's `plugin.json` gives and moves an install only when that version
-rises, so every change to the plugin raises it. To take the newest one:
+rises, so every change to the plugin raises it. It installs from the repository's `release` branch, where each
+release is main's commit with the built plugin on top. To take the newest one:
 
 ```sh
 claude plugin marketplace update teamrig
@@ -179,7 +180,7 @@ stateDiagram-v2
   p1 it finished (done or verifying) in the last 7 days and past the first p1, which is in hand, raised on the first p1 in plan order past that pace once
   the session has held tasks for 7 days: p1 then no longer says what comes first, so the lead re-prioritizes. `OFF-GOAL` is a task in progress with no goal outside the week's plan:
   work nothing in the plan asked for. teamrig has no parent tasks yet, so a goal tag or the week is what ties a task
-  to the plan. `UNTRIAGED` is a task no leader has classed yet, for its leader's daily batch (`list --untriaged`). `NO-ISSUE`, while `github.issueAtAdd` is set, is an active task with neither its issue nor a reason to stay local. A
+  to the plan. `UNTRIAGED` is a task no leader has classed yet, for its leader's daily batch (`list --untriaged`). `UNKNOWN-GOAL`, once a goal is recorded, is an active task naming a goal tag no record holds, which goal-first ranking cannot see. `NO-ISSUE`, while `github.issueAtAdd` is set, is an active task with neither its issue nor a reason to stay local. A
   quiet task of the lowest class parks out of these reads until an event brings it back (`list --parked`). `NO-PROGRESS` is a plan that stood still: no goal or week-plan task moved by its owner (started, noted, set
   waiting, shipped or closed) since the start of the day before (`register.check.goalProgressDays`; the day starts at
   `wake.dayStartUtc`, else midnight UTC), while the week has usage left. It names the first planned task its owner
@@ -212,7 +213,13 @@ stateDiagram-v2
 - The task list is one log that only grows, a line for every move. `teamrig compact` archives it: the log becomes
 the next file in `state/archive/` byte for byte and is never deleted, a fresh log starts with a line naming it,
 and `state/snapshot.jsonl` holds every task as it stood, so commands and the task pane read the snapshot and the
-recent lines instead of the whole history. Tasks done or dropped over 8 days ago, in no week plan from the current
+recent lines instead of the whole history. The snapshot holds one line per task as it stood two days before the
+compaction, then the events of those two days as written, so its size follows the tasks kept, not their history; a
+read that needs older events (`show` of an older task, `meeting end` of a meeting that started before, a leader
+digest from an older cursor, `team split`) reads the archive for them. A task's line leaves its description out,
+the longest field, and keeps only its length and a hash: the commands that print or compare one (`show`, the owner's
+cards of `meeting`, `decisions` and `meet --cards`, `issue similar`) read it from the archive, an issue sync tells
+by the hash whether the body changed, and the task pane shows such a task without its description. Tasks done or dropped over 8 days ago, in no week plan from the current
 one on, leave the snapshot: `show`, `list --status done` and the plan of a past week still read them from the
 archive, and a task that left cannot be changed. `compact --dry-run` prints what it would archive and write, and writes nothing; a real run first
 reads the new files back and holds every task against the whole history, and writes nothing on any difference.

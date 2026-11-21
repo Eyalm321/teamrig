@@ -6,9 +6,11 @@ import type { Task } from '../register/fold.ts';
 import { NO_TASKS_ELSEWHERE, type TasksElsewhere } from '../register/tree.ts';
 import { DECISION_MARKER } from '../tabs/status.ts';
 import { parkedFacts, TEST_PARKING } from '../testing/ranking.ts';
+import { shippedTranscripts } from '../testing/shipped-transcripts.ts';
 import { testTask } from '../testing/task.ts';
 import { lastTurnAtOf, reopenVerdict, soonTimeWaitOf, tabActivityOf, TIME_WAIT_GUARD_MINUTES, type ReopenInput, type ReopenVerdict } from './idle.ts';
 
+const reader = shippedTranscripts();
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const NOW = Date.parse('2030-01-08T10:00:00.000Z');
@@ -70,44 +72,44 @@ function idsOf(verdict: ReopenVerdict): readonly string[] {
 
 describe('tabActivityOf', () => {
   it('reads an ended reply as idle, and no entry at all too', () => {
-    assert.equal(tabActivityOf(transcript(prompt('fix it'), said('Fixed.')), false), 'idle');
-    assert.equal(tabActivityOf('', false), 'idle');
+    assert.equal(tabActivityOf(reader, transcript(prompt('fix it'), said('Fixed.')), false), 'idle');
+    assert.equal(tabActivityOf(reader, '', false), 'idle');
   });
 
   it('reads a model entry calling a tool as at a call', () => {
-    assert.equal(tabActivityOf(transcript(prompt('fix it'), call()), false), 'call');
+    assert.equal(tabActivityOf(reader, transcript(prompt('fix it'), call()), false), 'call');
   });
 
   it('reads a reply putting a decision to the person as a question, unless the marker sits in a code block', () => {
-    assert.equal(tabActivityOf(transcript(prompt('pick'), said(`Two ways.\n${DECISION_MARKER} a or b?`)), false), 'question');
-    assert.equal(tabActivityOf(transcript(prompt('show'), said(`The card:\n\`\`\`\n${DECISION_MARKER} a or b?\n\`\`\``)), false), 'idle');
+    assert.equal(tabActivityOf(reader, transcript(prompt('pick'), said(`Two ways.\n${DECISION_MARKER} a or b?`)), false), 'question');
+    assert.equal(tabActivityOf(reader, transcript(prompt('show'), said(`The card:\n\`\`\`\n${DECISION_MARKER} a or b?\n\`\`\``)), false), 'idle');
   });
 
   it("reads the person's prompt and a tool's result as a turn under way", () => {
-    assert.equal(tabActivityOf(transcript(said('Done.'), prompt('next')), false), 'turn');
-    assert.equal(tabActivityOf(transcript(prompt('fix it'), call(), toolResult()), false), 'turn');
+    assert.equal(tabActivityOf(reader, transcript(said('Done.'), prompt('next')), false), 'turn');
+    assert.equal(tabActivityOf(reader, transcript(prompt('fix it'), call(), toolResult()), false), 'turn');
   });
 
   it('reads the person stopping a turn as idle', () => {
     const stopped = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } };
-    assert.equal(tabActivityOf(transcript(prompt('fix it'), call(), stopped), false), 'idle');
+    assert.equal(tabActivityOf(reader, transcript(prompt('fix it'), call(), stopped), false), 'idle');
   });
 
   it('keeps a question asked before a slash command, which starts no turn', () => {
     const command = { type: 'user', message: { role: 'user', content: '<command-name>/reload-plugins</command-name>' } };
     const output = { type: 'user', message: { role: 'user', content: '<local-command-stdout>Reloaded</local-command-stdout>' } };
-    assert.equal(tabActivityOf(transcript(prompt('pick'), said(`${DECISION_MARKER} a or b?`), command, output), false), 'question');
+    assert.equal(tabActivityOf(reader, transcript(prompt('pick'), said(`${DECISION_MARKER} a or b?`), command, output), false), 'question');
   });
 
   it("skips meta entries, a helper's entries and entries of other kinds", () => {
     const meta = { type: 'user', isMeta: true, message: { role: 'user', content: 'Caveat: the messages below' } };
     const system = { type: 'system', subtype: 'turn_duration' };
-    assert.equal(tabActivityOf(transcript(prompt('fix it'), said('Fixed.'), meta, call({ isSidechain: true }), system), false), 'idle');
+    assert.equal(tabActivityOf(reader, transcript(prompt('fix it'), said('Fixed.'), meta, call({ isSidechain: true }), system), false), 'idle');
   });
 
   it("skips a cut tail's first line, which may be partial", () => {
-    assert.equal(tabActivityOf(transcript(call()), true), 'idle');
-    assert.equal(tabActivityOf(transcript(call()), false), 'call');
+    assert.equal(tabActivityOf(reader, transcript(call()), true), 'idle');
+    assert.equal(tabActivityOf(reader, transcript(call()), false), 'call');
   });
 });
 
@@ -120,16 +122,16 @@ describe('lastTurnAtOf', () => {
     const away = { type: 'system', subtype: 'away_summary', ...stamp(5) };
     const helper = call({ isSidechain: true, ...stamp(20) });
     const text = transcript({ ...prompt('fix it'), ...stamp(80) }, said('Fixed.', stamp(75)), helper, command, meta, away);
-    assert.equal(lastTurnAtOf(text, false), NOW - 75 * MINUTE);
-    assert.equal(lastTurnAtOf(transcript(said('Fixed.', stamp(75)), { ...prompt('next'), ...stamp(3) }), false), NOW - 3 * MINUTE);
+    assert.equal(lastTurnAtOf(reader, text, false), NOW - 75 * MINUTE);
+    assert.equal(lastTurnAtOf(reader, transcript(said('Fixed.', stamp(75)), { ...prompt('next'), ...stamp(3) }), false), NOW - 3 * MINUTE);
   });
 
   it('reads none with no own entry, a last one with no time, or only the partial first line of a cut tail', () => {
-    assert.equal(lastTurnAtOf('', false), undefined);
-    assert.equal(lastTurnAtOf(transcript({ type: 'system', subtype: 'away_summary', ...stamp(5) }), false), undefined);
-    assert.equal(lastTurnAtOf(transcript(said('Old.', stamp(90)), said('Fixed.')), false), undefined);
-    assert.equal(lastTurnAtOf(transcript(said('Fixed.', { timestamp: 'soon' })), false), undefined);
-    assert.equal(lastTurnAtOf(transcript(said('Fixed.', stamp(75))), true), undefined);
+    assert.equal(lastTurnAtOf(reader, '', false), undefined);
+    assert.equal(lastTurnAtOf(reader, transcript({ type: 'system', subtype: 'away_summary', ...stamp(5) }), false), undefined);
+    assert.equal(lastTurnAtOf(reader, transcript(said('Old.', stamp(90)), said('Fixed.')), false), undefined);
+    assert.equal(lastTurnAtOf(reader, transcript(said('Fixed.', { timestamp: 'soon' })), false), undefined);
+    assert.equal(lastTurnAtOf(reader, transcript(said('Fixed.', stamp(75))), true), undefined);
   });
 });
 
@@ -168,6 +170,39 @@ describe('reopenVerdict', () => {
     const expected = { kind: 'asked', asks, at: NOW - 5 * MINUTE };
     assert.deepEqual(reopen({ asks, tasks: tasksOf(testTask({ id: 'T4', priority: 1 })) }), expected);
     assert.deepEqual(reopen({ asks, rest: { held: true, quiet: true }, maxPriority: 1 }), expected);
+  });
+
+  describe('for right-now work of another session that waits on it (T4414)', () => {
+    /** After its close (NOW - 2 h). */
+    const AFTER_CLOSE = '2030-01-08T09:00:00.000Z';
+    const approval = (overrides: Partial<Task> = {}): Task =>
+      testTask({ id: 'T12', owner: 'bravo', priority: 0, status: 'waiting', waits: [{ kind: 'approval', who: 'alpha' }], waitsAt: AFTER_CLOSE, ...overrides });
+    const waitingIds = (verdict: ReopenVerdict): readonly string[] => (verdict.kind === 'needed' ? verdict.waiting.map(({ task }) => task.id) : []);
+
+    it('reopens for a p0 waiting on its approval since its close, whatever its rest and before its own news', () => {
+      const tasks = tasksOf(approval(), testTask({ id: 'T4', priority: 1 }));
+      const verdict = reopen({ tasks, rest: { held: true, quiet: true }, maxPriority: 0 });
+      assert.equal(verdict.kind, 'needed');
+      assert.deepEqual(waitingIds(verdict), ['T12']);
+      assert.deepEqual(verdict.kind === 'needed' ? verdict.waiting[0]?.asks : [], [{ kind: 'approval', who: 'alpha' }]);
+      assert.equal(reopen({ tasks }).kind, 'needed', 'its own p1 news comes after');
+    });
+
+    it('reopens for a p0 that waits on or is planned after its unfinished task, raised to p0 after its close', () => {
+      const mine = testTask({ id: 'T7', ownerSeenAt: SEEN });
+      const waits = testTask({ id: 'T12', owner: 'bravo', status: 'in-progress', startedAt: SEEN, waits: [{ kind: 'task', id: 'T7' }], priority: 0, priorityAt: AFTER_CLOSE });
+      const after = testTask({ id: 'T13', owner: 'charlie', after: ['T7'], priority: 0, createdAt: AFTER_CLOSE });
+      const verdict = reopen({ tasks: tasksOf(mine, waits, after) });
+      assert.deepEqual(waitingIds(verdict), ['T12', 'T13']);
+    });
+
+    it('stays closed for a need it had before its close, a p1, an approval it answered, or a finished task', () => {
+      assert.deepEqual(reopen({ tasks: tasksOf(approval({ waitsAt: SEEN })) }), { kind: 'stay' });
+      assert.deepEqual(reopen({ tasks: tasksOf(approval({ priority: 1 })) }), { kind: 'stay' });
+      const answered = approval({ answer: { by: 'alpha', at: AFTER_CLOSE, verdict: 'approved', note: 'go' } });
+      assert.deepEqual(reopen({ tasks: tasksOf(answered) }), { kind: 'stay' });
+      assert.deepEqual(reopen({ tasks: tasksOf(approval({ status: 'done', waits: [] })) }), { kind: 'stay' });
+    });
   });
 
   it('reopens for news it can start within maxPriority, most urgent first', () => {

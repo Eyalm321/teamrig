@@ -11,7 +11,7 @@ A task is `open` when added. Only its owner sets its status, with `teamrig set <
 | --- | --- | --- |
 | `open` | waiting to start | nothing |
 | `in-progress` | the owner is on it now | nothing |
-| `verifying` | shipped, waiting for what proves it (a test run, a night's flow, a number) | `--note`, `--proof` naming what will prove it, `--waits` naming when it runs (a time, or a task in progress or verifying whose end runs it), and `--followups` naming the tasks the work leaves or `none` [register.requireNoteOn, register.requireProofOnVerifying, register.requireFollowupsOn]; `--due <date>`: the date to verify it by; a bug's review, `--cause` to `--missed-log` [register.review] |
+| `verifying` | shipped, waiting for what proves it (a test run, a night's flow, a number) | `--note`, `--proof` naming what will prove it, `--waits` naming when it runs (a time, or a task in progress or verifying, or an open one of your own, whose end runs it), and `--followups` naming the tasks the work leaves or `none` [register.requireNoteOn, register.requireProofOnVerifying, register.requireFollowupsOn]; `--due <date>`: the date to verify it by; a bug's review, `--cause` to `--missed-log` [register.review] |
 | `waiting` | started, and cannot go on until something else happens | `--waits` naming every reason (a decision, an approval, a task, a time) and `--note` [register.requireNoteOn]; on the owner's decision or approval, a card (`--question`, `--options`, `--recommend`, `--default`) [register.requireDecisionCard] |
 | `done` | finished and verified | `--note`, `--evidence` (unless the task already has some), `--skill <name>` or `--skill none`, and `--followups T<id>,...` or `--followups none` [register.requireEvidenceOnDone, register.requireSkillOnDone, register.requireFollowupsOn]; a bug's review, `--cause` to `--missed-log` [register.review]; `--watch "<what a sighting shows>"` (with evidence) when tests or a dry run proved it and a live sighting is still to come |
 | `dropped` | will not be done | `--note` saying why and who decided; `--followups` may name the tasks the work moved to |
@@ -115,12 +115,15 @@ A shipped change is proven by the session that shipped it, oldest first, before 
   starts it (name the tasks the work leaves in place of `none`).
   Without `--proof`, or without `--waits` naming when the proof runs, it is refused
   [register.requireProofOnVerifying]; with that key `false`, the note names the proof. A proof runs at a time
-  (`time:<date>`, for an event that comes on a date) or when a task in progress or verifying ends (`task:T<id>`);
-  one with neither would be put off without end. `approval:owner` (with a card) may stand beside one, for a proof
+  (`time:<date>`, for an event that comes on a date) or when a task ends (`task:T<id>`): one in progress or
+  verifying, or an open one of the same owner that can start now (every task it is planned after with `--after` is
+  finished), who starts it next, so the new work that runs the proof can start at once while the verifying task waits
+  on it; one with neither would be put off without end. `approval:owner` (with a card) may stand beside one, for a proof
   only the owner can try, which then reaches the meeting's DECISIONS.
 - A proof another party makes is that party's task: ask it with `teamrig set <id> --status waiting --ask <session>
   --text "<the run or check>"`, which adds it and makes the task wait on it. Once that task has started, set yours
-  verifying with `--waits task:T<id>`: a proof waits only on a task in progress or verifying.
+  verifying with `--waits task:T<id>`: a proof waits only on a task in progress or verifying, or an open one of its
+  own owner's.
 - Set verifying again without `--waits` and the waits stay while none cleared; once one cleared the proof is due
   now, and keeping it is refused. `check` flags the task `READY` once all cleared.
 - A change tests or a dry run proved, whose proof left is a live sighting (a night's run, a page a user opens),
@@ -276,7 +279,8 @@ Three shapes, split by the list:
   [register.goals] mode. `free` (the default) takes any tag, `checked` refuses a tag that is not a goal of the team or
   a team above it (`goal B9 is not a goal record of the team or a team above`: fix the tag, or have the goal
   added), and `required` also needs an owner-asked, p0 or p1 `add` to name its goal or say `none` (`an
-  owner-asked task names its goal: --goals <tag>, or --goals none`).
+  owner-asked task names its goal: --goals <tag>, or --goals none`). In any mode, once a goal is recorded, `check`
+  flags an active task whose tag no record holds (`UNKNOWN-GOAL`).
 
 ## Inbox line or message
 
@@ -345,6 +349,7 @@ checkpoint; a session may run it for itself.
 | `DUE-UNPLANNED` | effectively due inside the current week but not in its plan | Plan it in with `--week`, or re-date it. |
 | `STOPGAP-DONE` | a `stopgap T<id>` tag names a done or dropped task: in a skill, or a file of [register.check.stopgapFiles] (default `CLAUDE.md` and `.claude/rules` in the project folder); the flag lists where | Done: the file's owner removes the stopgap. Dropped: open a new task for it, or keep it by a decision and drop the tag. |
 | `OFF-GOAL` | in progress with no goal and not in the current week plan | If it belongs this week, the lead plans it in (`--week`); else the owner tags its goal (`update --goals`) or parks it. |
+| `UNKNOWN-GOAL` | once the team or a team above it records a goal, an active task naming a goal tag no record holds (a typo, or a goal never recorded), so goal-first ranking cannot see it; under [register.goals] `free` too | The owner fixes the tag (`update --goals`), or the lead records the goal (`goal add`). |
 | `UNTRIAGED` | an active task with no class, added by anyone but a leader of its owner (the lead's add on its own task counts as a leader's); never on a session's own `start`, as it is the leader's flag | Its leader classes it in the daily batch (`teamrig list --untriaged` prints the batch): `teamrig update T<n> --class <name>`. |
 | `NO-ISSUE` | while [github.issueAtAdd] names a repository, an active task whose ref neither points at its issue (`gh:`) nor says why it stays local (`local: <reason>`): one added before the key was set, from another team, or whose issue failed to open at add | Its owner opens the issue (`teamrig issue migrate <rows>`), points the ref at one it has (`teamrig update T<n> --ref gh:<owner>/<name>#<n>`), or records why it stays local (`teamrig update T<n> --ref "local: <reason>"`), such as an unfixed security hole. |
 | `NO-PROGRESS` | no goal or week-plan task moved (its owner started, noted, set waiting, shipped or closed it) since the start of the day before [register.check.goalProgressDays] (0 turns it off), while the week has usage left; the day starts at `wake.dayStartUtc`, else midnight UTC. Raised on the first planned task in plan order that its owner can move now (open or in progress) and that day already held | Its owner moves it, or the next planned task it can; the lead finds what holds the plan (a blocker, the order, a plan to re-cut) and fixes it or tells the human. |

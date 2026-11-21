@@ -22,6 +22,18 @@ export interface LocalChecks {
   runner: string | null;
 }
 
+/**
+ * The release pull request a release tool (release-please) keeps open on the repo (T4645): `ship.ts merge --release`
+ * merges it on its task's approval, like any pull request, when it raises only the version files' version (the
+ * `regenerated` files that are no folder) and adds only lines to `changelog`.
+ */
+export interface ReleasePull {
+  /** The branch the release tool keeps the release pull request on, and rewrites on each move of main. */
+  head: string;
+  /** The release notes file, relative to the repo dir, to which the release pull request adds its version's notes. */
+  changelog: string;
+}
+
 export interface RepoProfile {
   slug: string;
   /**
@@ -56,8 +68,28 @@ export interface RepoProfile {
    * pass alone (T2532). Each is one of `checks`, never the summary, which echoes them (github.ts). Empty when not listed.
    */
   flaky: readonly string[];
+  /**
+   * Checks the summary's run makes only for some changes (teamrig's windows and macOS test legs, which a docs-only run
+   * leaves out, T4617): one that is missing is not waited for once the summary passed; one that shows must pass. Each
+   * is one of `checks`, never the summary, and needs a summary to be named. Empty when not listed.
+   */
+  conditional: readonly string[];
   /** What a --merge run checks locally before it pushes; `full` when not listed. `changed` needs the `ci` gate. */
   mergeChecks: MergeChecks;
+  /**
+   * The `## <name>` sections the --note-file must hold for merge to open a pull request (T3058): the repo's template
+   * asks each pull request to say them (teamrig's `Reach`), and a note without them would open one that does not.
+   * Empty when not listed: any note, or none, opens one.
+   */
+  pullSections: readonly string[];
+  /** The repo's release pull request; null when not listed, so `ship.ts merge --release` refuses the repo. */
+  release: ReleasePull | null;
+  /**
+   * Whether main merges through GitHub's merge queue (T3386): a merge then enqueues the checked head and waits for the
+   * queue to land it, in place of its own merge call, as the queue tests each group on main's newest tip. False when not
+   * listed; true needs the `ci` gate, since the queue lands only what its required checks pass.
+   */
+  queue: boolean;
 }
 
 export const PROFILES_PATH = new URL('./repos.json', import.meta.url);
@@ -89,6 +121,34 @@ function parseFlaky(slug: string, value: unknown, checks: readonly string[], sum
   return value;
 }
 
+function parseConditional(slug: string, value: unknown, checks: readonly string[], summary: string | null): readonly string[] {
+  if (value === undefined) return [];
+  if (summary === null) throw new Error(`repos.json: ${slug} "conditional" needs a "summary": only its pass says the run left a check out by plan`);
+  if (!isNameList(value) || value.some(name => !checks.includes(name) || name === summary)) {
+    throw new Error(`repos.json: ${slug} "conditional" needs a list of its "checks", the summary apart`);
+  }
+  if (new Set(value).size !== value.length) throw new Error(`repos.json: ${slug} lists a conditional check twice`);
+  return value;
+}
+
+function parsePullSections(slug: string, value: unknown): readonly string[] {
+  if (value === undefined) return [];
+  if (!isNameList(value) || new Set(value).size !== value.length) throw new Error(`repos.json: ${slug} "pullSections" needs a list of distinct section names`);
+  return value;
+}
+
+const BRANCH = /^[\w./-]+$/u;
+
+function parseRelease(slug: string, value: unknown): ReleasePull | null {
+  if (value === undefined) return null;
+  const head = isRecord(value) ? value['head'] : undefined;
+  const changelog = isRecord(value) ? value['changelog'] : undefined;
+  if (!isText(head) || !BRANCH.test(head) || !isText(changelog) || changelog.startsWith('/') || changelog.split('/').includes('..')) {
+    throw new Error(`repos.json: ${slug} "release" needs a "head" branch name and a "changelog" path inside the repo`);
+  }
+  return { head, changelog };
+}
+
 function parseRegenerated(slug: string, value: unknown): readonly string[] {
   if (value === undefined) return [];
   if (!isNameList(value) || value.some(path => path.startsWith('/') || path.split('/').includes('..'))) {
@@ -103,6 +163,13 @@ function parseMergeChecks(slug: string, value: unknown, gate: Gate): MergeChecks
   if (value !== 'changed') throw new Error(`repos.json: ${slug} "mergeChecks" is "full" (the whole suite) or "changed" (the changed files' specs)`);
   if (gate !== 'ci') throw new Error(`repos.json: ${slug} "mergeChecks": "changed" needs the "ci" gate: only required CI checks run the whole suite before the merge`);
   return value;
+}
+
+function parseQueue(slug: string, value: unknown, gate: Gate): boolean {
+  if (value === undefined || value === false) return false;
+  if (value !== true) throw new Error(`repos.json: ${slug} "queue" is true (main merges through GitHub's merge queue) or false`);
+  if (gate !== 'ci') throw new Error(`repos.json: ${slug} "queue": true needs the "ci" gate: the merge queue lands only what required CI checks pass`);
+  return true;
 }
 
 const SLUG = /^[\w.-]+\/[\w.-]+$/u;
@@ -122,7 +189,7 @@ export function repoSlugs(profiles: ReadonlyMap<string, RepoProfile>): string[] 
 
 export function parseProfiles(json: string): Map<string, RepoProfile> {
   const body: unknown = JSON.parse(json);
-  if (!isRecord(body)) throw new Error('repos.json: expected { "<owner>/<repo>": { "main", "gate", "checks", "summary", "local", "regenerated", "flaky", "aliases", "mergeChecks" } }');
+  if (!isRecord(body)) throw new Error('repos.json: expected { "<owner>/<repo>": { "main", "gate", "checks", "summary", "local", "regenerated", "flaky", "conditional", "aliases", "mergeChecks", "pullSections", "release", "queue" } }');
   const profiles = new Map<string, RepoProfile>();
   for (const [slug, entry] of Object.entries(body)) {
     if (!isRecord(entry) || typeof entry['main'] !== 'string' || !isNameList(entry['checks'])) throw new Error(`repos.json: ${slug} needs "main" and a "checks" list of names`);
@@ -141,7 +208,11 @@ export function parseProfiles(json: string): Map<string, RepoProfile> {
       local: parseLocalChecks(slug, entry['local']),
       regenerated: parseRegenerated(slug, entry['regenerated']),
       flaky: parseFlaky(slug, entry['flaky'], entry['checks'], summary),
+      conditional: parseConditional(slug, entry['conditional'], entry['checks'], summary),
       mergeChecks: parseMergeChecks(slug, entry['mergeChecks'], gate),
+      pullSections: parsePullSections(slug, entry['pullSections']),
+      release: parseRelease(slug, entry['release']),
+      queue: parseQueue(slug, entry['queue'], gate),
     };
     for (const name of [slug, ...aliases]) {
       const key = name.toLowerCase();

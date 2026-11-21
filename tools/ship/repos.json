@@ -4,6 +4,7 @@
     "main": "main",
     "gate": "ci",
     "checks": [
+      "change kind",
       "scrub and DCO gates",
       "dependency review",
       "commit size rule",
@@ -19,7 +20,11 @@
       "runner": "tools/ci/local.ts"
     },
     "regenerated": ["plugins/teamrig/dist/", "plugins/teamrig/.claude-plugin/plugin.json", "src/core/version.ts", ".release-please-manifest.json"],
-    "flaky": ["test (ubuntu-latest, node 22)", "test (windows-latest, node 22)", "test (macos-latest, node 22)"]
+    "flaky": ["test (ubuntu-latest, node 22)", "test (windows-latest, node 22)", "test (macos-latest, node 22)"],
+    "conditional": ["test (windows-latest, node 22)", "test (macos-latest, node 22)"],
+    "mergeChecks": "changed",
+    "pullSections": ["Reach", "Risks"],
+    "release": { "head": "release-please--branches--main--components--teamrig", "changelog": "CHANGELOG.md" }
   },
   "GeneralA6/teamrig-pane": {
     "aliases": ["teamrig/teamrig-pane"],
@@ -28,8 +33,8 @@
     "checks": [
       "scrub and DCO gates",
       "commit size rule",
+      "commit subject gate",
       "coverage gate",
-      "plugin version gate",
       "hooks/core matches the teamrig pin",
       "test (ubuntu-latest, node 22)",
       "test (windows-latest, node 22)",
@@ -40,6 +45,7 @@
     "local": {
       "runner": "tools/ci/local.ts"
     },
-    "regenerated": ["plugins/teamrig-pane/.claude-plugin/plugin.json"]
+    "regenerated": ["plugins/teamrig-pane/.claude-plugin/plugin.json", ".release-please-manifest.json"],
+    "release": { "head": "release-please--branches--main--components--teamrig-pane", "changelog": "CHANGELOG.md" }
   }
 }
