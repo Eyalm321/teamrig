@@ -275,14 +275,27 @@ const CONTAINER_TOOLS: ReadonlySet<string> = new Set(['docker', 'podman', 'nerdc
 const CONTAINER_COMMANDS: ReadonlySet<string> = new Set(['exec', 'run', 'debug', 'enter', 'ssh']);
 /** Programs that run a command from their arguments. */
 const ARGUMENT_RUNNERS: ReadonlySet<string> = new Set([
-  ...['ssh', 'sshpass', 'mosh', 'watch', 'tmux', 'screen', 'byobu', 'dtach', 'zellij', 'wezterm', 'expect', 'parallel'],
+  ...['ssh', 'sshpass', 'mosh', 'watch', 'tmux', 'screen', 'byobu', 'dtach', 'zellij', 'wezterm', 'parallel'],
   ...['xterm', 'gnome-terminal', 'konsole', 'kitty', 'alacritty', 'xfce4-terminal', 'make', ...CONTAINER_TOOLS],
 ]);
 /** awk runs a command only through `system(...)` or a pipe to or from a quoted command. */
 const AWK_RUNS = /system\s*\(|\|\s*"|"\s*\|/;
 const AWKS: ReadonlySet<string> = new Set(['awk', 'gawk', 'mawk', 'nawk']);
+/**
+ * expect's script is Tcl, not bash: a program starts through `spawn`, Tcl's `exec` or expect's `system`, whose
+ * words up to the end of the Tcl command are read as a bash line.
+ */
+const TCL_RUNS = /(?:^|[;\n[{])\s*(?:spawn|exec|system)\s+(?:-\S+\s+)*([^;\n\]}]*)/g;
 /** Programs that run commands they read on stdin. */
 const STDIN_RUNNERS: ReadonlySet<string> = new Set(['ssh', 'at', 'batch', 'crontab', 'parallel', 'make', 'docker', 'podman', 'kubectl']);
+/**
+ * The OpenSSH programs that take `-o` config lines, with the option letters each takes a value for (from each
+ * program's getopt string). A config line can name a command the user's shell runs on this host
+ * (`ProxyCommand`, `LocalCommand`, `KnownHostsCommand`, `Match exec`) or on the other end (`RemoteCommand`).
+ */
+const SSH_VALUED_LETTERS: Readonly<Record<string, string>> = { ssh: 'BbcDEeFIiJLlmOPpQRSWw', scp: 'cDFiJlPSX', sftp: 'BbcDFiJlPRSsX' };
+const SSH_COMMAND_OPTION = /^\s*(?:proxycommand|localcommand|knownhostscommand|remotecommand)(?:\s*=\s*|\s+)(.*)$/is;
+const SSH_MATCH_EXEC = /\bexec\s+(?:"((?:[^"\\]|\\.)*)"|(\S+))/gi;
 /** The most argument words a runner's command is looked for in, each suffix read on its own. */
 const MAX_RUNNER_WORDS = 24;
 /** A pipe to the next command, maybe after the newline that ends a heredoc's line. */
@@ -291,10 +304,11 @@ const PIPE_TERMINATOR = /^\|&?\n*$/;
 const CODE_VARIABLES = /^(?:PROMPT_COMMAND|BASH_ENV|ENV|PS[0124])(?:\[[^\]]*\])?\+?=/;
 /**
  * A file whose text a later shell or git runs: a shell's startup file or a folder of them (`~/.bashrc.d/`,
- * `/etc/profile.d/`, fish's config), a git hook, a systemd user unit, direnv's `.envrc`.
+ * `/etc/profile.d/`, fish's config), a git or husky hook, a systemd user unit, an autostart entry, direnv's
+ * `.envrc`. Only these folders count, so a project's own `src/hooks/` is data.
  */
 const LATER_CODE_FILE =
-  /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|mkshrc|envrc)|profile|bash\.bashrc|environment)$|(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|fish|hooks|systemd\/user|autostart)\//;
+  /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|mkshrc|envrc)|profile|bash\.bashrc|environment|fish\/config\.fish)$|(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|fish\/conf\.d|\.git\/hooks|\.husky|systemd\/user|(?:\.config|xdg)\/autostart)\//;
 /** A redirection that writes its file: `>`, `>>`, `>|`, `&>`, `&>>`, with a descriptor number or not. */
 const WRITE_REDIRECTION = /^(?:\d*|&)>[>|]?$/;
 
@@ -316,6 +330,89 @@ function runnerArgs(name: string, args: readonly ShellWord[]): readonly ShellWor
     });
   }
   return args;
+}
+
+/** The bash lines an expect (Tcl) script starts; see {@link TCL_RUNS}. */
+function tclCommands(script: ShellWord): ShellWord[] {
+  return [...script.text.matchAll(TCL_RUNS)].map((match) => ({ text: match[1] ?? '', dynamic: script.dynamic }));
+}
+
+/**
+ * The commands `-o` config lines hand an OpenSSH program (see {@link SSH_VALUED_LETTERS}), each a bash line:
+ * `-o ProxyCommand=<c>`, `-o 'ProxyCommand <c>'`, `-oProxyCommand=<c>`, `-vo ...`, `-o 'Match exec "<c>"'`.
+ * Options after the host are read too, as ssh reads them, up to `--`.
+ */
+function sshOptionCommands(args: readonly ShellWord[], valued: string): ShellWord[] {
+  const commands: ShellWord[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index] ?? staticWord('');
+    if (word.text === '--') {
+      break;
+    }
+    if (!/^-[^-]/.test(word.text)) {
+      continue;
+    }
+    let value: ShellWord | undefined;
+    for (let at = 1; at < word.text.length; at += 1) {
+      const letter = word.text[at] ?? '';
+      if (letter !== 'o' && !valued.includes(letter)) {
+        continue;
+      }
+      const rest = word.text.slice(at + 1);
+      const optionValue = rest === '' ? args[(index += 1)] : { text: rest, dynamic: word.dynamic };
+      value = letter === 'o' ? optionValue : undefined;
+      break;
+    }
+    if (value === undefined) {
+      continue;
+    }
+    const setting = SSH_COMMAND_OPTION.exec(value.text);
+    if (setting !== null) {
+      commands.push({ text: setting[1] ?? '', dynamic: value.dynamic });
+    } else if (/^\s*match\b/i.test(value.text)) {
+      commands.push(...[...value.text.matchAll(SSH_MATCH_EXEC)].map((match) => ({ text: (match[1] ?? match[2] ?? '').replace(/\\(.)/g, '$1'), dynamic: value.dynamic })));
+    }
+  }
+  return commands;
+}
+
+/**
+ * The commands of a crontab read on stdin: each entry without its schedule (five time fields, or one `@reboot`,
+ * `@daily`, ...). Blank lines, comments, variables and lines too short to hold a schedule are kept as written.
+ */
+function cronCommands(table: ShellWord): ShellWord {
+  const text = table.text
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim();
+      return trimmed.startsWith('#') || isAssignment(trimmed.split(/\s/)[0] ?? '') ? trimmed : trimmed.replace(/^(?:@\S+\s+|(?:\S+\s+){5})/, '');
+    })
+    .join('\n');
+  return { text, dynamic: table.dynamic };
+}
+
+/**
+ * What a static `echo` or `printf` writes down a pipe, so the program the pipe feeds is handed that text; undefined
+ * for any other command, or one that writes nothing down the pipe (`printf -v`). Escapes are not followed, except a
+ * `\n`, read as the newline it may write.
+ */
+function echoedText(words: readonly ShellWord[]): ShellWord | undefined {
+  const [head, ...rest] = words;
+  const name = head === undefined ? '' : programName(head.text);
+  let args = rest;
+  if (name === 'echo') {
+    while (args[0] !== undefined && /^-[neE]+$/.test(args[0].text)) {
+      args = args.slice(1);
+    }
+  } else if (name === 'printf') {
+    if (args[0]?.text.startsWith('-v') === true) {
+      return undefined;
+    }
+    args = args[0]?.text === '--' ? args.slice(1) : args;
+  } else {
+    return undefined;
+  }
+  return { text: args.map((arg) => arg.text.replace(/\\n/g, '\n')).join(' '), dynamic: args.some((arg) => arg.dynamic) };
 }
 
 /** The literal strings of an awk program: the commands its `system(...)` or pipes may run. */
@@ -417,6 +514,8 @@ class GitInvocationFinder {
     const rereading = dialect === 'bash' ? this.rereading(commands) : [];
     let piped: { readonly body: ShellWord; readonly nesting: number } | undefined;
     let pipeAt: number | undefined;
+    // What a static echo or printf before the pipe writes into it.
+    let pipeText: ShellWord | undefined;
     for (const [index, command] of commands.entries()) {
       command.words.forEach((word) => this.mention(word.text));
       let stdin = command.stdin;
@@ -426,17 +525,20 @@ class GitInvocationFinder {
         piped = undefined;
       }
       const fedByPipe = pipeAt === command.nesting && !redirectsInput(command);
+      const fedText = fedByPipe ? pipeText : undefined;
       if (pipeAt !== undefined && command.nesting <= pipeAt) {
         pipeAt = undefined;
+        pipeText = undefined;
       }
       if (PIPE_TERMINATOR.test(command.terminator)) {
         pipeAt = command.nesting;
+        pipeText = command.redirections.some((redirection) => WRITE_REDIRECTION.test(redirection.operator)) ? undefined : echoedText(command.words);
       }
       location.enter(command.subshells);
       if (dialect === 'bash') {
         this.noteLaterCode(command, stdin, location, depth);
       }
-      const launched = this.visitCommand(command.words, dialect, location, depth, stdin, fedByPipe);
+      const launched = this.visitCommand(command.words, dialect, location, depth, stdin, fedByPipe, fedText);
       this.visitHeld(command, launched, rereading[index] ?? true, location, depth);
       if (stdin !== undefined) {
         const use = launched === undefined ? 'read' : stdinUse(command, launched);
@@ -494,8 +596,11 @@ class GitInvocationFinder {
     }
   }
 
-  /** Visits one simple command, given what it reads on stdin from the line; returns what it starts, or undefined for a `cd`. */
-  private visitCommand(words: readonly ShellWord[], dialect: ShellDialect, location: Location, depth: number, stdin?: ShellWord, fedByPipe = false): Launch | undefined {
+  /**
+   * Visits one simple command, given what it reads on stdin from the line, and when a pipe feeds it, what a static
+   * echo or printf writes into that pipe; returns what it starts, or undefined for a `cd`.
+   */
+  private visitCommand(words: readonly ShellWord[], dialect: ShellDialect, location: Location, depth: number, stdin?: ShellWord, fedByPipe = false, pipeText?: ShellWord): Launch | undefined {
     for (const name of shellVariables(words, dialect)) {
       this.shellMovesRepo ||= GIT_DIR_VARIABLES.test(name);
       this.shellOverridesConfig ||= GIT_CONFIG_VARIABLES.test(name);
@@ -530,7 +635,7 @@ class GitInvocationFinder {
           this.visitPackaged(packaged, launched, dialect, location, depth, stdin);
           break;
         }
-        this.visitRunner(name, launched.args, stdin, fedByPipe, location, depth);
+        this.visitRunner(name, launched.args, stdin ?? pipeText, fedByPipe, location, depth);
         const subcommand = name.startsWith('git-') ? name.slice(4) : undefined;
         if (name !== 'git' && (subcommand === undefined || !GIT_BUILTINS.has(subcommand))) {
           break;
@@ -551,13 +656,19 @@ class GitInvocationFinder {
    * {@link STDIN_RUNNERS}) when the command it is handed pushes, read as the bash script the other end runs; a
    * pipe that feeds one commands is a doubt on a line that names a push. Since a runner's options and host
    * come before its command, each suffix of its arguments is read, joined as written and quoted word by word.
+   * The awk and expect scripts it is handed, which are not bash, also ask when they name a push anywhere.
    */
   private visitRunner(name: string, args: readonly ShellWord[], stdin: ShellWord | undefined, fedByPipe: boolean, location: Location, depth: number): void {
     const awk = AWKS.has(name);
+    const expect = name === 'expect';
     const programs = awk ? args.filter((arg) => AWK_RUNS.test(arg.text)) : [];
+    // Scripts in a language of the runner's own, read for the commands they start and searched for a push.
+    const scripts = expect ? [...args, ...(stdin === undefined ? [] : [stdin])] : programs;
     const lines: ShellWord[] = [];
     if (awk) {
       programs.forEach((program) => lines.push(...awkStrings(program.text)));
+    } else if (expect) {
+      scripts.forEach((script) => lines.push(...tclCommands(script)));
     } else if (ARGUMENT_RUNNERS.has(name)) {
       const words = runnerArgs(name, args).slice(0, MAX_RUNNER_WORDS);
       for (let from = 0; from < words.length; from += 1) {
@@ -565,12 +676,16 @@ class GitInvocationFinder {
         lines.push(joinedLine(suffix, false), ...(suffix.length > 1 ? [joinedLine(suffix, true)] : []));
       }
     }
-    // awk running a command it builds (`system($0)`) runs what it reads.
-    const readsStdin = STDIN_RUNNERS.has(name) || programs.length > 0;
-    if (readsStdin && stdin !== undefined) {
-      lines.push(stdin);
+    const sshLetters = SSH_VALUED_LETTERS[name];
+    if (sshLetters !== undefined) {
+      lines.push(...sshOptionCommands(args, sshLetters));
     }
-    if (this.handedPush(lines, location, depth) || programs.some((program) => saysPush(program.text))) {
+    // awk running a command it builds (`system($0)`) runs what it reads; expect reads its script there.
+    const readsStdin = STDIN_RUNNERS.has(name) || programs.length > 0 || expect;
+    if (readsStdin && stdin !== undefined && !expect) {
+      lines.push(name === 'crontab' ? cronCommands(stdin) : stdin);
+    }
+    if (this.handedPush(lines, location, depth) || scripts.some((script) => saysPush(script.text))) {
       this.doubt(`it hands ${name} a command that pushes, which ${name} runs where the guard cannot read it`, false);
     } else if (lines.some((line) => line.dynamic)) {
       this.doubt(`it hands ${name} a command only known when it runs`, true);
@@ -620,7 +735,8 @@ class GitInvocationFinder {
     for (const word of words) {
       if (CODE_VARIABLES.test(word.text) || (alias && /^[^=\s]+=/.test(word.text))) {
         const value = { text: word.text.slice(word.text.indexOf('=') + 1), dynamic: word.dynamic };
-        if (this.handedPush([value], location, depth)) {
+        // A value with a variable in it (`PROMPT_COMMAND="$PROMPT_COMMAND; ..."`) is only partly known: its words ask.
+        if (this.handedPush([value], location, depth) || (value.dynamic && saysPush(value.text))) {
           this.doubt(alias ? 'it defines an alias that pushes, which a later command may run' : 'it sets a variable a shell runs as commands later to a push', false);
         }
       }
