@@ -540,8 +540,8 @@ async function carryFrom(runtime: CliRuntime, store: RefreshStore, id: string, t
 }
 
 /**
- * Records the jobs a /clear leaves live in the process for the fresh session's transcript, which never names them,
- * so the next refresh counts them (T657); a new process ends them, so it keeps none.
+ * Records the jobs the old session had, which a /clear may keep, for the fresh session's transcript, which never
+ * names them, so the next refresh still names them (T657); a new process ends them, so it keeps none.
  */
 async function keepCarried(store: RefreshStore, id: string, crons: readonly CarriedCron[], start: CarryStart, fresh: string | undefined): Promise<void> {
   if (start === 'same-process' && fresh !== undefined && crons.length > 0) {
@@ -552,10 +552,10 @@ async function keepCarried(store: RefreshStore, id: string, crons: readonly Carr
 }
 
 /**
- * What the session that wrote the handover leaves for this fresh one: its scheduled jobs (kept by a /clear,
- * lost with a new process), counted from those an earlier /clear left live in its process, and wake-up, and its
- * scratchpad and plan file; a /clear records its jobs for the next refresh. A transcript it cannot read, or a
- * record it cannot write, is said, never thrown: the note itself must still reach the session.
+ * What the session that wrote the handover leaves for this fresh one: its scheduled jobs (which a /clear may keep
+ * and a new process ends), counted with those an earlier /clear recorded, and wake-up, and its scratchpad and plan
+ * file; a /clear records its jobs for the next refresh. A transcript it cannot read, or a record it cannot write, is
+ * said, never thrown: the note itself must still reach the session.
  */
 async function carriedLinesOf(runtime: CliRuntime, store: RefreshStore, id: string, transcript: string, { source, transcript: fresh }: StartEvent, zone: TimeZone): Promise<readonly string[]> {
   const now = runtime.clock.now();
