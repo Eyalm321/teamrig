@@ -75,6 +75,11 @@ interface WrapperSpec {
   readonly valued?: readonly string[];
   /** Options whose value is the folder the program starts in. */
   readonly chdir?: readonly string[];
+  /**
+   * Options that keep the caller's folder, for a wrapper that otherwise starts the program in a folder of its own
+   * (`systemd-run --same-dir`); without one of them or a {@link chdir} option, the program's folder is unknown.
+   */
+  readonly sameDir?: readonly string[];
   /** Options after which the wrapper runs nothing, such as `command -v`. */
   readonly inspect?: readonly string[];
   /** Options without which the wrapper runs nothing, such as `jobs -x`: with none of them it only lists. */
@@ -153,7 +158,7 @@ const WRAPPERS: ReadonlyMap<string, WrapperSpec> = new Map<string, WrapperSpec>(
   ['chroot', { leading: 1 }],
   ['unshare', { chdir: ['-w', '--wd'] }],
   ['setpriv', {}],
-  ['systemd-run', { chdir: ['--working-directory'] }],
+  ['systemd-run', { chdir: ['--working-directory'], sameDir: ['--same-dir', '-d'] }],
   ['runuser', {}],
   ['flock', { leading: 1 }],
   ['strace', {}],
@@ -169,6 +174,10 @@ const WRAPPERS: ReadonlyMap<string, WrapperSpec> = new Map<string, WrapperSpec>(
 const COMMAND_OPTION_PROGRAMS: ReadonlySet<string> = new Set(['su', 'runuser', 'flock', 'script']);
 /** `find`'s actions that run a command, ended by `;` or `+`. */
 const FIND_EXEC = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+/** `find`'s actions that run their command in each found file's folder. */
+const FIND_EXEC_IN_DIR: ReadonlySet<string> = new Set(['-execdir', '-okdir']);
+/** A folder only known when the line runs, such as each found file's under `find -execdir`. */
+const UNKNOWN_DIR: ShellWord = { text: '', dynamic: true };
 
 const POSIX_SHELLS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'fish']);
 const POWERSHELLS: ReadonlySet<string> = new Set(['pwsh', 'powershell', 'pwsh-preview']);
@@ -610,6 +619,9 @@ class LaunchReader {
     if (starts.length > 1) {
       return { kind: 'opaque', reason: 'find runs more than one command', gated: true };
     }
+    if (FIND_EXEC_IN_DIR.has(args[start]?.text ?? '')) {
+      this.chdirs.push(UNKNOWN_DIR);
+    }
     const rest = args.slice(start + 1);
     const end = rest.findIndex((arg) => arg.text === ';' || arg.text === '+');
     return { kind: 'next', words: end === -1 ? rest : rest.slice(0, end) };
@@ -639,6 +651,8 @@ class LaunchReader {
     const has = (list: readonly string[] | undefined, option: string): boolean => list?.includes(option) === true;
     const takesValue = (option: string): boolean => has(spec.valued, option) || has(spec.chdir, option) || has(spec.split, option);
     let leading = spec.leading ?? 0;
+    // A wrapper that starts the program in a folder of its own keeps the caller's only by an option that says so.
+    let ownDir = spec.sameDir !== undefined;
     // A word only known when it runs may be the option that makes it run, so it counts as one.
     let running = spec.runs === undefined;
     let index = 0;
@@ -682,6 +696,7 @@ class LaunchReader {
           }
           this.emptied ||= has(spec.emptyEnv, short);
           running ||= has(spec.runs, short);
+          ownDir &&= !has(spec.sameDir, short);
           const argument = table === undefined ? (takesValue(short) ? 'required' : 'none') : shortArgument(table, text.charAt(at));
           if (argument === undefined) {
             return unknown;
@@ -709,6 +724,10 @@ class LaunchReader {
       }
       if (option !== undefined && value !== undefined && has(spec.chdir, option)) {
         this.chdirs.push(value);
+        ownDir = false;
+      }
+      if (option !== undefined && has(spec.sameDir, option)) {
+        ownDir = false;
       }
       if (option !== undefined && value !== undefined && has(spec.unset, option)) {
         this.unsets.push(value);
@@ -727,6 +746,9 @@ class LaunchReader {
     }
     if (!running) {
       return NOTHING;
+    }
+    if (ownDir) {
+      this.chdirs.push(UNKNOWN_DIR);
     }
     return { kind: 'next', words: args.slice(index + leading) };
   }

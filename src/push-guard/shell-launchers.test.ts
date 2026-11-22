@@ -148,6 +148,18 @@ describe('findGitInvocations: programs that run a word or the command after thei
     }
   });
 
+  it('reads a command find -execdir or -okdir or systemd-run starts in a folder of its own in an unknown folder', () => {
+    const dirs = (command: string): readonly string[] =>
+      findGitInvocations(command, { cwd: CWD, home: '/u', dialect: 'bash', git: unset }).invocations.map((invocation) => invocation.dir ?? '?');
+    for (const shape of ["find . -execdir git push origin main ';'", "find . -okdir git push ';'", "find . -execdir sh -c 'git push' ';'", 'systemd-run --user git push', 'systemd-run --user sh -c "git push"']) {
+      assert.deepEqual(dirs(shape), ['?'], shape);
+    }
+    for (const shape of ["find . -exec git push ';'", 'systemd-run --user --same-dir git push', 'systemd-run -d --user git push', 'systemd-run --same-d git push']) {
+      assert.deepEqual(dirs(shape), [CWD], shape);
+    }
+    assert.deepEqual(dirs('systemd-run --working-directory=/srv/app git push'), [resolve('/srv/app')]);
+  });
+
   it('doubts a find that runs more than one command, and a -c command only known when it runs', () => {
     assert.equal(outcome(`find . -exec true ';' -exec sh -c ${X} ';'`), 'DOUBT');
     assert.equal(outcome('su -c "$CMD"'), 'DOUBT');
