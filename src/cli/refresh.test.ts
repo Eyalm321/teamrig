@@ -193,8 +193,8 @@ describe('runCli: context refresh', () => {
     }
     const fresh = contextOf(await kit.run(['hook', 'session-start'], { ...AS_ALPHA, stdin: startPayload('clear') }));
     assert.ok(fresh.includes(note));
-    assert.ok(fresh.includes("Your old session's 1 scheduled job(s) are still scheduled, since a /clear keeps the process"), 'a /clear keeps the job');
-    assert.ok(!fresh.includes('- cron "3 13 * * *"'), 'so it is not listed to make again');
+    assert.ok(fresh.includes('Your old session had 1 scheduled job(s), which a /clear may have ended: run CronList'), 'a /clear may end the job');
+    assert.ok(fresh.includes('- cron "3 13 * * *"'), 'so it is listed to check and make again');
     assert.ok(!contextOf(await kit.run(['hook', 'session-start'], { ...AS_ALPHA, stdin: startPayload('startup') })).includes(note), 'once');
     assert.match((await kit.files.read(STATE('alpha'))) ?? '', /"phase":"refreshed"/);
   });
@@ -205,7 +205,7 @@ describe('runCli: context refresh', () => {
     const third = join(USER_HOME, '.claude', 'projects', 'app', 'third.jsonl');
     const cleared = (fresh: string): string => JSON.stringify({ session_id: CLAUDE_SESSION, cwd: APP, source: 'clear', transcript_path: fresh });
     const carried = join(TEAM_HOME, 'state', 'refresh', 'alpha.carried.json');
-    const kept = "Your old session's 1 scheduled job(s) are still scheduled, since a /clear keeps the process";
+    const kept = 'Your old session had 1 scheduled job(s), which a /clear may have ended';
     const remake = '- cron "3 13 * * *"';
     /** The next refresh asked and its handover written, from the session whose transcript is `path`. */
     const refreshFrom = async (path: string, handover: string): Promise<void> => {
@@ -233,7 +233,7 @@ describe('runCli: context refresh', () => {
     await refreshFrom(second, '# second\n');
     const again = contextOf(await kit.run(['hook', 'session-start'], { ...AS_ALPHA, stdin: cleared(third) }));
     assert.ok(again.includes(kept), 'the second /clear still names the job its transcript never mentions');
-    assert.ok(!again.includes(remake));
+    assert.ok(again.includes(remake), 'and lists it to check with CronList');
 
     await refreshFrom(third, '# third\n');
     const restarted = contextOf(await kit.run(['hook', 'session-start'], { ...AS_ALPHA, stdin: startPayload('startup') }));
