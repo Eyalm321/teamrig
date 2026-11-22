@@ -64,6 +64,11 @@ export interface ReadingSpan {
   readonly ends: readonly number[];
 }
 
+/** What is left of a line's nested reads; see {@link MAX_NESTED_READS}. */
+interface ReadBudget {
+  left: number;
+}
+
 export interface FinderContext {
   readonly cwd: string;
   /** The user's home folder, for `cd ~`. */
@@ -106,6 +111,12 @@ const FILTER_OPTIONS: ReadonlySet<string> = new Set(['--setup', '--env-filter', 
 /** How deep scripts (`bash -c "eval ..."`) and git aliases may nest before the guard stops reading. */
 const MAX_SCRIPT_DEPTH = 8;
 const MAX_ALIAS_DEPTH = 8;
+/**
+ * How many nested commands one line may hand the guard to read (a runner's command, a held substitution). A runner's
+ * command is read from each suffix of its words, so runners nested in runners cost more at each level; past this
+ * the guard stops reading and refuses the line.
+ */
+const MAX_NESTED_READS = 1000;
 const DIALECT_NAMES: Readonly<Record<ShellDialect, string>> = { bash: 'bash', powershell: 'PowerShell', cmd: 'cmd' };
 
 /** Variables that move git to another repository; set in the shell earlier in the line, they move every later git command. */
@@ -467,14 +478,29 @@ class GitInvocationFinder {
   /** The functions, aliases and loaded builtins of every bash script the line runs, which may run their arguments as code. */
   private readonly lineCommands = new LineCommands();
   private readonly context: FinderContext;
+  /** The nested reads left to the whole line, shared with every finder it starts (see {@link MAX_NESTED_READS}). */
+  private readonly budget: ReadBudget;
 
-  constructor(context: FinderContext) {
+  constructor(context: FinderContext, budget: ReadBudget = { left: MAX_NESTED_READS }) {
     this.context = context;
+    this.budget = budget;
   }
 
   find(command: string): GitInvocations {
     this.visitScript(staticWord(command), this.context.dialect, new Location(this.context.cwd, this.context.home), 0);
+    if (this.budget.left < 0) {
+      this.doubt('it nests more commands than the guard reads in one line', false);
+    }
     return { invocations: this.invocations, doubts: this.doubts, mentionsPush: this.mentionsPush, readings: this.readings };
+  }
+
+  /**
+   * Takes one nested read from the line's budget; false once it is spent, and the line is then refused (see
+   * {@link find}), so what is left unread never passes.
+   */
+  private spendRead(): boolean {
+    this.budget.left -= 1;
+    return this.budget.left >= 0;
   }
 
   private doubt(reason: string, gated: boolean): void {
@@ -586,9 +612,12 @@ class GitInvocationFinder {
    * alias (`'$(git p)'`) where no word of the line says push.
    */
   private readHeld(text: string, rereads: boolean, location: Location, depth: number): void {
+    if (!this.spendRead()) {
+      return;
+    }
     const parsed = parseHeldText(text);
     const unread = parsed.skipped ? 'it holds quoted text the guard cannot read for the commands bash runs if an expansion reads it again' : undefined;
-    const held = new GitInvocationFinder(this.context);
+    const held = new GitInvocationFinder(this.context, this.budget);
     held.visitParsed(parsed, text, unread, 'bash', location.child(), depth + 1);
     this.doubts.push(...held.doubts.filter((doubt) => rereads || !doubt.gated));
     if (held.invocations.some((invocation) => invocation.subcommand === 'push')) {
@@ -703,10 +732,10 @@ class GitInvocationFinder {
       return lines.length > 0;
     }
     return lines.some((line) => {
-      if (line.dynamic || line.text.trim() === '') {
+      if (line.dynamic || line.text.trim() === '' || !this.spendRead()) {
         return false;
       }
-      const handed = new GitInvocationFinder(this.context);
+      const handed = new GitInvocationFinder(this.context, this.budget);
       handed.visitScript(staticWord(line.text), 'bash', location.child(), depth + 1);
       return handed.invocations.some((invocation) => invocation.subcommand === 'push') || handed.doubts.some((doubt) => !doubt.gated);
     });
