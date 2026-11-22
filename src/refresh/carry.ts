@@ -309,8 +309,8 @@ export function carryStartOf(source: string | undefined): CarryStart {
  * The lines that tell a fresh session what to take over: its jobs, to make again only those CronList does not
  * show (a /clear kept them on Claude Code 2.1.301, but later versions end them at a /clear, and a durable job comes
  * back by itself, so CronList is the one test right on every version), the wake-up to schedule again (its time on
- * the team's clock),
- * and where the old scratchpad and plan are. Empty when there is nothing. What the owner typed goes to its own file.
+ * the team's clock), and where the old scratchpad and plan are. Empty when there is nothing. What the owner typed
+ * goes to its own file.
  */
 export function carryLines(carry: Carry, now: number, start: CarryStart, zone: TimeZone): readonly string[] {
   const lines: string[] = [];
