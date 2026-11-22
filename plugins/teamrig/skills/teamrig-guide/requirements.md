@@ -19,7 +19,7 @@ teamrig checks git, Claude Code and Node.js itself, and says what is missing in 
 - when `teamrig team create` sets up a team, as `WARN` lines before anything else;
 - in `teamrig doctor`, as `requirement` findings.
 
-It reads `$AI_AGENT` for the running Claude Code (set since Claude Code 2.1.120), the running Node.js, and the PATH
+It reads `$AI_AGENT` for the running Claude Code (set since version 2.1.120), the running Node.js, and the PATH
 for git; the only program it starts is `git version`, when git is on the PATH. Below Claude Code 2.1.139 the hooks cannot run, so only `team create` and `doctor`
 can say so; below 2.1.120 the version is unknown and nothing is said. Outside a team's projects the hooks say nothing.
 
