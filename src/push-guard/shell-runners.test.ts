@@ -137,6 +137,16 @@ describe('findGitInvocations: programs that run a command the guard cannot read'
     }
   });
 
+  it('refuses quickly a line that nests runners past the read budget, and reads a few nested runners', () => {
+    const nested = `${Array.from({ length: 8 }, (_, level) => `watch a${level}`).join(' ')} true`;
+    const started = performance.now();
+    const found = findGitInvocations(nested, { cwd: CWD, home: '/u', dialect: 'bash', git: unset });
+    assert.ok(performance.now() - started < 5000, 'took too long');
+    assert.ok(found.doubts.some((doubt) => doubt.reason === 'it nests more commands than the guard reads in one line' && !doubt.gated), JSON.stringify(found.doubts));
+    assert.equal(outcome('ssh h1 ssh h2 watch -n1 git status'), 'pass');
+    assert.equal(outcome(`ssh h1 ssh h2 watch -n1 ${X}`), 'DOUBT');
+  });
+
   it('asks always when the command names a push, and only on a push line when a pipe feeds it', () => {
     const named = findGitInvocations(`ssh host ${X}`, { cwd: CWD, home: '/u', dialect: 'bash', git: unset });
     assert.deepEqual(named.doubts, [{ reason: 'it hands ssh a command that pushes, which ssh runs where the guard cannot read it', gated: false }]);
