@@ -338,7 +338,7 @@ const CODE_VARIABLES = /^(?:PROMPT_COMMAND|BASH_ENV|ENV|PS[0124])(?:\[[^\]]*\])?
  * `.envrc`. Only these folders count, so a project's own `src/hooks/` is data.
  */
 const LATER_CODE_FILE =
-  /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|mkshrc|envrc)|profile|bash\.bashrc|environment|fish\/config\.fish)$|(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|fish\/(?:conf\.d|functions)|\.husky|systemd\/user|(?:\.config|xdg)\/autostart)\/|\.git\/hooks\//;
+  /(?:^|\/)(?:\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|mkshrc|envrc)|etc\/profile|bash\.bashrc|environment|fish\/config\.fish)$|(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|fish\/(?:conf\.d|functions)|\.husky|systemd\/user|(?:\.config|xdg)\/autostart)\/|\.git\/hooks\//;
 /** A redirection that writes its file: `>`, `>>`, `>|`, `&>`, `&>>`, with a descriptor number or not. */
 const WRITE_REDIRECTION = /^(?:\d*|&)>[>|]?$/;
 
