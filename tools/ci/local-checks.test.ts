@@ -122,6 +122,11 @@ describe('gateChanges (T4080 C2)', () => {
     assert.deepEqual(gateChanges(['src/a.ts', ...gate, 'docs/a.md']), gate);
   });
 
+  it('names a changed file of the tools the gate runs or imports: tools/lib, tools/scrub, tools/dco and tools/build (#1822)', () => {
+    const gate = ['tools/lib/guards.ts', 'tools/scrub/cli.ts', 'tools/dco/cli.ts', 'tools/build/integrity.ts'];
+    assert.deepEqual(gateChanges(['src/a.ts', ...gate, 'docs/tools/lib/x.md', 'tools/library/x.ts']), gate);
+  });
+
   it('names none for source, specs, docs or a look-alike path', () => {
     assert.deepEqual(gateChanges(['src/a.ts', 'src/a.test.ts', 'docs/tools/ci/x.md', 'plugins/teamrig/package.json', 'src/push-guards/x.ts', 'tsconfig/x.json']), []);
   });

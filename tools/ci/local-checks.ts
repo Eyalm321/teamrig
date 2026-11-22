@@ -112,15 +112,16 @@ export function shortChecks(base: string, specs: readonly string[]): readonly Lo
 
 /**
  * The paths whose change makes a short proof run every check (security's condition C2, T4080): the gate itself (its
- * hooks, CI workflows, local and ship tools, the push guard) and what every spec depends on (the package, its lockfile
- * and the TypeScript configs). A change there can break a spec no changed file sits beside, or the gate that would
- * find it, so the short set proves too little.
+ * hooks, CI workflows, local and ship tools, the tools its checks run or import: lib, scrub, dco and build, and the
+ * push guard) and what every spec depends on (the package, its lockfile and the TypeScript configs). A change there
+ * can break a spec no changed file sits beside, or the gate that would find it, so the short set proves too little.
  */
 const GATE_PATHS: readonly RegExp[] = [
   /^\.githooks\//,
   /^\.github\//,
   /^tools\/ci\//,
   /^tools\/ship\//,
+  /^tools\/(?:lib|scrub|dco|build)\//,
   /^src\/push-guard\//,
   /^package(-lock)?\.json$/,
   /^tsconfig[^/]*\.json$/,
