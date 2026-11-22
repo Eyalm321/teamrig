@@ -11,7 +11,7 @@ import { FakeMergeGit, MAIN_CHECKOUT, WORKTREE } from '../testing/fake-merge-git
 import { FakeStarterWatch } from '../testing/fake-starter-watch.ts';
 import { FakeSteps } from '../testing/fake-steps.ts';
 import { heldBy, otherRuns } from '../testing/held-lock.ts';
-import { ROOMY_FREE_MB } from '../testing/quiet-world.ts';
+import { ROOMY_FREE_MB } from '../testing/quiet-delivery.ts';
 import { EXIT } from './runtime.ts';
 
 const LEDGER = join(TEAM_HOME, 'state', 'deploys', 'ledger.jsonl');
@@ -184,6 +184,8 @@ describe('teamrig merge', () => {
       cwd: APP,
       agentName: null,
       model: null,
+      effort: null,
+      hostVersion: null,
       rateLimits: { fiveHour: null, sevenDay: { usedPct: 90, resetsAt: Date.parse('2030-01-08T12:00:00Z') } },
       rateLimitsSince: null,
       rateLimitsAfter: null,

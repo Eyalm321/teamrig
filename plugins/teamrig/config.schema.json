@@ -178,6 +178,7 @@
         "maxTitle": { "description": "The most characters a task title may have.", "type": "integer", "minimum": 20, "maximum": 1000, "default": 140 },
         "maxText": { "description": "The most characters of a task's other text, such as its ref and notes; the title and the description have their own limits.", "type": "integer", "minimum": 20, "maximum": 5000, "default": 300 },
         "secretPatterns": {
+          "x-teamrig-served": "value",
           "description": "Extra regular expressions, matched case-insensitively, that refuse secret-looking text on top of the built-in shapes (vendor tokens, private keys, JSON web tokens, credentials in URLs, password= assignments).",
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
@@ -220,7 +221,7 @@
           "default": true
         },
         "requireProofOnVerifying": {
-          "description": "Whether teamrig set --status verifying needs --proof, what will prove the shipped change works, and --waits naming when it runs: a time, or a task in progress or verifying.",
+          "description": "Whether teamrig set --status verifying needs --proof, what will prove the shipped change works, and --waits naming when it runs: a time, or a task in progress or verifying, or an open one of the same owner.",
           "type": "boolean",
           "default": true
         },
@@ -249,6 +250,7 @@
           "properties": {
             "staleAfterHours": { "description": "An active task untouched this long is STALE.", "type": "integer", "minimum": 1, "default": 72 },
             "notPickedUpAfterHours": { "description": "An open task its owner has not touched this long after it was assigned is NOT-PICKED-UP.", "type": "integer", "minimum": 1, "default": 24 },
+            "blockerOpenAfterHours": { "description": "A blocker still unfixed (open, in progress or waiting) this long after it became one is BLOCKER-OPEN.", "type": "integer", "minimum": 1, "default": 4 },
             "prioritySkipAfterHours": { "description": "A session's in-progress task outranked this long by its own open task, on band and score, is a PRIORITY-SKIP.", "type": "integer", "minimum": 1, "default": 24 },
             "maxSelfMadePerDay": {
               "description": "A session that added more tasks for itself (created by it, asked by no one else) in the last 24 hours than this is a SELF-MADE in teamrig check; 0 turns the flag off.",
@@ -394,6 +396,21 @@
         }
       }
     },
+    "changes": {
+      "description": "Where teamrig changes reads what changed in the project.",
+      "type": "object",
+      "properties": {
+        "sources": {
+          "description": "The change sources teamrig changes reads, in the order their entries win when two name one change: notes (the project's changes/<slug>.md files not released yet), register (the team's tasks its commits name), git (the commit subjects). Empty: every source that applies to the project.",
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["notes", "register", "git"] },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
     "exec": {
       "description": "Privileged commands a reviewer approved, run once by teamrig exec run.",
       "type": "object",
@@ -406,6 +423,7 @@
           "default": []
         },
         "webhookEnv": {
+          "x-teamrig-served": "value",
           "description": "The name of the environment variable holding the webhook URL that every exec approval, refusal and run is posted to, never the URL itself. Only an https URL is posted to: any other warns instead. Absent: nothing is posted; named but unset: each would-be post warns.",
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
@@ -466,7 +484,7 @@
           "default": "on"
         },
         "serviceRoleDailyCap": {
-          "description": "How many calls one service role (serviceRoles) lets run with no permission check in 24 hours, so a holder steered by text from outside closes or comments only so much; past it, the role's next call is refused. 0 lets none through. Each allowed call is a line of state/prompt-answers.jsonl naming the role, command and target, never the text.",
+          "description": "How many calls one service role (serviceRoles) lets run with no permission check in 24 hours, a migrate counting each issue row, so a holder steered by text from outside closes or migrates only so much; past it, the role's next call is refused. 0 lets none through. Each allowed call is a line of state/prompt-answers.jsonl naming the role, command and target, never the text.",
           "type": "integer",
           "minimum": 0,
           "maximum": 200,
@@ -479,25 +497,29 @@
       "type": "object",
       "properties": {
         "secretReads": {
+          "x-teamrig-served": "value",
           "description": "A call that would print a secret: cat .env, Get-Content ~/.npmrc, the Read tool on a secret file, env, printenv, Get-ChildItem Env:, echo $GITHUB_TOKEN, kubectl get secret -o yaml, kubectl config view --raw, and a shell line that reads a saved credential out of the host's store, printed or not (gh auth token, git credential fill, CredRead): deny refuses it, ask refuses it too, its reason naming the route to take (no teamrig hook asks a person), allow lets it run, which is the owner's call: check flags it (SECRET-GUARD-OFF).",
           "type": "string",
           "enum": ["deny", "ask", "allow"],
           "default": "deny"
         },
         "writes": {
+          "x-teamrig-served": "value",
           "description": "A call that holds a secret as text: a command line with one in it (curl -H \"Authorization: Bearer <a token>\"), or a Write, Edit, MultiEdit or NotebookEdit whose written text holds one outside a secret file (a token written into src/): deny refuses it, ask refuses it too, its reason naming the route to take (no teamrig hook asks a person), allow lets it run, which is the owner's call: check flags it (SECRET-GUARD-OFF).",
           "type": "string",
           "enum": ["deny", "ask", "allow"],
           "default": "deny"
         },
         "paths": {
-          "description": "The team's own secret files, read after the defaults (**/.env, **/.env.*, ~/.npmrc, ~/.ssh/**, ~/.aws/credentials, **/.kube/config, ~/.docker/config.json, **/.git-credentials, ~/.config/gh/hosts.yml, ~/AppData/Roaming/GitHub CLI/hosts.yml, ~/.claude/.credentials.json, ~/.claude/history.jsonl, **/.claude/settings.local.json, ~/.bash_history, ~/.zsh_history, **/PSReadLine/*_history.txt, **/*.pem, **/*.key, **/*.p12, **/*.pfx, **/*.jks, **/*.keystore, **/id_rsa, **/id_ecdsa, **/id_ed25519, **/*.tfstate, **/*.tfstate.backup; .env.example, .env.sample and ~/.ssh/*.pub stay readable). ~/ starts at home, a glob with no leading / or drive matches at any depth, and the last glob that matches a path decides: !glob keeps a path readable.",
+          "x-teamrig-served": "location",
+          "description": "The team's own secret files, read after the defaults (**/.env, **/.env.*, ~/.npmrc, ~/.ssh/**, ~/.aws/credentials, **/.kube/config, ~/.docker/config.json, **/.git-credentials, ~/.config/gh/hosts.yml, ~/AppData/Roaming/GitHub CLI/hosts.yml, ~/.claude/.credentials.json and ~/.claude/history.jsonl and both in the folder CLAUDE_CONFIG_DIR names, **/.claude/settings.local.json, **/.claude*/.credentials.json, ~/.bash_history, ~/.zsh_history, **/PSReadLine/*_history.txt, **/*.pem, **/*.key, **/*.p12, **/*.pfx, **/*.jks, **/*.keystore, **/id_rsa, **/id_ecdsa, **/id_ed25519, **/*.tfstate, **/*.tfstate.backup; .env.example, .env.sample and ~/.ssh/*.pub stay readable). ~/ starts at home, a glob with no leading / or drive matches at any depth, and the last glob that matches a path decides: !glob keeps a path readable.",
           "type": "array",
           "maxItems": 32,
           "items": { "type": "string", "maxLength": 200 },
           "default": []
         },
         "envNames": {
+          "x-teamrig-served": "value",
           "description": "The team's own patterns for environment variables whose values are secrets, regular expressions over the name with case ignored, read after the defaults (TOKEN, SECRET, PASSW, PASS, CRED, AUTH except AUTHOR and an auth mechanism or source, PRIVATE, KEY, DSN, WEBHOOK, COOKIE, PAT, SALT, and a store's connection URL or string by its kind: DB_URL, DATABASE_URL, PG_URI, CACHE_URL, BROKER_URL, CONNECTION_STRING). A store named by its product is the team's to add. The last pattern that matches a name decides: !pattern keeps a variable printable.",
           "type": "array",
           "maxItems": 16,
@@ -505,6 +527,7 @@
           "default": []
         },
         "commands": {
+          "x-teamrig-served": "value",
           "description": "The team's own commands whose output is a secret whatever file or variable they name, regular expressions over a command's program and arguments with case ignored, read after the default (kubectl config view --raw). The last pattern that matches a command decides: !pattern lets it print.",
           "type": "array",
           "maxItems": 16,
@@ -512,6 +535,7 @@
           "default": []
         },
         "redact": {
+          "x-teamrig-served": "value",
           "description": "After a Bash, PowerShell, Read or Grep call runs, replace each secret its result holds (a token by its shape, a match of register.secretPatterns, the value of a secret variable) before the model and the transcript see it, and tell the session which kinds it held and the task filed to rotate each. false shows results whole; turning it off is the owner's call: check flags it (SECRET-GUARD-OFF).",
           "type": "boolean",
           "default": true
@@ -704,7 +728,7 @@
                 "default": ".claude/worktrees"
               },
               "shipTool": {
-                "description": "The ship tool a service role may run through teamrig queue with no permission check, a run without --merge as --kind test and a merge as --kind ship or merge: its script, in a checkout of this repository kept clean at main's current code, checked at every allow, as a queued step that runs it is queued and again when it starts; at the start, a checkout moved on along main's history runs too when no file the tool runs (its relative imports, followed, the files it opens beside itself, and the files its <tool>.roots.json beside it names, such as a CLI it spawns) changed. A relative path is in the main checkout. Unset: no role runs a ship.",
+                "description": "The ship tool a service role may run through teamrig queue with no permission check, a run without --merge as --kind test and a merge as --kind ship or merge: its script, in a checkout of this repository kept clean at main's current code, checked at every allow, as a queued step that runs it is queued and again when it starts; at the start, a checkout moved on along main's history runs too when no file the tool runs (its relative imports, followed, the files it opens beside itself, and the files its <tool>.roots.json beside it names, such as a CLI it spawns, with no import() followed in the modules it names as staticOnly, such as a CLI's command table whose other commands the tool never runs) changed. A relative path is in the main checkout. Unset: no role runs a ship.",
                 "type": "string",
                 "minLength": 1
               },
@@ -1180,7 +1204,7 @@
           "default": {}
         },
         "pauseByPriority": {
-          "description": "On a short day, when what is left of the week gives less than the pace line plans for the day, fund the team's sessions in the priority order of their top queued task (p0 first, idle sessions last) and pause the sessions none of it reaches, so the top work keeps its pace. The lead, the delivery owner held in the team and lifted sessions are never paused. Off: no session of the team is paused.",
+          "description": "On a short day, when what is left of the week gives less than the pace line plans for the day, fund the team's sessions in the priority order of their top queued task (p0 first, idle sessions last) and pause the sessions none of it reaches, so the top work keeps its pace. The lead, the delivery owner held in the team, the sessions the budget never holds (the security reviewer held in the team and the GitHub answerer) and lifted sessions are never paused. Off: no session of the team is paused.",
           "type": "boolean",
           "default": false
         },
@@ -1327,11 +1351,18 @@
           "default": 120
         },
         "minGapMinutes": {
-          "description": "The least time between two wakes of one session; work handed meanwhile waits and wakes it once.",
+          "description": "The least time between two wakes of one session, for one task due; work handed meanwhile waits and wakes it once. A blocker skips it.",
           "type": "integer",
           "minimum": 0,
           "maximum": 1440,
           "default": 15
+        },
+        "maxGapMinutes": {
+          "description": "The time between two wakes of one session once five tasks or more are due, stepped evenly up from minGapMinutes, so a session with much waiting takes it in fewer, fuller wakes; read as minGapMinutes when it is less. A blocker skips it.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440,
+          "default": 30
         },
         "dayStartUtc": {
           "description": "The day's start (HH:MM UTC, outside the budget's quiet hours): from then each session with work it can start, of any priority, that has had no turn since gets one wake that day, and a burst wakes its sessions the same way once it starts. Unset: no day-start wake, and a burst wakes no one. The root lead's `teamrig schedule set` overrides it for a day, per team or session.",
@@ -1354,7 +1385,7 @@
       }
     },
     "github": {
-      "description": "The team's GitHub repositories. teamrig issue sync reads their issues into the register as tasks of source github, and never writes to GitHub; local tasks stay local. teamrig issue migrate, teamrig issue comment, teamrig issue label, teamrig issue edit and teamrig issue close, run by hand, write only to these repositories. Each owner's repositories are reached with the token saved as teamrig-gh-<owner> in the system's credential store, never the gh login; no saved token, or one that cannot be read, stops the read or write for that owner (docs/github-sync.md).",
+      "description": "The team's GitHub repositories. teamrig issue sync reads their issues into the register as tasks of source github, and never writes to GitHub; local tasks stay local. teamrig issue migrate, teamrig issue reply, teamrig issue assign, teamrig issue label, teamrig issue edit and teamrig issue close, run by hand, write only to these repositories. Each owner's repositories are reached with the token saved as teamrig-gh-<owner> in the system's credential store, never the gh login; no saved token, or one that cannot be read, stops the read or write for that owner (docs/github-sync.md).",
       "type": "object",
       "properties": {
         "repos": {
@@ -1379,7 +1410,7 @@
           "default": {}
         },
         "areaOwners": {
-          "description": "The session that owns an issue carrying each label, such as area:cli for the session of that area; matched without case. Read after the assignees in owners and before sessions; when an issue carries several, the first label listed here wins.",
+          "description": "The session that owns an issue carrying each label, such as area:cli for the session of that area; matched without case. Read after the assignees in owners and before sessions; when an issue carries several, the first label listed here wins. teamrig issue label makes a label listed here that a repository lacks, in one area colour and description.",
           "type": "object",
           "propertyNames": {
             "type": "string",
@@ -1529,7 +1560,7 @@
           "default": 20
         },
         "watcher": {
-          "description": "The session that hears the pull request news no task owner takes: a pull request from a fork or by an author outside the repository, or from a branch that names no task, and a mention no one else takes. Unset, the first holder of a service role holding issue comment, the session that answers on GitHub, else the lead. Who watches is staffing, so the lead may set it with teamrig config set, to one of the sessions.",
+          "description": "The session that hears the pull request news no task owner takes: a pull request from a fork or by an author outside the repository, or from a branch that names no task, and a mention no one else takes. Unset, the first holder of a service role holding issue close, the session that answers on GitHub, else the lead. Who watches is staffing, so the lead may set it with teamrig config set, to one of the sessions.",
           "$ref": "#/$defs/sessionName"
         },
         "issueAtAdd": {
@@ -1565,14 +1596,22 @@
             ]
           },
           "commands": {
-            "description": "The commands the role holds: issue close (teamrig issue close on a repository of github.repos), issue comment (teamrig issue comment on one), queue ship and queue merge (teamrig queue --kind test, or --kind ship or merge for a merge, running the shipTool of a delivery repository on a worktree whose task branch the holding session owns, so a role of holders team gives each session its own ships only). The daily cap counts closes and comments.",
+            "description": "The commands the role holds: issue close (teamrig issue close on a repository of github.repos), issue migrate (teamrig issue migrate --yes on a rows file in one of the team's task folders, opening an issue for each row's task and pointing that task's ref at it, any session's task of the team, never one kept local), queue ship and queue merge (teamrig queue --kind test, or --kind ship or merge for a merge, running the shipTool of a delivery repository on a worktree whose task branch the holding session owns, so a role of holders team gives each session its own ships only). The daily cap counts closes, comments and the issue rows of each migrate.",
             "type": "array",
-            "items": { "enum": ["issue close", "issue comment", "queue ship", "queue merge"] },
+            "items": { "enum": ["issue close", "issue migrate", "queue ship", "queue merge"] },
             "minItems": 1,
             "uniqueItems": true
           }
         }
       },
+      "default": {}
+    },
+    "connectors": {
+      "description": "Each connector's own settings, by the connector's id: a connector is the adapter that reaches an outside tool holding issues or code. The keys under an id are that connector's, so it reads and checks them itself, and a key it does not take is refused by the command that reaches the connector, naming the keys it takes. Only the owner changes it, since it says what outside tool a connector reaches and how.",
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+      "additionalProperties": { "type": "object" },
       "default": {}
     },
     "alerts": {
@@ -1587,16 +1626,19 @@
           "default": 24
         },
         "pageWebhookEnv": {
+          "x-teamrig-served": "value",
           "description": "The name of the environment variable holding the chat webhook URL that a page to the owner (an expired Claude login) is posted to, never the URL itself. Unset, with pageWebhookFile unset too: nothing pages.",
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
         },
         "pageWebhookFile": {
+          "x-teamrig-served": "location",
           "description": "The absolute path of a file holding that webhook URL as its first non-empty line, or as the value of pageWebhookKey's key, read at each page, so the URL never sits in an environment, a log or a session's read. Wins over pageWebhookEnv when both are set. A URL that is not https pages no one.",
           "type": "string",
           "pattern": "^(?:[A-Za-z]:)?[\\\\/][^\\r\\n]*$"
         },
         "pageWebhookKey": {
+          "x-teamrig-served": "location",
           "description": "With pageWebhookFile: the key whose value in that file is the webhook URL, on a line `<key>: <value>` or `<key>=<value>` (a YAML map such as a Kubernetes secret's stringData, or a .env file), the value bare or in quotes. So a secrets file holding many keys is read in place, and the URL keeps one home. Unset: the file's first non-empty line is the URL.",
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
@@ -1623,6 +1665,13 @@
         },
         "dedicatedOwners": {
           "description": "Sessions that own the team's core-business areas. The owner never decides their waits from a daily card or a batch: the meeting agenda lists them under DEDICATED, by owning session, with the lines that ask that session for a full brief and book its own meeting after the daily (meeting schedule).",
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/sessionName" },
+          "default": []
+        },
+        "ownMeetingTeams": {
+          "description": "Teams under this one whose lead meets the owner itself. This team's meeting agenda leaves their waits on the owner, and those of every team under them, out of DECISIONS, with one line per team counting them; that team's own meeting still lists them.",
           "type": "array",
           "maxItems": 32,
           "items": { "$ref": "#/$defs/sessionName" },
@@ -1757,6 +1806,17 @@
           "minimum": 1,
           "maximum": 168,
           "default": 24
+        }
+      }
+    },
+    "ui": {
+      "description": "The dedicated UI that teamrig ui starts in the terminal it is run in.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The absolute path of a UI entry script to start in place of the released UI: a build of your own, for work on the UI itself. Node.js runs it as you, outside every Claude Code guard, so name only a script you trust and never one in a working tree a session edits. The owner's key: the config guard refuses a session changing it. Unset: the released UI.",
+          "type": "string",
+          "pattern": "^(?:[A-Za-z]:)?[\\\\/][^\\r\\n]*$"
         }
       }
     },
@@ -2024,10 +2084,9 @@
         "properties": {
           "model": {
             "description": "A Claude Code model alias or a full model id such as claude-opus-5-5. best is Fable where the account has it, else Opus; default leaves the model to Claude Code.",
-            "anyOf": [
-              { "enum": ["default", "best", "fable", "opus", "sonnet", "haiku", "opusplan", "fable[1m]", "opus[1m]", "sonnet[1m]", "opusplan[1m]"] },
-              { "type": "string", "pattern": "^claude-[a-z0-9]+(?:[.@-][a-z0-9]+)*(?:\\[1m\\])?$", "maxLength": 100 }
-            ]
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._@:/-]*(?:\\[[a-z0-9]+\\])?$",
+            "maxLength": 100
           },
           "effort": {
             "description": "The effort level; a model that lacks it runs at the highest level it has below it. An /effort the user types in the session's tab is written here.",
@@ -2047,6 +2106,7 @@
       "properties": {
         "enabled": { "description": "Off: no session is asked for a handover or refreshed.", "type": "boolean", "default": true },
         "contextTokens": {
+          "x-teamrig-served": "value",
           "description": "The context size, in tokens, that asks for a refresh: under the about 167k where Claude Code compacts a 200k window.",
           "type": "integer",
           "minimum": 10000,
@@ -2054,6 +2114,7 @@
           "default": 120000
         },
         "largeWindowContextTokens": {
+          "x-teamrig-served": "value",
           "description": "The context size, in tokens, that asks for a refresh of a session on a context window larger than 200k, when larger than contextTokens: its launch model ends in [1m], or its refresh state shows the window, since a model can run a 1M window without the suffix (the lead's plain opus) and no hook is told it: the window the plugin's mod reports, a context past 200k, or a fresh start measured over contextTokens. A fresh session on it starts at over 120k (its system prompt, rules and handover), and the window has room far past it. 0: contextTokens for every window.",
           "type": "integer",
           "minimum": 0,
@@ -2068,6 +2129,7 @@
           "default": 3
         },
         "everyTasksMinTokens": {
+          "x-teamrig-served": "value",
           "description": "The smallest context, in tokens, the task count refreshes at.",
           "type": "integer",
           "minimum": 10000,
@@ -2102,6 +2164,7 @@
           "default": 20
         },
         "compactCeilingTokens": {
+          "x-teamrig-served": "value",
           "description": "While a session's handover is asked for or written, the plugin's mod stops Claude Code's own compaction (trigger auto) of its main conversation as long as its context, as Claude Code estimates it, is under this many tokens: the /clear at the turn's end replaces it. Where a managed mod runs first and sends the compaction on past the plugin's mod, the classic PreCompact hook stops it instead, on the context it estimates from the transcript and a 200,000-token window. Past it a compaction goes through; /compact and a subagent's own compaction are never stopped. 0: never stopped. It also bounds an open owner meeting (the lead's daily one, or a booked one from its meeting start M<n>), which holds the refresh of each session in it only under it; 0 holds it until the meeting ends.",
           "type": "integer",
           "minimum": 0,
@@ -2135,7 +2198,7 @@
           "default": "owner"
         },
         "reviewDays": { "description": "Days from a hire to its review date, unless teamrig hire --review names one.", "type": "integer", "minimum": 1, "maximum": 90, "default": 7 },
-        "resumeMaxTokens": { "description": "The most context tokens a session's last Claude Code session may hold for teamrig open --resume to resume it (a rehired session's, or one whose tab ended outside teamrig); past it the session opens fresh.", "type": "integer", "minimum": 10000, "maximum": 1000000, "default": 250000 },
+        "resumeMaxTokens": { "x-teamrig-served": "value", "description": "The most context tokens a session's last Claude Code session may hold for teamrig open --resume to resume it (a rehired session's, or one whose tab ended outside teamrig); past it the session opens fresh.", "type": "integer", "minimum": 10000, "maximum": 1000000, "default": 250000 },
         "resumeMaxIdleDays": { "description": "The most days a session's last Claude Code session may have gone unwritten for teamrig open --resume to resume it (a rehired session's, or one whose tab ended outside teamrig); past it the session opens fresh.", "type": "integer", "minimum": 1, "maximum": 90, "default": 7 },
         "scaleOut": {
           "description": "How teamrig check measures an area against its dated work for a SCALE-OUT flag: its pace is the tasks it finished lately, and the dated tasks of the top priorities are what it must finish in time.",

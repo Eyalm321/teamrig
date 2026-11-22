@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { isRecord, type JsonRecord } from '../core/guards.ts';
 import { NAME_PATTERN, RESERVED_NAMES } from '../core/ids.ts';
-import { MODEL_ALIASES, MODEL_ID_MAX_LENGTH, MODEL_ID_PATTERN } from './launch.ts';
+import { MODEL_NAME_MAX_LENGTH, MODEL_NAME_PATTERN } from './launch.ts';
 import {
   APPLY_FLAG_PATTERN,
   BUDGET_ACCOUNT_MAX_LENGTH,
   CLIENT_RECEIVER_PATTERN,
   CONFIG_LIMITS,
+  CONNECTOR_LIMITS,
   DB_PROGRAM_NAME_PATTERN,
   DB_WRITE_ENTRYPOINT_LIMITS,
   DB_WRITE_NAME_LIMITS,
@@ -89,9 +90,12 @@ const EVERY_KEY = {
   decisions: { batchTimesUtc: ['13:03'], batchAt: 3 },
   github: { repos: ['acme/web'], owners: { octocat: 'bravo' }, closedDays: 30, probeSeconds: 120, watcher: 'charlie' },
   serviceRoles: { github: { holders: ['bravo'], commands: ['issue close'] } },
+  // An empty section: the keys under an id are the connector's own, so the schema lists none of them.
+  connectors: { tracker2: {} },
   paths: { state: '/s', inbox: '/i', skills: '/k' },
   exec: { path: ['C:/tools'], webhookEnv: 'EXEC_WEBHOOK_URL' },
   alerts: { pageWebhookEnv: 'PAGE_WEBHOOK_URL', pageWebhookFile: 'C:/chat/.page-webhook' },
+  ui: { path: 'C:/pane/out/ui/main.js' },
 };
 
 async function loadSchema(): Promise<JsonRecord> {
@@ -159,6 +163,7 @@ const LIMIT_PATHS: { readonly [Name in keyof typeof CONFIG_LIMITS]: string } = {
   shareFloorPct: 'budget.shareFloorPct',
   decisionBatchTimes: 'decisions.batchTimesUtc',
   dedicatedOwners: 'decisions.dedicatedOwners',
+  ownMeetingTeams: 'decisions.ownMeetingTeams',
   decisionBatchAt: 'decisions.batchAt',
   chainNudgeAt: 'loops.chainNudgeAt',
   leadOwnPaths: 'leadBoundary.ownPaths',
@@ -181,6 +186,7 @@ const LIMIT_PATHS: { readonly [Name in keyof typeof CONFIG_LIMITS]: string } = {
   wakePriority: 'wake.priority',
   wakeBatchSeconds: 'wake.batchSeconds',
   wakeMinGapMinutes: 'wake.minGapMinutes',
+  wakeMaxGapMinutes: 'wake.maxGapMinutes',
   maxFailureChars: 'tests.maxFailureChars',
   githubRepos: 'github.repos',
   issueTypeNames: 'github.fields.types.task',
@@ -406,10 +412,7 @@ describe('config.schema.json', () => {
     assert.ok(launch !== undefined);
     const { model, effort } = properties(launch);
     assert.ok(isRecord(model) && isRecord(effort));
-    assert.deepEqual(model['anyOf'], [
-      { enum: [...MODEL_ALIASES] },
-      { type: 'string', pattern: MODEL_ID_PATTERN.source, maxLength: MODEL_ID_MAX_LENGTH },
-    ]);
+    assert.deepEqual([model['type'], model['pattern'], model['maxLength']], ['string', MODEL_NAME_PATTERN.source, MODEL_NAME_MAX_LENGTH]);
     assert.deepEqual(effort['enum'], [...EFFORT_LEVELS]);
   });
 
@@ -567,6 +570,16 @@ describe('config.schema.json', () => {
     for (const command of SERVICE_COMMANDS) {
       assert.match(String(commands['description']), new RegExp(`\\b${command}\\b`), `the description says what ${command} runs`);
     }
+  });
+
+  it('takes the connector sections the parser takes: a section count, an id pattern and any object under an id (T4766)', async () => {
+    const node = nodeAt(await loadSchema(), 'connectors');
+    assert.equal(node['maxProperties'], CONNECTOR_LIMITS.maxConnectors);
+    const ids = node['propertyNames'];
+    assert.ok(isRecord(ids));
+    assert.equal(ids['pattern'], CONNECTOR_LIMITS.idPattern.source);
+    assert.deepEqual(anyProperty(node), { type: 'object' });
+    assert.deepEqual(node['default'], {});
   });
 
   it('requires exactly the roster', async () => {

@@ -1,44 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+import { importClosure } from '../testing/import-closure.ts';
 import * as read from './index.ts';
 
 const ENTRY = fileURLToPath(new URL('./index.ts', import.meta.url));
 const SRC = dirname(dirname(ENTRY));
-
-interface ImportClosure {
-  /** Every file reached, relative to `root`, with forward slashes. */
-  readonly files: readonly string[];
-  /** Each import of something that is not a relative file: `node:` modules and packages alike. */
-  readonly outside: readonly string[];
-}
-
-/**
- * Follows every import from `entry` (static, `import type`, `export ... from`, side-effect and
- * dynamic), the way TypeScript itself finds them, so comments and strings never count.
- */
-function importClosure(entry: string, root: string, readText: (file: string) => string): ImportClosure {
-  const seen = new Set<string>();
-  const outside: string[] = [];
-  const queue = [entry];
-  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-    if (seen.has(file)) {
-      continue;
-    }
-    seen.add(file);
-    for (const { fileName } of ts.preProcessFile(readText(file), true, true).importedFiles) {
-      if (fileName.startsWith('./') || fileName.startsWith('../')) {
-        queue.push(resolve(dirname(file), fileName));
-      } else {
-        outside.push(`${relative(root, file).replaceAll('\\', '/')} imports ${fileName}`);
-      }
-    }
-  }
-  return { files: [...seen].map((file) => relative(root, file).replaceAll('\\', '/')).sort(), outside };
-}
 
 describe('the read entry', () => {
   it('reaches no node: module and no package, so a reader without Node built-ins can run it', () => {
@@ -48,18 +17,6 @@ describe('the read entry', () => {
       assert.ok(closure.files.includes(file), `${file} is part of the read side`);
     }
     assert.ok(!closure.files.some((file) => file.endsWith('.test.ts')), 'no test file is reachable');
-  });
-
-  it('catches an outside import wherever it hides, the dynamic and re-exported ones too', () => {
-    const root = resolve('/x');
-    const files = new Map([
-      [resolve(root, 'entry.ts'), "export { a } from './a.ts';\n// import 'node:comment';\n"],
-      [resolve(root, 'a.ts'), "export * from 'node:fs';\nimport type { B } from './b.ts';\nexport const a = 'import \"node:string\"';\n"],
-      [resolve(root, 'b.ts'), "import './a.ts';\nexport const b = await import('node:path');\nimport {\n  c,\n} from 'some-package';\n"],
-    ]);
-    const closure = importClosure(resolve(root, 'entry.ts'), root, (file) => files.get(file) ?? '');
-    assert.deepEqual(closure.outside, ['a.ts imports node:fs', 'b.ts imports node:path', 'b.ts imports some-package']);
-    assert.deepEqual(closure.files, ['a.ts', 'b.ts', 'entry.ts']);
   });
 
   it('shows no line from a newer teamrig and counts it as teamrig list warns', () => {
@@ -131,7 +88,7 @@ describe('the read entry', () => {
       JSON.stringify({ configVersion: read.CONFIG_VERSION, sessions: ['lead', 'alpha', 'beta'], roles: { lead: 'lead' }, launch: { alpha: { model: 'sonnet' }, lead: { effort: 'high' } } }),
     );
     assert.ok(config.status === 'loaded');
-    const launches: read.LaunchConfig[] = ['lead', 'alpha', 'beta'].map((id) => read.launchOf(config.config, id));
+    const launches: read.LaunchConfig[] = ['lead', 'alpha', 'beta'].map((id) => read.launchOf(config.config, id, { model: 'opus', effort: 'xhigh' }));
     assert.deepEqual(launches, [{ model: 'opus', effort: 'high' }, { model: 'sonnet' }, {}]);
     assert.deepEqual(launches.map(read.describeLaunch), ['model opus at high effort', 'model sonnet at the default effort', 'the default model and effort']);
   });
@@ -215,7 +172,7 @@ describe('the read entry', () => {
   it('reads a turn-log line as the hooks write it, and none from a newer teamrig', () => {
     const reply = { at: '2030-01-08T09:00:00.000Z', kind: 'reply', text: 'shipped', claude: 'claude-1', truncated: true, upTo: 'u-7' };
     assert.deepEqual(read.parseEntry({ v: read.TURN_LOG_VERSION, ...reply, later: 'a field it does not know' }), reply);
-    assert.equal(read.parseEntry({ v: read.TURN_LOG_VERSION + 1, ...reply }), undefined);
+    assert.equal(read.parseEntry({ v: read.TURN_LOG_VERSION + 2, ...reply }), undefined);
   });
 
   it("reads each session's closes and reopens from the session log, and none from a newer teamrig (T1725)", () => {
@@ -223,12 +180,22 @@ describe('the read entry', () => {
     const reopen: read.ReopenRecord = { kind: 'reopen', session: 'alpha', at: '2030-01-08T10:00:00.000Z', resumed: 'claude-1' };
     const bravo: read.CloseRecord = { kind: 'close', session: 'bravo', by: 'lead', at: '2030-01-08T09:30:00.000Z', claudeSession: 'claude-2', idleMinutes: 40, freedMb: 600 };
     const line = (record: read.SessionLogRecord, version: number): string => JSON.stringify({ v: version, ...record });
-    const text = [line(close, read.SESSION_LOG_FORMAT), line(bravo, read.SESSION_LOG_FORMAT), line(reopen, read.SESSION_LOG_FORMAT), line(close, read.SESSION_LOG_FORMAT + 1)].join('\n');
+    const text = [line(close, read.SESSION_LOG_FORMAT), line(bravo, read.SESSION_LOG_FORMAT), line(reopen, read.SESSION_LOG_FORMAT), line(close, read.SESSION_LOG_FORMAT + 2)].join('\n');
     const log = read.readSessionLog(text);
     assert.equal(log.skipped, 1);
     const bySession = read.sessionLogBySession(log.records);
     assert.deepEqual([...bySession.entries()], [['alpha', [close, reopen]], ['bravo', [bravo]]]);
     assert.deepEqual(['alpha', 'bravo'].map((session) => read.closedOf(log.records, session)), [undefined, bravo]);
     assert.deepEqual(read.SESSION_LOG_IN_STATE, ['session-log.jsonl']);
+  });
+
+  it("draws a decision card's security line and escapes outside text as teamrig prints them (#1656)", () => {
+    const card = { question: 'Grant the deploy key', options: ['Grant it', 'Hold it'], recommend: 'Grant it', byDefault: 'Hold it' };
+    const verdict = { text: 'Pass: scoped key', read: { question: card.question, options: card.options, recommend: card.recommend }, by: 'bravo', at: '2030-01-08T09:00:00.000Z' };
+    assert.equal(read.verdictIsCurrent(verdict, card), true);
+    assert.equal(read.securityLine(card, verdict), 'security: Pass: scoped key (verdict by bravo)');
+    assert.equal(read.verdictIsCurrent(verdict, { ...card, recommend: 'Hold it' }), false);
+    assert.match(read.securityLine({ ...card, recommend: 'Hold it' }, verdict) ?? '', /^security: STALE: /);
+    assert.equal(read.printable('a\nb‮'), 'a\\nb\\u202e');
   });
 });

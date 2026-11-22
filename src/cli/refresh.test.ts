@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import type { HostSource } from '../composition/host-ports.ts';
 import type { JsonRecord } from '../core/guards.ts';
 import { MeetingSchedule } from '../meeting/schedule.ts';
+import { HOOKS_ONLY_HOST, hostTelling, NO_SESSION_HOST } from '../testing/host.ts';
 import type { RestartRequest } from '../refresh/state.ts';
 import { RefreshStore } from '../refresh/store.ts';
 import { CONTEXT_MAX_CHARS } from '../rules/pack.ts';
@@ -322,6 +324,22 @@ describe('runCli: context refresh', () => {
     assert.equal(processes.hidden.filter((run) => run.args[1] === 'restart').length, 1);
   });
 
+  it('starts the restart in the folder the running host says the session started in, else in the folder of the turn end', async () => {
+    const started = join(APP, 'started');
+    const waiterOf = async (host: HostSource, projectVariable: string): Promise<readonly [string | undefined, readonly string[] | undefined]> => {
+      const kit = new CliHarness(AUTO_RESTART_TEAM);
+      await handoverWritten(kit);
+      await openTask(kit, 'alpha');
+      const processes = new FakeProcesses();
+      const env = { TEAMRIG_SESSION: 'alpha', CLAUDE_PROJECT_DIR: projectVariable, TEAMRIG_LAUNCHED: 'alpha' };
+      await kit.run(['hook', 'stop'], { env, stdin: stopPayload(true), sessionProcesses: UNDER_CLAUDE(), processes, host });
+      const waiter = processes.hidden.find((run) => run.args[1] === 'restart');
+      return [waiter?.cwd, waiter?.args.slice(-2)];
+    };
+    assert.deepEqual(await waiterOf(hostTelling({ projectDir: started }), APP), [started, ['--project', started]]);
+    assert.deepEqual(await waiterOf(NO_SESSION_HOST, started), [APP, ['--project', APP]], 'a host telling no start folder');
+  });
+
   it('records the level the turn ran at in the restart request, so the restart can tell a changed launch level (T2444)', async () => {
     const kit = new CliHarness(AUTO_RESTART_TEAM);
     const store = await handoverWritten(kit);
@@ -498,6 +516,18 @@ describe('runCli: context refresh', () => {
     assert.match(file, /## 2\n\nDecision: approve the release after the photos\n/);
     assert.match(file, /## 3 \(after your handover was written: it does not hold this\)\n\nHold the migration until Monday\n/);
     assert.ok(!file.includes('task-notification'));
+  });
+
+  it('carries nothing from the old session on a host whose transcript it cannot read, and its note still arrives', async () => {
+    const kit = new CliHarness({ ...TEAM, refresh: { tabTitle: false } });
+    await handoverWritten(kit);
+    await kit.files.append(TRANSCRIPT, `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'Hold the migration until Monday' } })}\n`);
+    stopJson(await kit.run(['hook', 'stop'], { ...AS_ALPHA, stdin: stopPayload(true) }));
+    const bare: HostSource = HOOKS_ONLY_HOST;
+    const fresh = contextOf(await kit.run(['hook', 'session-start'], { ...AS_ALPHA, stdin: startPayload('clear'), host: bare }));
+    assert.ok(fresh.includes('You were refreshed'), fresh);
+    assert.ok(!fresh.includes('The owner typed') && !fresh.includes('could not read'), fresh);
+    assert.equal(await kit.files.read(join(TEAM_HOME, 'handover', 'alpha.owner.md')), undefined);
   });
 
   it('removes the owner file of an earlier refresh when the old session had nothing from the owner', async () => {

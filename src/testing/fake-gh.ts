@@ -1,10 +1,11 @@
-import { recordField, stringField, type JsonRecord } from '../core/guards.ts';
+import { isRecord, recordField, stringField, type JsonRecord } from '../core/guards.ts';
 import {
   isAssigneeRead,
   isIssueAssigneeRead,
   isCommentsRead,
   COMMENTS_PAGE,
   isUserRead,
+  isViewerRead,
   isIssueAssign,
   isIssueUnassign,
   isIssueBodyEdit,
@@ -17,15 +18,19 @@ import {
   isJobLogRead,
   isLabelAdd,
   isFileLabelCreate,
+  isAreaLabelCreate,
   isLabelCreate,
   isLabelFileRead,
   isLabelRead,
   isLabelRemove,
   isLinkAdd,
   isMentionRead,
+  isPullApprove,
+  isPullEnqueue,
+  isPullMerge,
+  isPullStandRead,
   isReviewRead,
   isWatchProbe,
-  MENTION_PAGE_SIZE,
   LabelFileReads,
   labelFileRepoOf,
   WATCH_PATHS,
@@ -34,9 +39,11 @@ import {
   type GhRunner,
   type MentionList,
   type WatchPath,
-} from '../github/gh.ts';
-import { nodesOf } from '../github/issues.ts';
-import { CLOSED_ISSUES_QUERY, ISSUE_FIELDS_QUERY, ISSUE_LINKS_QUERY, ISSUE_PAGE_SIZE, OPEN_ISSUES_QUERY, OPEN_PULLS_QUERY, PULL_PAGE_SIZE, PULL_REQUESTS_QUERY, RAW_FIELD } from '../github/queries.ts';
+} from '../adapters/connectors/github/gh.ts';
+import { MENTION_PAGE_SIZE } from '../issues/scan-caps.ts';
+import { nodesOf } from '../adapters/connectors/github/issues.ts';
+import { FAKE_VIEWER } from './fake-issue-host.ts';
+import { CLOSED_ISSUES_QUERY, ISSUE_FIELDS_QUERY, ISSUE_LINKS_QUERY, ISSUE_PAGE_SIZE, OPEN_ISSUES_QUERY, OPEN_PULLS_QUERY, PULL_PAGE_SIZE, PULL_REQUESTS_QUERY, RAW_FIELD } from '../adapters/connectors/github/queries.ts';
 
 /** What a test sets on an issue; the rest takes a plain default. */
 export interface IssueSpec {
@@ -114,6 +121,20 @@ export function ghIssue(repo: string, number: number, spec: IssueSpec = {}): Jso
   };
 }
 
+/**
+ * A held issue (ghIssue's GraphQL shape) as GitHub's REST issue read prints it: its id 1000 + the number, the state
+ * in lowercase, labels and assignees as lists of records, and a null body for an empty one.
+ */
+function heldIssueRest(issue: JsonRecord, number: number): JsonRecord {
+  const nodesOf = (key: string): unknown[] => {
+    const field = issue[key];
+    const nodes = isRecord(field) ? field['nodes'] : undefined;
+    return Array.isArray(nodes) ? nodes : [];
+  };
+  const body = stringField(issue, 'body') ?? '';
+  return { id: 1000 + number, number, state: (stringField(issue, 'state') ?? 'OPEN').toLowerCase(), labels: nodesOf('labels'), assignees: nodesOf('assignees'), body: body === '' ? null : body };
+}
+
 /** A timeline item: `actor`, an account of `kind`, put `label` on the issue at `at`. */
 export function labeledEvent(label: string, actor: string, at: string, kind = 'User'): JsonRecord {
   return { __typename: 'LabeledEvent', createdAt: at, actor: { __typename: kind, login: actor }, label: { name: label } };
@@ -127,7 +148,7 @@ export function commentNode(at: string, association: string, kind = 'User', text
   return { createdAt: at, authorAssociation: association, author: { __typename: kind, ...(text.login === undefined ? {} : { login: text.login }) }, body: text.body ?? '' };
 }
 
-/** A pull request as the changed read gives it: that query asks for no comments or reviews (github/queries.ts). */
+/** A pull request as the changed read gives it: that query asks for no comments or reviews (the adapter's queries.ts). */
 function withoutPosts(pull: JsonRecord): JsonRecord {
   const { comments: _comments, reviews: _reviews, ...rest } = pull;
   return rest;
@@ -200,6 +221,42 @@ export function ghPull(repo: string, number: number, spec: PullSpec = {}): JsonR
     reviewDecision: spec.reviewDecision ?? null,
     commits: { nodes: [{ commit: { statusCheckRollup: spec.checks === null || spec.checks === undefined ? null : { state: spec.checks, contexts: { nodes: [...(spec.contexts ?? [])] } } } }] },
     closingIssuesReferences: { nodes: (spec.closes ?? []).map(closingNode(repo)) },
+  };
+}
+
+/** How one pull request stands, as a test sets it; each part left out takes ghPullStand's default. */
+export interface PullStandSpec {
+  readonly id?: string;
+  readonly state?: 'OPEN' | 'CLOSED' | 'MERGED';
+  readonly isDraft?: boolean;
+  readonly head?: string;
+  readonly base?: string;
+  readonly defaultBranch?: string;
+  readonly mergeQueue?: boolean;
+  readonly queued?: boolean;
+  readonly mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
+  /** The head's statusCheckRollup state, null for a head with no checks; SUCCESS when left out. */
+  readonly checks?: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null;
+}
+
+/** The full head sha a stand reads when a test gives none. */
+export const STAND_HEAD = 'a'.repeat(40);
+
+/** The `repository` of an answer to the pull stand query (gh.ts PULL_STAND_QUERY): open on main with no queue unless `spec` says otherwise. */
+export function ghPullStand(spec: PullStandSpec = {}): JsonRecord {
+  return {
+    defaultBranchRef: { name: spec.defaultBranch ?? 'main' },
+    mergeQueue: spec.mergeQueue === true ? { id: 'MQ_1' } : null,
+    pullRequest: {
+      id: spec.id ?? 'PR_kwDOAbc',
+      state: spec.state ?? 'OPEN',
+      isDraft: spec.isDraft ?? false,
+      headRefOid: spec.head ?? STAND_HEAD,
+      baseRefName: spec.base ?? 'main',
+      mergeable: spec.mergeable ?? 'MERGEABLE',
+      mergeQueueEntry: spec.queued === true ? { state: 'QUEUED' } : null,
+      commits: { nodes: [{ commit: { statusCheckRollup: spec.checks === null ? null : { state: spec.checks ?? 'SUCCESS' } } }] },
+    },
   };
 }
 
@@ -330,11 +387,14 @@ export class FakeGh implements GhRunner {
   private readonly participants = new Map<string, readonly string[]>();
   private readonly spellings = new Map<string, string>();
   private userAnswer: GhResult | undefined;
+  private viewerAnswer: GhResult | undefined;
   private commentsAnswer: GhResult | undefined;
   private readonly jobLogs = new Map<number, string>();
   /** REST posts by `<repo> <list>`, and reviews by `<repo>#<number>`. */
   private readonly posts = new Map<string, readonly JsonRecord[]>();
   private readonly reviews = new Map<string, readonly JsonRecord[]>();
+  /** Pull stand answers' `repository` by `<repo>#<number>`. */
+  private readonly stands = new Map<string, JsonRecord>();
   private readonly postFailures = new Map<string, GhResult>();
   /** Set by `pages`; else each query's own page size. */
   private pageSize: number | undefined;
@@ -344,7 +404,7 @@ export class FakeGh implements GhRunner {
 
   /**
    * From now on, `repo` has these issue fields and types, and its open issues these values, as the fields query
-   * prints them (github/queries.ts ISSUE_FIELDS_QUERY); a repository a test gave none has no fields and no types.
+   * prints them (the adapter's queries.ts ISSUE_FIELDS_QUERY); a repository a test gave none has no fields and no types.
    */
   holdsFields(repo: string, fields: FakeFields): this {
     this.fielded.set(repo, fields);
@@ -431,6 +491,12 @@ export class FakeGh implements GhRunner {
     return this;
   }
 
+  /** From now on, a stand read of pull request `number` of `repo` answers this repository (as ghPullStand builds it); one a test gave none is Not Found. */
+  holdsPullStand(repo: string, number: number, repository: JsonRecord): this {
+    this.stands.set(`${repo}#${number}`, repository);
+    return this;
+  }
+
   /** From now on, `repo` has these labels, and a read of any other label of it is Not Found. */
   hasLabels(repo: string, labels: readonly string[]): this {
     this.labels.set(repo, labels);
@@ -479,6 +545,12 @@ export class FakeGh implements GhRunner {
     return this;
   }
 
+  /** From now on, every read of the user the token belongs to (`gh api user`) ends as given; until then, it is FAKE_VIEWER. */
+  answersViewerRead(result: GhResult): this {
+    this.viewerAnswer = result;
+    return this;
+  }
+
   /** From now on, a comment on, a body edit or the close of, a label added to or taken off, an assignee or a link added to an issue, and a label made, end as given. */
   failsWrite(result: GhResult): this {
     this.writeFailure = result;
@@ -519,7 +591,7 @@ export class FakeGh implements GhRunner {
     if (isLabelRead(request.args)) {
       return this.labelRead(request.args[1] ?? '');
     }
-    if (isLabelCreate(request.args)) {
+    if (isLabelCreate(request.args) || isAreaLabelCreate(request.args)) {
       return this.writeFailure ?? this.labelCreate(request.args);
     }
     if (isLabelFileRead(request.args)) {
@@ -538,6 +610,9 @@ export class FakeGh implements GhRunner {
     }
     if (isUserRead(request.args)) {
       return this.userRead(request.args[1] ?? '');
+    }
+    if (isViewerRead(request.args)) {
+      return this.viewerAnswer ?? { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ login: FAKE_VIEWER, type: 'User' }), stderr: '' };
     }
     if (isCommentsRead(request.args)) {
       return this.commentsAnswer ?? this.commentsRead(request.args);
@@ -562,6 +637,14 @@ export class FakeGh implements GhRunner {
     }
     if (isLinkAdd(request.args)) {
       return this.writeFailure ?? this.link(request.args);
+    }
+    if (isPullStandRead(request.args)) {
+      const repo = ghRepoOf(request.args);
+      const repository = this.stands.get(`${repo}#${(request.args[9] ?? '').slice('number='.length)}`);
+      return this.canned.get(repo) ?? (repository === undefined ? notVisible(repo) : { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ data: { repository } }), stderr: '' });
+    }
+    if (isPullApprove(request.args) || isPullEnqueue(request.args) || isPullMerge(request.args)) {
+      return this.writeFailure ?? { end: { kind: 'exited', code: 0 }, stdout: '{}', stderr: '' };
     }
     const repo = ghRepoOf(request.args);
     const canned = this.canned.get(repo);
@@ -742,9 +825,9 @@ export class FakeGh implements GhRunner {
       return canned;
     }
     const held = (this.issues.get(`${owner}/${name}`) ?? []).find((issue) => String(issue['number']) === number);
-    return held !== undefined
-      ? { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify({ id: 1000 + Number(number), number: Number(number), labels: nodesOf(recordField(held, 'labels')).flatMap((label) => { const named = stringField(label, 'name'); return named === undefined ? [] : [{ name: named }]; }) }), stderr: '' }
-      : { end: { kind: 'exited', code: 1 }, stdout: '', stderr: 'gh: Not Found (HTTP 404)\n' };
+    return held === undefined
+      ? { end: { kind: 'exited', code: 1 }, stdout: '', stderr: 'gh: Not Found (HTTP 404)\n' }
+      : { end: { kind: 'exited', code: 0 }, stdout: JSON.stringify(heldIssueRest(held, Number(number))), stderr: '' };
   }
 
   /**

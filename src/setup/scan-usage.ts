@@ -1,9 +1,10 @@
 import { readLines } from '../budget/cursor.ts';
 import { discoverTranscripts, type TranscriptSource } from '../budget/discover.ts';
-import { AGENT_TOOL, parseTranscriptLine, SKILL_TOOL } from '../budget/line.ts';
+import { AGENT_TOOL, SKILL_TOOL, transcriptLineOf } from '../budget/line.ts';
 import { stringField } from '../core/guards.ts';
 import { parseObject } from '../core/jsonl.ts';
-import { claudeWorktreeRepo, isAtOrBelow, pathKey } from '../core/paths.ts';
+import { isAtOrBelow, pathKey } from '../core/paths.ts';
+import type { HostPaths, TranscriptReader } from '../ports/host/index.ts';
 import { addHookRun, hookRunOf, mayRecordHookRun, type HookOutput, type HookOutputs } from './scan-hook-output.ts';
 
 /**
@@ -49,6 +50,16 @@ export interface UsageWindow {
   readonly chunkBytes?: number;
 }
 
+/** The host's reading of a place in one of its own worktrees as the same place in the project the worktree copies. */
+export type WorktreePaths = Pick<HostPaths, 'worktreeRepo'>;
+
+/** What the read goes through: the transcripts' bytes, the host's reader of their lines, and its reading of a start folder in one of its worktrees. */
+export interface TranscriptUseDeps {
+  readonly source: TranscriptSource;
+  readonly reader: TranscriptReader;
+  readonly paths: WorktreePaths;
+}
+
 /** The bytes read at a time: a transcript runs to hundreds of MB, and is never held whole. */
 export const USE_CHUNK_BYTES = 8 * 1024 * 1024;
 
@@ -77,8 +88,8 @@ function addCwd(line: string, one: OneTranscript): void {
   }
 }
 
-function addUses(line: string, one: OneTranscript): void {
-  const parsed = parseTranscriptLine(line);
+function addUses(reader: TranscriptReader, line: string, one: OneTranscript): void {
+  const parsed = transcriptLineOf(reader, line);
   if (parsed?.kind === 'call') {
     for (const tool of parsed.tools) {
       if (tool.skill !== undefined) {
@@ -93,14 +104,14 @@ function addUses(line: string, one: OneTranscript): void {
   }
 }
 
-async function readOne(source: TranscriptSource, path: string, one: OneTranscript, chunkBytes: number): Promise<number> {
+async function readOne({ source, reader }: TranscriptUseDeps, path: string, one: OneTranscript, chunkBytes: number): Promise<number> {
   const size = (await source.size(path)) ?? 0;
   for (let offset = 0; offset < size; ) {
     const batch = await readLines(source, path, offset, size, chunkBytes);
     for (const line of batch.lines) {
       addCwd(line, one);
       if (mayNameUse(line)) {
-        addUses(line, one);
+        addUses(reader, line, one);
       }
       const run = mayRecordHookRun(line) ? hookRunOf(line) : undefined;
       if (run !== undefined) {
@@ -119,8 +130,8 @@ async function readOne(source: TranscriptSource, path: string, one: OneTranscrip
  * Where a session started, as the scan judges it: a folder in a Claude Code worktree as the same place in its repo,
  * since the worktree is a temporary copy, so a skill used there belongs in the repo's `.claude/skills` (T1593).
  */
-function startFolderOf(cwd: string | undefined): string | undefined {
-  return cwd === undefined ? undefined : (claudeWorktreeRepo(cwd) ?? cwd);
+function startFolderOf(paths: WorktreePaths, cwd: string | undefined): string | undefined {
+  return cwd === undefined ? undefined : (paths.worktreeRepo(cwd) ?? cwd);
 }
 
 function addUsedIn(usedIn: Map<string, Set<string>>, names: ReadonlySet<string>, cwd: string | undefined): void {
@@ -147,12 +158,12 @@ async function newestFirst(source: TranscriptSource, projectsDir: string, since:
  * the first one carrying a `cwd`, the folder the session started in, and what each context hook's runs printed: a project folder's name in `projectsDir` is a
  * lossy slug (`a/b-c` and `a-b/c` share one), so it cannot say where.
  */
-export async function readTranscriptUse(source: TranscriptSource, projectsDir: string, window: UsageWindow): Promise<TranscriptUse> {
+export async function readTranscriptUse(deps: TranscriptUseDeps, projectsDir: string, window: UsageWindow): Promise<TranscriptUse> {
   const skills = new Map<string, Set<string>>();
   const agents = new Map<string, Set<string>>();
   const folders = new Map<string, number>();
   const hooks = new Map<string, HookOutput>();
-  const dated = await newestFirst(source, projectsDir, window.since);
+  const dated = await newestFirst(deps.source, projectsDir, window.since);
   let transcripts = 0;
   let bytes = 0;
   for (const { path } of dated) {
@@ -160,9 +171,9 @@ export async function readTranscriptUse(source: TranscriptSource, projectsDir: s
       break;
     }
     const one: OneTranscript = { cwd: undefined, skills: new Set(), agents: new Set(), hooks };
-    bytes += await readOne(source, path, one, window.chunkBytes ?? USE_CHUNK_BYTES);
+    bytes += await readOne(deps, path, one, window.chunkBytes ?? USE_CHUNK_BYTES);
     transcripts += 1;
-    const cwd = startFolderOf(one.cwd);
+    const cwd = startFolderOf(deps.paths, one.cwd);
     addUsedIn(skills, one.skills, cwd);
     addUsedIn(agents, one.agents, cwd);
     if (cwd !== undefined) {
@@ -190,8 +201,8 @@ export function outermostFolders(folders: Iterable<string>, platform: NodeJS.Pla
  * What the sessions started in `project` or a folder below it used, out of what the transcripts read show; a project
  * in a Claude Code worktree is judged as its repo, the way the transcripts' start folders are.
  */
-export function projectUse(use: TranscriptUse, project: string, platform: NodeJS.Platform = process.platform): ProjectUse {
-  const folder = claudeWorktreeRepo(project, platform) ?? project;
+export function projectUse(use: TranscriptUse, project: string, paths: WorktreePaths, platform: NodeJS.Platform = process.platform): ProjectUse {
+  const folder = paths.worktreeRepo(project) ?? project;
   const transcripts = [...use.folders].reduce((sum, [started, count]) => sum + (isAtOrBelow(started, folder, platform) ? count : 0), 0);
   return { transcripts, skills: usedBelow(use.skills, folder, platform), agents: usedBelow(use.agents, folder, platform) };
 }

@@ -1,5 +1,5 @@
 import { NOW_PRIORITY } from '../config/priorities.ts';
-import { takesShipSlot, type LineRequest } from './process-request.ts';
+import { sharesShipSlot, takesShipSlot, type LineRequest } from './process-request.ts';
 import type { WaitCause } from './wait-cause.ts';
 
 /**
@@ -78,9 +78,14 @@ export interface InLine {
     readonly session: string;
     readonly arrivedAt: string;
     /** Its line request, and whether its step is heavy (`heavy`, which its ticket says; left out, the step counts as heavy). */
-    readonly request?: Pick<LineRequest, 'priority' | 'class'> & Partial<Pick<LineRequest, 'kind' | 'frontAt'>> & { readonly heavy?: boolean };
+    readonly request?: Pick<LineRequest, 'priority' | 'class'> & Partial<Pick<LineRequest, 'kind' | 'frontAt' | 'repo'>> & { readonly heavy?: boolean };
     /** What its last look found it waiting on, and since when; left out before its first look. */
     readonly waitingOn?: { readonly reason: WaitCause; readonly since: string };
+    /**
+     * True for a step taking back the share it set aside (`teamrig step-back`, T4196): it already ran in its turn, so it
+     * keeps its arrival place ahead of later steps whatever the class turns say; left out for every other step.
+     */
+    readonly back?: boolean;
   };
 }
 
@@ -106,6 +111,8 @@ export interface RunningStep {
   readonly session: string;
   readonly small: boolean;
   readonly shipSlot: boolean;
+  /** The repository whose slot it holds (#1711); left out, it holds the slot of every repository. */
+  readonly shipRepo?: string;
 }
 
 function byName(a: InLine, b: InLine): number {
@@ -132,10 +139,12 @@ function frontOf(waiter: InLine['waiter']): number | undefined {
 
 /**
  * The line in admission order. `serial` (or no rules): arrival order. `pipeline`: the steps of a task its lead put at
- * the front (T4082), the earliest put first; then p0 steps, in arrival order; then
+ * the front (T4082), the earliest put first; then blocker, then p0 steps, each in arrival order; then
  * the class whose turn it is (least virtual time in `turns`); inside a class, the aged priority; then arrival. A ticket
  * that names no request counts as `defaultClass` at {@link UNNAMED_PRIORITY}. A class `turns` lacks starts at the least
  * virtual time of the waiting classes it has (0 when it has none), so a class that had no step waiting banks no turns.
+ * A step taking back its share then stands ahead of every later arrival that is neither fronted nor more urgent
+ * ({@link keepBackPlaces}).
  */
 export function admissionOrder<T extends InLine>(line: readonly T[], now: number, rules: AdmissionRules | undefined, turns: ClassTurns): T[] {
   const byArrival = [...line].sort(byName);
@@ -157,14 +166,43 @@ export function admissionOrder<T extends InLine>(line: readonly T[], now: number
     };
     return { ticket, rank };
   });
-  return ranked.sort((a, b) => compareRanks(a.rank, b.rank) || byName(a.ticket, b.ticket)).map(({ ticket }) => ticket);
+  return keepBackPlaces(ranked.sort((a, b) => compareRanks(a.rank, b.rank) || byName(a.ticket, b.ticket)));
 }
 
 /**
- * Fronted first, the earliest put there first; then urgent; between two urgent ones, neither (arrival decides); else the
+ * `order` (ranked, in admission order) with each step taking back its share moved ahead of the first later arrival
+ * ranked before it that is neither fronted nor more urgent (T4196). Such a step already ran in its turn and its class
+ * was charged for it; set aside only while it waited on a landing turn, it would otherwise wait behind heavy steps of
+ * other classes that joined the line after it ran, while the main it checked moves on. Taken in arrival order, each
+ * after those placed before it that it does not outrank, so two of them keep their arrival order between them.
+ */
+function keepBackPlaces<T extends InLine>(order: readonly { readonly ticket: T; readonly rank: Rank }[]): T[] {
+  const placed = order.filter(({ ticket }) => ticket.waiter.back !== true);
+  const backs = order.filter(({ ticket }) => ticket.waiter.back === true).sort((a, b) => byName(a.ticket, b.ticket));
+  for (const back of backs) {
+    const ranked = order.indexOf(back);
+    const from = placed.findLastIndex((entry) => entry.ticket.waiter.back === true && compareUrgency(back.rank, entry.rank) >= 0) + 1;
+    const at = placed.findIndex((entry, index) => index >= from && (order.indexOf(entry) > ranked || (byName(entry.ticket, back.ticket) > 0 && compareUrgency(entry.rank, back.rank) >= 0)));
+    placed.splice(at === -1 ? placed.length : at, 0, back);
+  }
+  return placed.map(({ ticket }) => ticket);
+}
+
+/**
+ * Fronted first, the earliest put there first; then urgent; between two urgent ones the blocker, else arrival decides; else the
  * least turn, then the most urgent aged priority.
  */
 function compareRanks(a: Rank, b: Rank): number {
+  const urgency = compareUrgency(a, b);
+  // Between two fronted or two urgent steps the turn never decides: only when they were put there, or their level, then arrival.
+  if (urgency !== 0 || a.front !== undefined || a.urgent) {
+    return urgency;
+  }
+  return a.turn - b.turn || a.priority - b.priority;
+}
+
+/** The part of {@link compareRanks} that a turn never outranks: fronted first, then urgent; 0 when neither outranks the other there. */
+function compareUrgency(a: Rank, b: Rank): number {
   if (a.front !== undefined || b.front !== undefined) {
     if (a.front === undefined || b.front === undefined) {
       return a.front === undefined ? 1 : -1;
@@ -175,9 +213,10 @@ function compareRanks(a: Rank, b: Rank): number {
     return a.urgent ? -1 : 1;
   }
   if (a.urgent) {
-    return 0;
+    // A blocker (-1) goes ahead of p0 (T4329); urgent priorities never age, so this is the level each step named.
+    return a.priority - b.priority;
   }
-  return a.turn - b.turn || a.priority - b.priority;
+  return 0;
 }
 
 /**
@@ -206,25 +245,31 @@ function passesOnRoom(waiter: InLine['waiter'], idle: boolean, now: number, memo
 }
 
 /**
- * The places in `before` (the waiters ahead) that a later step that does (`mine`) or does not hold the ship slot passes
- * for that slot (T2727): none for a step that holds it, so ships take the slot in their order. Any other step passes
- * the first waiter its last look found waiting on the slot, for as long as the ship ahead runs, as the slot keeps the
- * waiter out whatever ends, and every slot-taking waiter after it, which waits behind that one whatever its own reason
- * (T3336: a second ship waits on the line, not the slot, yet starts no sooner, and held every build and test back).
- * While a running share holds the slot (`slotHeld`), every slot-taking waiter is passed, whatever its last look
- * recorded (T4333): the first one, finding the admit file held by a step passing it, recorded a wait in line, so the
- * steps behind it stopped passing it and the whole line flapped behind one ship.
+ * The places in `before` (the waiters ahead) that `mine`, a later waiter, passes for the ship slot (T2727). A ship
+ * waiter is held on the slot when its last look found it waiting there, or when a slot it shares (`sharesShipSlot`,
+ * one per repository, #1711) is taken: by a running share (T4333: the first one, finding the admit file held by a step
+ * passing it, recorded a wait in line, so the steps behind it stopped passing it and the whole line flapped behind one
+ * ship), or by a held waiter ahead of it (T3336: a second ship waits on the line, not the slot, yet starts no sooner,
+ * and held every build and test back). A step that holds no slot passes every held one, as the slot keeps it out
+ * whatever ends. A ship passes only a held one whose slot it does not share, held by no slot it shares, so ships of
+ * one repository, and ships waiting on the same one, take the slot in their order.
  */
-function passedOnShipSlot(before: readonly InLine[], mine: boolean, slotHeld: boolean): ReadonlySet<number> {
+function passedOnShipSlot(before: readonly InLine[], mine: InLine['waiter'], running: readonly RunningStep[]): ReadonlySet<number> {
   const passed = new Set<number>();
-  if (mine) {
-    return passed;
-  }
-  let shut = slotHeld;
+  const ship = takesShipSlot(mine.request?.kind);
+  const shut = running.filter((step) => step.shipSlot).map((step) => step.shipRepo);
   before.forEach(({ waiter }, at) => {
     const onSlot = waiter.waitingOn?.reason === 'shipSlot';
-    shut ||= onSlot;
-    if (onSlot || (shut && takesShipSlot(waiter.request?.kind))) {
+    if (!onSlot && !takesShipSlot(waiter.request?.kind)) {
+      return;
+    }
+    const repo = waiter.request?.repo;
+    const holders = shut.filter((held) => sharesShipSlot(held, repo));
+    if (!onSlot && holders.length === 0) {
+      return;
+    }
+    shut.push(repo);
+    if (!ship || (!sharesShipSlot(mine.request?.repo, repo) && !holders.some((held) => sharesShipSlot(held, mine.request?.repo)))) {
       passed.add(at);
     }
   });
@@ -258,7 +303,7 @@ export function placeInLine<T extends InLine>(order: readonly T[], name: string,
   const capped = (session: string): boolean => cap > 0 && runs(session) >= cap;
   // Idle means no queued step at all runs: a small step's end frees room too, so it counts here.
   const idle = running.length === 0;
-  const onSlot = passedOnShipSlot(before, takesShipSlot(mine.waiter.request?.kind), running.some((step) => step.shipSlot));
+  const onSlot = passedOnShipSlot(before, mine.waiter, running);
   const ahead = before.filter(({ waiter }, at) => !capped(waiter.session) && !passesOnRoom(waiter, idle, now, rules.memoryPassMinutes) && !onSlot.has(at));
   const own = runs(mine.waiter.session);
   return capped(mine.waiter.session) ? { kind: 'sessionCap', ahead, running: own, cap } : { kind: 'inLine', ahead };

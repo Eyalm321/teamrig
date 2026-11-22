@@ -1,14 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { LaunchConfig } from '../config/types.ts';
-import { modelCheckLine, payloadEffortOf, type RunningSettings } from './model-check.ts';
+import { shippedModels } from '../testing/shipped-models.ts';
+import { modelCheckLine, type RunningSettings } from './model-check.ts';
 
+const MODELS = shippedModels();
 const LEAD: LaunchConfig = { model: 'best', effort: 'xhigh' };
 const FABLE = 'claude-fable-5';
 const OPUS = 'claude-opus-5-5';
 
 function check(wanted: LaunchConfig, running: Partial<RunningSettings>): string | undefined {
-  return modelCheckLine('lead', wanted, { model: undefined, effort: undefined, ...running });
+  return modelCheckLine(MODELS, 'lead', wanted, { model: undefined, effort: undefined, ...running });
 }
 
 describe('modelCheckLine', () => {
@@ -70,14 +72,5 @@ describe('modelCheckLine', () => {
       check({ model: 'claude-opus-4-6' }, { model: OPUS }),
       'MODEL lead runs model claude-opus-5-5; the team config asks for model claude-opus-4-6 at the default effort: type /model claude-opus-4-6',
     );
-  });
-});
-
-describe('payloadEffortOf', () => {
-  it("reads the payload's effort.level, and nothing from a payload without one", () => {
-    assert.equal(payloadEffortOf({ effort: { level: 'xhigh' } }), 'xhigh');
-    assert.equal(payloadEffortOf({}), undefined);
-    assert.equal(payloadEffortOf({ effort: 'xhigh' }), undefined);
-    assert.equal(payloadEffortOf({ effort: { level: 3 } }), undefined);
   });
 });

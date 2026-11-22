@@ -1,9 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
+import type { HostSource } from '../composition/host-ports.ts';
 import type { JsonRecord } from '../core/guards.ts';
 import { indexMarks, readMarks } from '../inbox/marks.ts';
-import { APP, CLAUDE_SESSION, CliHarness, contextOf, RENAMES_PATH, TEAM, TEAM_HOME, titledPromptOf } from '../testing/cli-harness.ts';
+import { HOOKS_ONLY_HOST, hostNaming, hostTelling, NO_SESSION_HOST } from '../testing/host.ts';
+import { APP, CLAUDE_SESSION, CliHarness, contextOf, RENAMES_PATH, TEAM, TEAM_HOME, titledPromptOf, USER_HOME } from '../testing/cli-harness.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { treeHarness } from '../testing/team-tree.ts';
 import { EXIT } from './runtime.ts';
@@ -24,9 +26,10 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     await kit.run(['inbox', 'add', '--to', 'alpha', '--text', 'T7 is yours', '--session', 'lead']);
     const result = await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'alpha' }) });
     assert.equal(result.code, EXIT.ok);
-    assert.equal(result.stdout[0], 'teamrig: this tab is now the `alpha` session of team app (name `app-alpha`), from its Claude Code title; nothing was marked read.');
-    assert.match(result.stdout[1] ?? '', /^INBOX alpha, new in .*\n- 2030-01-08 10:00 UTC lead: T7 is yours$/);
-    assert.equal(result.stdout.length, 2);
+    const [bound, lines, ...rest] = (result.stdout[0] ?? '').split('\nINBOX ');
+    assert.equal(bound, 'teamrig: this tab is now the `alpha` session of team app (name `app-alpha`), from its Claude Code title; nothing was marked read.');
+    assert.match(lines ?? '', /^alpha, new in .*\n- 2030-01-08 10:00 UTC lead: T7 is yours$/);
+    assert.deepEqual([rest.length, result.stdout.length], [0, 1], 'one reply: the bind line, then the inbox lines');
     assert.equal(await kit.files.read(RENAMES_PATH), undefined);
     assert.match((await kit.run(['inbox', 'status', '--session', 'alpha'])).stdout[0] ?? '', /^alpha 1 unread .*\(read to line 0 of 1 at 01-08 10:00 UTC\)$/);
 
@@ -43,6 +46,17 @@ describe('runCli: a hand-started tab binds itself by its Claude Code title (T302
     assert.ok(text.includes('This tab was bound to the `lead` session from its Claude Code title; nothing was marked read.'), text);
     assert.match((await kit.run(['inbox', 'status', '--session', 'lead'])).stdout[0] ?? '', /^lead 0 unread \(read to line 1 of 1/);
     assert.deepEqual((await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'captain' }) })).stdout, []);
+  });
+
+  it("binds by the title in the tab's transcript, which a host that keeps none it can read does not give", async () => {
+    const kit = new CliHarness();
+    const path = join(USER_HOME, '.claude', 'projects', 'work-app', `${CLAUDE_SESSION}.jsonl`);
+    await kit.files.write(path, `${JSON.stringify({ type: 'custom-title', customTitle: 'alpha' })}\n`);
+    const bare: HostSource = HOOKS_ONLY_HOST;
+    const unread = await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ transcript_path: path }), host: bare });
+    assert.match(unread.stdout[0] ?? '', /^teamrig: this tab is not bound to a session of team app\./);
+    const read = await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ transcript_path: path }) });
+    assert.match(read.stdout[0] ?? '', /^teamrig: this tab is now the `alpha` session of team app /);
   });
 
   it('says once per reason how to bind a tab it cannot bind, until a rename binds it', async () => {
@@ -217,6 +231,19 @@ describe('runCli: a session hook reads the team of the folder the session starte
     const unset = await fresh.run(['hook', 'inbox-reminder'], { stdin: moved, cwd: WEB_PROJECT });
     assert.match(unset.stdout[0] ?? '', /"app-alpha" names no session of team web/, 'without the start folder, the payload folder decides');
   });
+
+  it('takes the start folder from the running host, whatever variable of another host the environment holds', async () => {
+    const kit = await treeHarness();
+    await kit.files.write(join(WEB_PROJECT, '.teamrig.json'), '{"team": "web"}');
+    const moved = prompt({ cwd: WEB_PROJECT, session_title: 'app-alpha' });
+    const told = await kit.run(['hook', 'inbox-reminder'], { stdin: moved, cwd: WEB_PROJECT, env: { CLAUDE_PROJECT_DIR: WEB_PROJECT }, host: hostTelling({ projectDir: APP }) });
+    assert.match(told.stdout[0] ?? '', /now the `alpha` session of team app/);
+
+    const fresh = await treeHarness();
+    await fresh.files.write(join(WEB_PROJECT, '.teamrig.json'), '{"team": "web"}');
+    const untold = await fresh.run(['hook', 'inbox-reminder'], { stdin: moved, cwd: WEB_PROJECT, env: { CLAUDE_PROJECT_DIR: APP }, host: NO_SESSION_HOST });
+    assert.match(untold.stdout[0] ?? '', /"app-alpha" names no session of team web/, 'a host telling no start folder leaves the payload folder to decide');
+  });
 });
 
 describe('runCli: the prompt hook archives its dedup records older than a week (T336)', () => {
@@ -246,7 +273,7 @@ describe('runCli: the prompt hook archives its dedup records older than a week (
     await kit.files.write(SHOWN_PATH, old);
     await kit.run(['inbox', 'add', '--to', 'alpha', '--text', 'T7 is yours', '--session', 'lead']);
     const shown = await kit.run(['hook', 'inbox-reminder'], { stdin: prompt({ session_title: 'alpha' }) });
-    assert.match(shown.stdout[1] ?? '', /lead: T7 is yours$/);
+    assert.match(shown.stdout[0] ?? '', /lead: T7 is yours$/);
     assert.equal(await kit.files.read(archiveOf('inbox-shown')), old);
     const live = (await kit.files.read(SHOWN_PATH)) ?? '';
     assert.deepEqual([live.includes(ENDED_TAB), live.includes(CLAUDE_SESSION)], [false, true]);
@@ -276,6 +303,23 @@ describe('runCli: a tool call cannot move its tab to another session by reading 
     assert.equal((await kit.run(['inbox', 'read', '--session', 'alpha'], { env: UNDER_CLAUDE })).code, EXIT.ok, 'its own inbox');
     const approve = JSON.stringify({ cwd: APP, session_id: CLAUDE_SESSION, tool_name: 'Bash', tool_input: { command: 'teamrig exec approve R1 --session bravo' } });
     assert.match((await kit.run(['hook', 'exec-guard'], { stdin: approve })).stdout.join('\n'), /"permissionDecision":"deny"/);
+  });
+
+  it("keeps a bound tab where it is on a host that tells no agent's run from the person's, with the host's reason", async () => {
+    const kit = new CliHarness();
+    const untold = { env: AS_CLAUDE, host: hostNaming({ marks: [], identity: [] }, { sessionId: CLAUDE_SESSION }) };
+    assert.equal((await kit.run(['inbox', 'read', '--session', 'alpha'], untold)).code, EXIT.ok, 'the first binding');
+    const bound = await marks(kit);
+    const taken = await kit.run(['inbox', 'read', '--session', 'bravo'], untold);
+    assert.equal(taken.code, EXIT.refused);
+    assert.equal(
+      taken.stdout.join('\n'),
+      "REFUSED teamrig inbox read --session bravo in this tab, the alpha session, which it would make the bravo session, is for the person alone, so it is refused on a host where an agent's run cannot be told from theirs (its session launcher names no mark of an agent's run); the host's adapter must name a mark of an agent's run in its declaration's sessionVariables.marks and fill its session launcher port",
+    );
+    assert.equal(await marks(kit), bound, 'no mark written');
+    assert.equal((await kit.run(['inbox', 'read', '--session', 'alpha'], untold)).code, EXIT.ok, 'its own inbox');
+    const marked = await kit.run(['inbox', 'read', '--session', 'bravo'], { ...untold, env: UNDER_CLAUDE });
+    assert.match(marked.stdout.join('\n'), /^REFUSED teamrig inbox read --session bravo would make this tab, .* \(CLAUDECODE is set\) cannot move it\./);
   });
 
   it('lets the person move the tab, and a restarted tab bind afresh', async () => {

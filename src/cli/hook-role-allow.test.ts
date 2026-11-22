@@ -1,10 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { isRecord, recordField, type JsonRecord } from '../core/guards.ts';
 import { APP, CLAUDE_SESSION, CliHarness, TEAM, TEAM_HOME, type CliResult } from '../testing/cli-harness.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { FakeMergeGit, MAIN_CHECKOUT } from '../testing/fake-merge-git.ts';
+import { NO_PATHS_HOST } from '../testing/host.ts';
 import { EXIT } from './runtime.ts';
 
 const ANSWERS_LOG = join(TEAM_HOME, 'state', 'prompt-answers.jsonl');
@@ -18,12 +19,12 @@ const CLOSE = `${UNNAMED} --session alpha`;
 /** A token shape the secret guard knows, built here so no token sits in the source. */
 const TOKEN = ['gh', 'p_', 'a1'.repeat(18)].join('');
 
-/** A team whose `github` role gives alpha both issue commands on acme/web. */
+/** A team whose `github` role gives alpha issue close on acme/web. */
 function roleTeam(extra: JsonRecord = {}): JsonRecord {
   return {
     ...TEAM,
     github: { repos: ['acme/web'] },
-    serviceRoles: { github: { holders: ['alpha'], commands: ['issue close', 'issue comment'] } },
+    serviceRoles: { github: { holders: ['alpha'], commands: ['issue close'] } },
     ...extra,
   };
 }
@@ -66,10 +67,10 @@ describe('hook route-allow: service roles', () => {
     const result = await kit.run(HOOK, { stdin: call(CLOSE), env: ALPHA });
     assert.equal(decisionOf(result), 'allow');
     assert.deepEqual(result.stderr, []);
-    assert.equal(decisionOf(await kit.run(HOOK, { stdin: call('teamrig issue comment acme/web#9 --body "On it" --session alpha'), env: {} })), 'allow');
+    assert.equal(decisionOf(await kit.run(HOOK, { stdin: call('teamrig issue close acme/web#9 --comment "Done in #10" --session alpha'), env: {} })), 'allow');
     assert.deepEqual(await answersOf(kit), [
       { v: 1, at: '2030-01-08T10:00:00.000Z', session: 'alpha', claudeSession: CLAUDE_SESSION, tool: 'Bash', event: 'PreToolUse', answer: 'role', role: 'github', command: 'issue close', target: 'acme/web#7' },
-      { v: 1, at: '2030-01-08T10:00:00.000Z', session: 'alpha', claudeSession: CLAUDE_SESSION, tool: 'Bash', event: 'PreToolUse', answer: 'role', role: 'github', command: 'issue comment', target: 'acme/web#9' },
+      { v: 1, at: '2030-01-08T10:00:00.000Z', session: 'alpha', claudeSession: CLAUDE_SESSION, tool: 'Bash', event: 'PreToolUse', answer: 'role', role: 'github', command: 'issue close', target: 'acme/web#9' },
     ]);
     assert.ok(!(await kit.files.read(ANSWERS_LOG))?.includes('thanks'));
   });
@@ -96,17 +97,17 @@ describe('hook route-allow: service roles', () => {
     assert.deepEqual(await kit.run(HOOK, { stdin: call(UNNAMED), env: {} }), NOTHING);
   });
 
-  it('gives no role for a call off its shape, a repository off the list, or a command the role does not hold', async () => {
-    const kit = await boundKit({ serviceRoles: { github: { holders: ['alpha'], commands: ['issue comment'] } } });
-    for (const line of [CLOSE, 'teamrig issue comment other/web#7 --body "x" --session alpha', 'teamrig issue comment acme/web#7 --body "x" --session alpha; rm -rf y', 'teamrig issue sync']) {
+  it('gives no role for a call off its shape, a repository off the list, or a bare comment, which no role holds (T3169)', async () => {
+    const kit = await boundKit();
+    for (const line of ['teamrig issue comment acme/web#7 --body "x" --session alpha', 'teamrig issue close other/web#7 --session alpha', `${CLOSE}; rm -rf y`, 'teamrig issue sync']) {
       assert.deepEqual(await kit.run(HOOK, { stdin: call(line), env: ALPHA }), NOTHING, line);
     }
-    assert.deepEqual(await kit.run(HOOK, { stdin: call('teamrig issue comment acme/web#7 --body "x" --session alpha', { tool_name: 'PowerShell' }), env: ALPHA }), NOTHING);
+    assert.deepEqual(await kit.run(HOOK, { stdin: call(CLOSE, { tool_name: 'PowerShell' }), env: ALPHA }), NOTHING);
   });
 
   it('stays out when a guard refuses the call, so that guard answers it', async () => {
     const kit = await boundKit();
-    assert.deepEqual(await kit.run(HOOK, { stdin: call(`teamrig issue comment acme/web#7 --body "${TOKEN}" --session alpha`), env: ALPHA }), NOTHING);
+    assert.deepEqual(await kit.run(HOOK, { stdin: call(`teamrig issue close acme/web#7 --comment "${TOKEN}" --session alpha`), env: ALPHA }), NOTHING);
     assert.deepEqual(await answersOf(kit), []);
   });
 
@@ -206,6 +207,13 @@ describe('hook route-allow: the ship role (T2984)', () => {
     assert.deepEqual(await answersOf(kit), []);
   });
 
+  it('on a host whose folders teamrig does not know, gives the ship only where the repository sets its worktree folder: it guesses no default (C4)', async () => {
+    const unset = await shipKit();
+    assert.deepEqual(await unset.kit.run(HOOK, { stdin: call(SHIP), env: ALPHA, mergeGit: unset.git, host: NO_PATHS_HOST }), NOTHING);
+    const set = await shipKit({ delivery: { repos: { app: { mainCheckout: MAIN_CHECKOUT, shipTool: SHIP_TOOL, worktreeFolder: '.claude/worktrees' } } } });
+    assert.equal(decisionOf(await set.kit.run(HOOK, { stdin: call(SHIP), env: ALPHA, mergeGit: set.git, host: NO_PATHS_HOST })), 'allow');
+  });
+
   it('gives no ship when the tool has a change, is untracked, sits off main, or in another repository (C5)', async () => {
     const changed = await shipKit();
     changed.git.status.set('/repo/ship', ['?? tools/ship/extra.ts']);
@@ -240,5 +248,97 @@ describe('hook route-allow: the ship role (T2984)', () => {
   it('gives no ship to a team whose repository names no ship tool', async () => {
     const { kit, git } = await shipKit({ delivery: { repos: { app: { mainCheckout: MAIN_CHECKOUT } } } });
     assert.deepEqual(await kit.run(HOOK, { stdin: call(SHIP), env: ALPHA, mergeGit: git }), NOTHING);
+  });
+});
+
+/** A release merge of T1, alpha's task, from the repository's main checkout (T4672). */
+const RELEASE = `teamrig queue --kind merge --detach --what "release" --task T1 --session alpha -- node ${SHIP_TOOL} merge ${MAIN_CHECKOUT} --release T1 --approved 0123456789abcdef0123456789abcdef01234567`;
+
+describe('hook route-allow: the release merge (T4672)', () => {
+  it("allows the holder's release merge of its own release task from the main checkout, logging the release", async () => {
+    const { kit, git } = await shipKit();
+    const result = await kit.run(HOOK, { stdin: call(RELEASE), env: ALPHA, mergeGit: git });
+    assert.equal(decisionOf(result), 'allow');
+    const [logged] = await answersOf(kit);
+    assert.ok(isRecord(logged) && logged['command'] === 'queue merge' && logged['target'] === 'release T1');
+  });
+
+  it("gives no release merge of another session's task, another --task, from a worktree, or with a tool off main's code", async () => {
+    const { kit, git } = await shipKit();
+    assert.equal((await kit.run(['add', '--title', 'Release the API', '--description', 'what and why', '--priority', 'p1', '--owner', 'bravo', '--session', 'lead'])).code, EXIT.ok);
+    for (const line of [RELEASE.replaceAll('T1', 'T2'), RELEASE.replace('--task T1', '--task T2'), RELEASE.replace(` ${MAIN_CHECKOUT} `, ` ${SHIP_WORKTREE} `), RELEASE.replace(` ${MAIN_CHECKOUT} `, ' /repo/other ')]) {
+      assert.deepEqual(await kit.run(HOOK, { stdin: call(line), env: ALPHA, mergeGit: git }), NOTHING, line);
+    }
+    const changed = await shipKit();
+    changed.git.status.set('/repo/ship', ['?? tools/ship/extra.ts']);
+    assert.deepEqual(await changed.kit.run(HOOK, { stdin: call(RELEASE), env: ALPHA, mergeGit: changed.git }), NOTHING, 'a tool with a change (C5)');
+    assert.deepEqual(await answersOf(kit), []);
+  });
+});
+
+describe('hook route-allow: the migrate role (T4606)', () => {
+  const ROWS = `${TASKS}/T1/rows.jsonl`;
+  const MIGRATE = `teamrig issue migrate ${ROWS} --yes --session alpha`;
+  const ROWS_FILE = resolve(TEAM_HOME, 'tasks', 'T1', 'rows.jsonl');
+  const migrates = { serviceRoles: { github: { holders: ['alpha'], commands: ['issue close', 'issue migrate'] } } };
+  const issueRow = (id: string): string => JSON.stringify({ id, decision: 'issue', repo: 'acme/web', type: 'task', priority: 'p2', title: `Fix ${id.slice(1)}`, body: 'Why.' });
+
+  /** A role team bound to alpha whose rows file holds `issues` issue rows and one local row. */
+  async function migrateKit(issues: number, extra: JsonRecord = {}): Promise<CliHarness> {
+    const kit = await boundKit({ ...migrates, ...extra });
+    const rows = Array.from({ length: issues }, (_, index) => issueRow(`T${index + 2}`));
+    await kit.files.write(ROWS_FILE, [...rows, JSON.stringify({ id: 'T99', decision: 'local', reason: 'Names a host.' })].join('\n'));
+    return kit;
+  }
+
+  it("allows the holder's run on a rows file in a task folder, logging the resolved file and its issue rows", async () => {
+    const kit = await migrateKit(2);
+    const result = await kit.run(HOOK, { stdin: call(MIGRATE), env: ALPHA });
+    assert.equal(decisionOf(result), 'allow');
+    assert.deepEqual(result.stderr, []);
+    assert.deepEqual(await answersOf(kit), [
+      { v: 1, at: '2030-01-08T10:00:00.000Z', session: 'alpha', claudeSession: CLAUDE_SESSION, tool: 'Bash', event: 'PreToolUse', answer: 'role', role: 'github', command: 'issue migrate', target: ROWS_FILE, count: 2 },
+    ]);
+  });
+
+  it('gives no role for a rows file it cannot weigh: missing, or holding a row the run refuses', async () => {
+    const kit = await boundKit(migrates);
+    assert.deepEqual(await kit.run(HOOK, { stdin: call(MIGRATE), env: ALPHA }), NOTHING, 'missing');
+    await kit.files.write(ROWS_FILE, `${issueRow('T2')}\nnot json`);
+    assert.deepEqual(await kit.run(HOOK, { stdin: call(MIGRATE), env: ALPHA }), NOTHING, 'a bad row');
+    assert.deepEqual(await answersOf(kit), []);
+  });
+
+  it('gives no role for a rows file outside the task folders, a preview, or a role without the command', async () => {
+    const kit = await migrateKit(1);
+    for (const line of [
+      `teamrig issue migrate ${TASKS}/rows.jsonl --yes --session alpha`,
+      `teamrig issue migrate ${TASKS.replace('/tasks', '/state')}/rows.jsonl --yes --session alpha`,
+      `teamrig issue migrate ${TASKS}/T1/../../state/rows.jsonl --yes --session alpha`,
+      `teamrig issue migrate ${ROWS} --session alpha`,
+    ]) {
+      assert.deepEqual(await kit.run(HOOK, { stdin: call(line), env: ALPHA }), NOTHING, line);
+    }
+    assert.deepEqual(await (await boundKit()).run(HOOK, { stdin: call(MIGRATE), env: ALPHA }), NOTHING, 'a role giving close and comment only');
+    assert.deepEqual(await answersOf(kit), []);
+  });
+
+  it('counts each issue row of a run toward the daily cap with the closes, refusing a run past the room left (C6)', async () => {
+    const kit = await migrateKit(2, { prompts: { serviceRoleDailyCap: 3 } });
+    assert.equal(decisionOf(await kit.run(HOOK, { stdin: call(CLOSE), env: ALPHA })), 'allow');
+    assert.equal(decisionOf(await kit.run(HOOK, { stdin: call(MIGRATE), env: ALPHA })), 'allow', 'one close and two issues fill the cap of 3');
+    assert.equal(decisionOf(await kit.run(HOOK, { stdin: call(CLOSE), env: ALPHA })), 'deny', 'a close past them');
+    assert.equal((await answersOf(kit)).length, 2);
+
+    const tight = await migrateKit(3, { prompts: { serviceRoleDailyCap: 3 } });
+    assert.equal(decisionOf(await tight.run(HOOK, { stdin: call(CLOSE), env: ALPHA })), 'allow');
+    const refused = await tight.run(HOOK, { stdin: call(MIGRATE), env: ALPHA });
+    assert.equal(decisionOf(refused), 'deny', 'three issues where two are left');
+    assert.match(refused.stdout.join(''), /has less room than this run's 3 issue rows left of its 3 calls/);
+    assert.doesNotMatch(refused.stdout.join(''), /split it/);
+    assert.equal((await answersOf(tight)).length, 1);
+
+    const big = await migrateKit(4, { prompts: { serviceRoleDailyCap: 3 } });
+    assert.match((await big.run(HOOK, { stdin: call(MIGRATE), env: ALPHA })).stdout.join(''), /more issue rows than the cap never runs under the role: split it/, 'a file past the whole cap');
   });
 });

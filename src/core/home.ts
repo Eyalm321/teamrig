@@ -15,21 +15,12 @@ export const ENV = {
   /** The calling session's name when `--session` is not given. */
   session: 'TEAMRIG_SESSION',
   /**
-   * The Claude Code session running a command: the inbox reminder hook follows its reads by it, and `teamrig queue`
-   * takes the session this tab is bound to from it when no session is named.
-   */
-  claudeSession: 'CLAUDE_CODE_SESSION_ID',
-  /**
    * The token of the host lock a running step holds (`queue`, `merge`, `deploy`), set for the processes it starts:
    * a `teamrig queue` among them, such as a git hook's checks, runs at once under that lock instead of waiting on its parent.
    */
   hostLock: 'TEAMRIG_HOST_LOCK',
-  /** The folder Claude Code started the session in; hooks and tool commands inherit it. */
-  claudeProjectDir: 'CLAUDE_PROJECT_DIR',
   /** Moves Claude Code's own folder (settings, plugins, transcripts) away from `~/.claude`. */
   claudeConfigDir: 'CLAUDE_CONFIG_DIR',
-  /** Moves Claude Code's temporary files, session scratchpads among them, away from the system's temporary folder. */
-  claudeTempDir: 'CLAUDE_CODE_TMPDIR',
   /** The session `teamrig launch` runs Claude Code for: it starts Claude Code again after an automatic restart. */
   launched: 'TEAMRIG_LAUNCHED',
   /** `off` turns `teamrig issue sync` off on this machine: it reads nothing and writes nothing. */
@@ -38,17 +29,6 @@ export const ENV = {
   effortLevel: 'CLAUDE_CODE_EFFORT_LEVEL',
   /** At 1, Claude Code picks a helper's model over every per-call Agent `model`; `doctor` warns when set. */
   subagentModelForce: 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE',
-  /** How Claude Code was started: `cli` for a terminal tab, the only kind the restore after a reboot reopens. */
-  claudeEntrypoint: 'CLAUDE_CODE_ENTRYPOINT',
-  /** `bg` for a background session, which the restore after a reboot never reopens. */
-  claudeSessionKind: 'CLAUDE_CODE_SESSION_KIND',
-  /** Set (`1`), Claude Code stops writing the terminal tab's title and leaves it to hooks: tab status needs it. */
-  claudeTitleOff: 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE',
-  /**
-   * `1` in what Claude Code starts for the agent: its Bash and PowerShell tools, the scripts they run, hook commands,
-   * the status line. The plugin's mod runs commands with Claude Code's own environment, which lacks it.
-   */
-  claudeCode: 'CLAUDECODE',
 } as const;
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -69,16 +49,10 @@ export function claudeConfigDir(env: Env, userHome: string): string {
   return fromEnv ? fromEnv : join(userHome, '.claude');
 }
 
-/** The folder Claude Code keeps its temporary files under (scratchpads: `<it>/claude/<project>/<session>/scratchpad`). */
-export function claudeTempDir(env: Env, systemTemp: string): string {
-  const fromEnv = env[ENV.claudeTempDir]?.trim();
-  return fromEnv ? fromEnv : systemTemp;
-}
-
 /**
  * Folders a team may move in the config: `paths`, and `refresh.handoverDir` for the handover. A
  * relative path is resolved against the team home; unset, state, inbox and handover stay under the
- * team home and skills is the Claude Code skills folder.
+ * team home and skills is the host's skills folder (`teamPaths`).
  */
 export interface PathOverrides {
   readonly state?: string;
@@ -142,7 +116,7 @@ export interface TeamPaths {
   /** The append-only log of session renames, so every name a session has had still finds it. */
   readonly renames: string;
   readonly renamesLock: string;
-  /** The Claude Code skills folder the skills lint and `--skill` checks read. */
+  /** The skills folder the skills lint and `--skill` checks read: the host's own, unless the config moves it. */
   readonly skills: string;
   /** Each session's context-refresh state, one small file per session. */
   readonly refresh: string;
@@ -166,6 +140,8 @@ export interface TeamPaths {
   readonly unownedNotices: string;
   /** Held while a start tells the lead of those warnings, so two starts never tell one twice. */
   readonly unownedNoticesLock: string;
+  /** What `start` and `check --new` last showed each session of the check flags, `<id>.json` each (T2536). */
+  readonly checkSeen: string;
   /** Each session's metered use, `<id>.json` each, and the use outside the team in its own folder (budget/measure.ts `outsideUsageDir`). */
   readonly usage: string;
   /** The Claude config dir the team's sessions last started in, recorded at each start (budget/config-dir.ts). */
@@ -207,19 +183,21 @@ export interface TeamPaths {
   readonly warn: string;
   /** The full output of each `teamrig test` run, `test-<session>-<n>.log` each. */
   readonly logs: string;
-  /** The automatic GitHub sync's last start, finish and failing repositories (github/auto.ts). */
+  /** The automatic GitHub sync's last start, finish and failing repositories (sync/auto.ts). */
   readonly githubSync: string;
-  /** The end of each failed CI job's log of a session's own pull request, one `<owner>-<name>-<number>.md` per pull request (github/ci-excerpt.ts). */
+  /** The end of each failed CI job's log of a session's own pull request, one `<owner>-<name>-<number>.md` per pull request (sync/ci-excerpt.ts). */
   readonly githubCi: string;
   /** Held while a sync records its finish. */
   readonly githubSyncLock: string;
-  /** The response clock of each GitHub thread waiting on an answer of ours (github/clock.ts). */
+  /** The automatic status push's writes per minute over the last hour (issues/push-hour.ts). */
+  readonly githubPushHour: string;
+  /** The response clock of each GitHub thread waiting on an answer of ours (sync/clock.ts). */
   readonly githubClocks: string;
-  /** The lease of the team's one `issue watch`: its pid and last beat (github/watch.ts). */
+  /** The lease of the team's one `issue watch`: its pid and last beat (sync/watch.ts). */
   readonly githubWatch: string;
   /** Held while a hook claims the watch or the watch claims, renews or drops its lease. */
   readonly githubWatchLock: string;
-  /** The issues and pull requests each session follows (github/follows.ts). */
+  /** The issues and pull requests each session follows (sync/follows.ts). */
   readonly githubFollows: string;
   /** The issue claims the sync made, the only assignees it may ever take off (issues/claim.ts). */
   readonly githubClaims: string;
@@ -289,11 +267,24 @@ const TASKS_FOLDER = 'tasks';
  * task's design is found by its id, never by a search.
  */
 export function taskFolder(kitHome: string, team: string, id: string): string {
-  return join(teamHome(kitHome, team), TASKS_FOLDER, id);
+  return join(tasksFolder(kitHome, team), id);
 }
 
-/** The team's paths; `claudeDir` is Claude Code's own folder (`claudeConfigDir`), whose `skills` is the default skills folder. */
-export function teamPaths(kitHome: string, team: string, claudeDir: string, overrides: PathOverrides = {}): TeamPaths {
+/** The folder holding every task folder of the team. */
+export function tasksFolder(kitHome: string, team: string): string {
+  return join(teamHome(kitHome, team), TASKS_FOLDER);
+}
+
+/** A team's config file, which tells the rest of its paths: found with no other path of the team known. */
+export function teamConfigFile(kitHome: string, team: string): string {
+  return join(teamHome(kitHome, team), 'config.json');
+}
+
+/**
+ * The team's paths. `hostSkills` is the folder the run's host loads a person's skills from, the default skills
+ * folder; with none known, the team keeps its skills in its own folder.
+ */
+export function teamPaths(kitHome: string, team: string, hostSkills: string | undefined, overrides: PathOverrides = {}): TeamPaths {
   const home = teamHome(kitHome, team);
   const inHome = (path: string | undefined): string | undefined =>
     path === undefined || isAbsolute(path) ? path : join(home, path);
@@ -302,7 +293,7 @@ export function teamPaths(kitHome: string, team: string, claudeDir: string, over
     kitHome,
     team,
     home,
-    config: join(home, 'config.json'),
+    config: teamConfigFile(kitHome, team),
     teamRules: join(home, 'rules.md'),
     backups: join(home, 'backups'),
     state,
@@ -329,7 +320,7 @@ export function teamPaths(kitHome: string, team: string, claudeDir: string, over
     ruleVerdicts: join(state, 'rule-verdicts.json'),
     renames: join(state, 'renames.jsonl'),
     renamesLock: join(state, 'renames.lock'),
-    skills: inHome(overrides.skills) ?? join(claudeDir, 'skills'),
+    skills: inHome(overrides.skills) ?? hostSkills ?? join(home, 'skills'),
     refresh: join(state, 'refresh'),
     handover: inHome(overrides.handover) ?? join(home, 'handover'),
     tasks: join(home, TASKS_FOLDER),
@@ -341,6 +332,7 @@ export function teamPaths(kitHome: string, team: string, claudeDir: string, over
     effortChanges: join(state, 'effort-changes.jsonl'),
     unownedNotices: join(state, 'unowned-notices.json'),
     unownedNoticesLock: join(state, 'unowned-notices.lock'),
+    checkSeen: join(state, 'check-seen'),
     usage: join(state, 'usage'),
     configDirRecord: join(state, 'usage', 'claude-config-dir.json'),
     skillsScorecard: join(state, 'skills-scorecard.json'),
@@ -363,6 +355,7 @@ export function teamPaths(kitHome: string, team: string, claudeDir: string, over
     githubSync: join(state, 'github-sync.json'),
     githubCi: join(state, 'github-ci'),
     githubSyncLock: join(state, 'github-sync.lock'),
+    githubPushHour: join(state, 'github-push-hour.json'),
     githubClocks: join(state, 'github-clocks.json'),
     githubWatch: join(state, 'github-watch.json'),
     githubWatchLock: join(state, 'github-watch.lock'),

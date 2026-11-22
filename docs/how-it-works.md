@@ -213,7 +213,13 @@ stateDiagram-v2
 - The task list is one log that only grows, a line for every move. `teamrig compact` archives it: the log becomes
 the next file in `state/archive/` byte for byte and is never deleted, a fresh log starts with a line naming it,
 and `state/snapshot.jsonl` holds every task as it stood, so commands and the task pane read the snapshot and the
-recent lines instead of the whole history. Tasks done or dropped over 8 days ago, in no week plan from the current
+recent lines instead of the whole history. The snapshot holds one line per task as it stood two days before the
+compaction, then the events of those two days as written, so its size follows the tasks kept, not their history; a
+read that needs older events (`show` of an older task, `meeting end` of a meeting that started before, a leader
+digest from an older cursor, `team split`) reads the archive for them. A task's line leaves its description out,
+the longest field, and keeps only its length and a hash: the commands that print or compare one (`show`, the owner's
+cards of `meeting`, `decisions` and `meet --cards`, `issue similar`) read it from the archive, an issue sync tells
+by the hash whether the body changed, and the task pane shows such a task without its description. Tasks done or dropped over 8 days ago, in no week plan from the current
 one on, leave the snapshot: `show`, `list --status done` and the plan of a past week still read them from the
 archive, and a task that left cannot be changed. `compact --dry-run` prints what it would archive and write, and writes nothing; a real run first
 reads the new files back and holds every task against the whole history, and writes nothing on any difference.
@@ -265,7 +271,7 @@ turns this off: `register.autoArchive: false` in the team's `config.json`, after
   allowance times the share of today's active time gone by (the quiet-hour use already lowered the allowance, so a
   night a lift worked through does not read as a morning past the pace). So no session waits while the week has
   room. The hooks warn a session as it passes its daily budget, tell the lead, and can hold its helper launches (`budget.overAction`,
-  `budget.quietHours`), never while it has p0 work or an answer another session waits on: urgent work and a blocker go on past the daily stop. The lead sets that policy with `teamrig budget setup`, which shows the change before it
+  `budget.quietHours`), never while it has `blocker` or p0 work or an answer another session waits on: urgent work and a blocker go on past the daily stop. The lead sets that policy with `teamrig budget setup`, which shows the change before it
   writes it.
   On the way, each team's budget hooks keep its week in `usage/team.week.json` in its state folder (`state/` under
   the team's folder, unless `paths.state` moves it): the team's use of the
@@ -338,9 +344,13 @@ flowchart LR
   core --- pm
 ```
 
-There is no adapter interface in the code yet: what teamrig knows about Claude Code (its hook fields, its
-environment variables, `~/.claude/skills`) is built in. The interface comes with the second AI tool (T204), so it is
-shaped by two real tools instead of one.
+Each kind of tool is a port in the plugin API (`src/plugin-api`): an AI tool's host, a task tool's connector and a
+terminal. Each tool's adapter sits in its own folder under `src/adapters` (Claude Code's host; the local, GitHub and
+Jira connectors; the six built-in terminals), declares what it supports, and is held to the same contract suites as
+every other adapter of its kind.
+
+A terminal or editor plugs in as a host program that speaks the terminal protocol, with no change to teamrig's code:
+its own guide is [Build your own terminal host](guides/build-a-terminal-host.md).
 
 A program that only shows the team's files, such as the [teamrig-pane](https://github.com/GeneralA6/teamrig-pane)
 task pane, reads them through `src/read/index.ts`: the same parse and replay every teamrig command uses, with no

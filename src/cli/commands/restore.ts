@@ -13,7 +13,7 @@ import { teamWindowOf } from '../../open/terminals.ts';
 import { encodePrompt } from '../../open/prompt.ts';
 import { shellCommand } from '../../open/quote.ts';
 import { plainSessionEnv } from '../../open/session-env.ts';
-import { runsClaude, type EndOutcome } from '../../open/session-processes.ts';
+import type { EndOutcome } from '../../open/session-processes.ts';
 import { RestoreArchive, restoreArchiveDir } from '../../restore/archive.ts';
 import type { RestoreEntry } from '../../restore/entry.ts';
 import { RestoreRegistry, restoreLogPath, restoreSessionsDir } from '../../restore/registry.ts';
@@ -24,8 +24,10 @@ import { noRoomText } from '../../sessions/headroom.ts';
 import { onePositional, requiredFlag, UsageError, type ParsedArgs } from '../args.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { admitBusyText, admitTab, dropTabHold } from '../headroom.ts';
+import { cacheBinOf, childEnvOf, launcherOf, transcriptsOf } from '../host.ts';
+import { runsHostSession } from '../session-process.ts';
 import { loadTree, type TreeTeam } from '../tree.ts';
-import { claudeExit, claudeProgramOf, claudeSessionArg, effortFlag, encodedPromptFlag, homeArgs, openSessionTab, TERMINAL_LABELS, terminalFlag } from './open.ts';
+import { claudeExit, claudeSessionArg, effortFlag, encodedPromptFlag, homeArgs, hostProgramOf, openSessionTab, TERMINAL_LABELS, terminalFlag } from './open.ts';
 
 /** The title of the tab `restore check` opens for the restore. */
 export const RESTORE_TAB_TITLE = 'Restore Claude sessions';
@@ -174,7 +176,7 @@ function roomWaitMsOf(teams: ReadonlyMap<string, TreeTeam>): number {
  */
 async function endSession(runtime: CliRuntime, entry: RestoreEntry): Promise<EndOutcome> {
   const { pid } = entry;
-  if (pid === undefined || !(await runsClaude(runtime.sessionProcesses, pid))) {
+  if (pid === undefined || !(await runsHostSession(runtime, pid))) {
     return { kind: 'gone' };
   }
   return runtime.sessionProcesses.end(pid, 'force');
@@ -192,6 +194,8 @@ async function restoreDepsOf(runtime: CliRuntime, terminal: TerminalChoice | und
     clock: runtime.clock,
     sleep: runtime.sleep,
     probe: runtime.probe,
+    reader: transcriptsOf(runtime),
+    placeOf: launcherOf(runtime).sessionPlaceOf,
     shutdowns: runtime.restore.shutdowns,
     countdown: runtime.restore.countdown,
     stops: runtime.restore.stops,
@@ -200,7 +204,7 @@ async function restoreDepsOf(runtime: CliRuntime, terminal: TerminalChoice | und
     projectsDir,
     platform: runtime.platform,
     roomWaitMs: roomWaitMsOf(teams),
-    stillRunning: (entry) => runsClaude(runtime.sessionProcesses, entry.pid),
+    stillRunning: (entry) => runsHostSession(runtime, entry.pid),
     transcriptOf: (entry) => finder.find(entry),
     modifiedAt: (path) => runtime.files.modifiedAt(path),
     end: (entry) => endSession(runtime, entry),
@@ -320,9 +324,11 @@ export async function restoreResume(args: ParsedArgs, runtime: CliRuntime): Prom
   const effort = effortFlag(args.flags.get('effort'));
   const encoded = args.flags.get('encoded-prompt');
   const prompt = encoded === undefined ? undefined : encodedPromptFlag(encoded);
-  const env = plainSessionEnv(runtime.env, args.flags.get('home'), runtime.platform);
-  const { command, prefix } = await claudeProgramOf(runtime, env);
+  const env = plainSessionEnv(runtime.env, args.flags.get('home'), runtime.platform, cacheBinOf(runtime), childEnvOf(runtime).session);
+  const { command, prefix } = await hostProgramOf(runtime, env);
   runtime.out.stdout(`Resuming Claude Code session ${claudeSession} in ${project}${effort === undefined ? '' : ` at ${effort} effort`}`);
-  const claudeArgs = [...prefix, '--resume', claudeSession, ...(effort === undefined ? [] : ['--effort', effort]), ...(prompt === undefined ? [] : [prompt])];
+  // A session outside any team has no name, model or settings file of teamrig's: the host keeps its own.
+  const start = { name: undefined, model: undefined, effort, resume: claudeSession, settingsFile: undefined, prompt };
+  const claudeArgs = [...prefix, ...launcherOf(runtime).launchArgs(start)];
   return claudeExit(runtime, command, await runtime.processes.run({ command, args: claudeArgs, cwd: project, env }));
 }

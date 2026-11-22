@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { FIRST_IN_LINE_POLL_MS } from '../delivery/host-lock.ts';
-import type { QueuedStepRecord, RefusalOutcome, RefusalRecord } from '../delivery/ledger.ts';
+import { parseQueuedStep, type QueuedStepRecord, type RefusalOutcome, type RefusalRecord } from '../delivery/ledger.ts';
 import { lineFrontPath, LineFrontStore } from '../delivery/line-front-store.ts';
 import { isRecord } from '../core/guards.ts';
 import { recordPass } from '../delivery/push-pass.ts';
@@ -12,6 +12,7 @@ import { KIT_VERSION } from '../core/version.ts';
 import { APP, CliHarness, CONFIG_PATH, KIT, TEAM, TEAM_HOME, type CliResult } from '../testing/cli-harness.ts';
 import { BUSY_HOLDERS, BUSY_HOLDERS_TEXT, FakeHostMemory } from '../testing/fake-host-memory.ts';
 import { cleanTree, FakeTrees, GIT_DIR } from '../testing/fake-trees.ts';
+import type { RunTree } from '../delivery/run-tree.ts';
 import { CLAUDE, FakeStarterWatch, SHELL } from '../testing/fake-starter-watch.ts';
 import { FakeMergeGit, MAIN_CHECKOUT } from '../testing/fake-merge-git.ts';
 import { FakeProcesses } from '../testing/fake-processes.ts';
@@ -19,8 +20,9 @@ import { SHIP_TOOL_READS, SHIP_TOOL_REREAD_MS } from './ship-role-check.ts';
 import { FakeSteps } from '../testing/fake-steps.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { heldBy, OTHER, otherRuns } from '../testing/held-lock.ts';
+import { hostNaming, hostTelling, NO_SESSION_HOST } from '../testing/host.ts';
 import { lineRequests } from '../testing/line-tickets.ts';
-import { ROOMY_FREE_MB } from '../testing/quiet-world.ts';
+import { ROOMY_FREE_MB } from '../testing/quiet-delivery.ts';
 import { WakeAsks } from '../wake/asks.ts';
 import { EXIT } from './runtime.ts';
 
@@ -107,7 +109,7 @@ type RanAlso = Partial<Pick<QueuedStepRecord, 'kind' | 'startFreeMb' | 'lowFreeM
 
 /** An ended run of `what` by `session` the day before, whose process tree held `peakTreeMb` at most, with `also`. */
 function ranBefore(session: string, what: string, peakTreeMb: number, also: RanAlso = {}): string {
-  return JSON.stringify({ type: 'heavy', id: `${session}-${peakTreeMb}`, session, what, ...also, startedAt: '2030-01-07T10:00:00.000Z', endedAt: '2030-01-07T10:05:00.000Z', exitCode: 0, peakTreeMb });
+  return JSON.stringify({ type: 'heavy', id: `${session}-${peakTreeMb}`, session, what, ...also, cwd: APP, startedAt: '2030-01-07T10:00:00.000Z', endedAt: '2030-01-07T10:05:00.000Z', exitCode: 0, peakTreeMb });
 }
 
 describe('teamrig queue', () => {
@@ -123,7 +125,7 @@ describe('teamrig queue', () => {
     const share = { id: 'id-1', pid: 4242, session: 'alpha', purpose: 'heavy: build api', kit: KIT_VERSION, acquiredAt: '2030-01-08T10:00:02.000Z', expiresAt: '2030-01-08T12:30:02.000Z', reserveMb: 2048, heavy: true, request };
     assert.deepEqual(whileRunning, [undefined, share]);
     assert.equal(kit.files.get(`${SHARED}/id-1.json`), undefined, 'the share is released');
-    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
+    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
     assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:05:02.000Z', exitCode: 0 }], 'a heavy share is not recorded as shared: that marks a small step');
   });
 
@@ -172,7 +174,7 @@ describe('teamrig queue', () => {
       expiresAt: '2030-01-08T12:30:02.000Z',
     });
     assert.equal(kit.files.get(LOCK), undefined, 'the lock is released');
-    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
+    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
     assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:05:02.000Z', exitCode: 0 }]);
   });
 
@@ -230,7 +232,7 @@ describe('teamrig queue', () => {
       ],
       stderr: [],
     });
-    assert.deepEqual(ledgerOf(kit)[1], { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:00:02.000Z', endedAt: '2030-01-08T10:45:02.000Z', exitCode: 124, endFreeMb: ROOMY_FREE_MB });
+    assert.deepEqual(ledgerOf(kit)[1], { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: '2030-01-08T10:45:02.000Z', exitCode: 124, endFreeMb: ROOMY_FREE_MB });
   });
 
   it('prints FAILED for a step a signal stopped, recorded as exit 1', async () => {
@@ -366,7 +368,7 @@ describe('teamrig queue', () => {
     await kit.files.write(LOCK, heldBy('2030-01-08T10:03:00.000Z'));
     assert.equal((await kit.run(BUILD, { steps, memory, sessionProcesses: otherRuns() })).code, 0);
     assert.deepEqual(memory.watches, [{ root: 4242, intervalMs: 15_000, stopped: true }], "its own process's tree, every 15 s");
-    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', waits: { lock: 3 * MINUTE + 2_000 }, queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:03:02.000Z', endedAt: null, exitCode: null };
+    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', waits: { lock: 3 * MINUTE + 2_000 }, queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:03:02.000Z', endedAt: null, exitCode: null };
     assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:08:02.000Z', exitCode: 0, peakTreeMb: 1900, lowFreeMb: 6400 }]);
   });
 
@@ -415,7 +417,7 @@ describe('teamrig queue', () => {
       stderr: [],
     });
     assert.equal(steps.ran[0]?.stop?.aborted, true);
-    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
+    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
     assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:00:02.000Z', exitCode: 129, endFreeMb: ROOMY_FREE_MB }]);
     assert.deepEqual([kit.files.get(LOCK), starters.openWatches], [undefined, 0]);
   });
@@ -519,6 +521,21 @@ describe('teamrig queue', () => {
     );
   });
 
+  it("takes the tab's id from the host, and no tab where the host tells none, whatever the environment holds", async () => {
+    const { kit, steps } = harness();
+    const id = '9f8e7d6c-1111-2222-3333-444455556666';
+    const told = hostTelling({ sessionId: id });
+    await kit.run(['inbox', 'read', '--session', 'alpha'], { host: told });
+    const result = await kit.run(['queue', '--what', 'pre-commit checks', '--', 'npm', 'test'], { steps, host: told });
+    assert.equal(result.code, 0);
+    assert.deepEqual(
+      ledgerOf(kit).map((record) => JSON.stringify(record).includes('"session":"alpha"')),
+      [true, true],
+    );
+    const untold = await kit.run(['queue', '--what', 'build', '--', 'npm', 'test'], { steps, env: { CLAUDE_CODE_SESSION_ID: id }, host: NO_SESSION_HOST });
+    assert.equal(untold.code, 64, 'no tab is told, so a session must be named');
+  });
+
   it('prints the usage when no session is named and the tab is bound to none', async () => {
     const { kit, steps } = harness();
     const result = await kit.run(['queue', '--what', 'build', '--', 'npm', 'test'], { steps, env: { CLAUDE_CODE_SESSION_ID: '9f8e7d6c-1111-2222-3333-444455556666' } });
@@ -601,7 +618,7 @@ describe('teamrig queue', () => {
       const { kit, steps } = harness();
       steps.ends(0, MINUTE);
       assert.equal((await kit.run(['queue', '--session', 'alpha', '--what', what, ...flags, '--', ...command], { steps })).code, 0);
-      const start = { type: 'heavy', id: 'id-2', session: 'alpha', what, ...request, kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
+      const start = { type: 'heavy', id: 'id-2', session: 'alpha', what, ...request, kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
       assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:01:02.000Z', exitCode: 0 }]);
     });
   }
@@ -612,7 +629,7 @@ describe('teamrig queue', () => {
     assert.equal(added.code, EXIT.ok, added.stderr.join('\n'));
     steps.ends(0, MINUTE);
     assert.equal((await kit.run(['queue', '--session', 'alpha', '--what', 'T1 build', '--', 'npm', 'run', 'build'], { steps })).code, 0);
-    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'T1 build', kind: 'build', task: 'T1', priority: 2, kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
+    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'T1 build', kind: 'build', task: 'T1', priority: 2, kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
     assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:01:02.000Z', exitCode: 0 }]);
   });
 
@@ -694,10 +711,10 @@ describe('teamrig queue --small', () => {
     const lines = [`2030-01-08 10:00:02 UTC sharing the host: 2048 MB held for it (${ROOMY_FREE_MB} MB free, 0 other small steps)`, '2030-01-08 10:00:02 UTC running: specs (killed after 10m)', 'DONE exit 0'];
     assert.deepEqual(result, { code: 0, stdout: lines, stderr: [] });
     const request = { kind: 'test', class: 'Improvements', classPct: 15, needMb: 2048, heavy: false, exclusive: false };
-    const share = { id: 'id-1', pid: 4242, session: 'alpha', purpose: 'heavy: specs', kit: KIT_VERSION, acquiredAt: '2030-01-08T10:00:02.000Z', expiresAt: '2030-01-08T12:30:02.000Z', reserveMb: 2048, request };
+    const share = { id: 'id-1', pid: 4242, session: 'alpha', purpose: 'small: specs', kit: KIT_VERSION, acquiredAt: '2030-01-08T10:00:02.000Z', expiresAt: '2030-01-08T12:30:02.000Z', reserveMb: 2048, request };
     assert.deepEqual(whileRunning, [undefined, share], 'a step whose label names no task asks at the default class, with no priority');
     assert.equal(kit.files.get(`${SHARED}/id-1.json`), undefined, 'the share is released');
-    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'specs', kind: 'test', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, shared: true, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
+    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'specs', kind: 'test', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, shared: true, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
     assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:05:02.000Z', exitCode: 0 }]);
   });
 
@@ -794,7 +811,7 @@ describe('teamrig queue --small', () => {
     assert.equal((await kit.run(BUILD, { steps, memory })).code, 0);
     const [start] = ledgerOf(kit);
     const short = 3 * FIRST_IN_LINE_POLL_MS;
-    assert.deepEqual(start, { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', waits: { memory: short }, queueFreeMb: 5000, startedAt: new Date(Date.parse('2030-01-08T10:00:00Z') + short).toISOString(), endedAt: null, exitCode: null }, 'it waits two short looks of the first in line, then its last look before it takes the lock');
+    assert.deepEqual(start, { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', waits: { memory: short }, queueFreeMb: 5000, cwd: APP, startedAt: new Date(Date.parse('2030-01-08T10:00:00Z') + short).toISOString(), endedAt: null, exitCode: null }, 'it waits two short looks of the first in line, then its last look before it takes the lock');
   });
 
   it('holds for a heavy step its latest runs\' peak with a quarter more when that passes delivery.queue.heavyReserveMb (T2192)', async () => {
@@ -871,7 +888,7 @@ describe('teamrig queue --exclusive', () => {
     const lock = { id: 'id-1', pid: 4242, session: 'alpha', purpose: 'heavy: build api', kit: KIT_VERSION, acquiredAt: '2030-01-08T10:00:02.000Z', expiresAt: '2030-01-08T12:30:02.000Z' };
     assert.deepEqual(whileRunning, [lock, undefined]);
     assert.equal(kit.files.get(LOCK), undefined, 'the lock is released');
-    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
+    const start = { type: 'heavy', id: 'id-2', session: 'alpha', what: 'build api', kind: 'build', kit: KIT_VERSION, queuedAt: '2030-01-08T10:00:00.000Z', queueFreeMb: ROOMY_FREE_MB, cwd: APP, startedAt: '2030-01-08T10:00:02.000Z', endedAt: null, exitCode: null };
     assert.deepEqual(ledgerOf(kit), [start, { ...start, endedAt: '2030-01-08T10:05:02.000Z', exitCode: 0 }]);
   });
 
@@ -1062,6 +1079,32 @@ describe('teamrig queue --detach (T2227)', () => {
     assert.deepEqual([steps.ran, kit.files.get(LOCK), kit.files.get(LEDGER), await alphaLines(kit)], [[], undefined, undefined, []], 'the caller waits for nothing and runs nothing');
   });
 
+  it("parks the session variables a host lets a step keep and every host's mark of an agent's run, and no credential a host names", async () => {
+    const { kit, steps } = harness();
+    const host = hostNaming({ marks: ['AGENT_RUN'], identity: ['AGENT_SESSION'] }, {}, { session: ['AGENT_SOCKET', 'AGENT_TAB'], parked: ['AGENT_TAB', 'GH_TOKEN'], login: [] });
+    const env = {
+      TEAMRIG_SESSION: 'alpha',
+      PATH: '/usr/bin',
+      CLAUDECODE: '1',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'secret-token',
+      AGENT_RUN: '1',
+      AGENT_TAB: 't-1',
+      AGENT_SOCKET: '/run/agent',
+      GH_TOKEN: 'secret-token',
+    };
+    assert.equal((await kit.run(DETACH_BUILD, { steps, processes: new FakeProcesses(), env, host })).code, 0);
+    assert.deepEqual(parkedOf(kit, DETACHED_ID)?.env, {
+      TEAMRIG_HOME: KIT,
+      TEAMRIG_SESSION: 'alpha',
+      PATH: '/usr/bin',
+      CLAUDECODE: '1',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+      AGENT_RUN: '1',
+      AGENT_TAB: 't-1',
+    });
+  });
+
   it('refuses under a pipeline freeze on its kind, starting nothing', async () => {
     const { kit, steps } = harness();
     await kit.files.write(PIPELINE_FREEZES, pipelineFreezes({ from: '2030-01-08T09:00:00.000Z' }));
@@ -1127,11 +1170,40 @@ describe('teamrig queue --detached-run (T2227)', () => {
     const starters = new FakeStarterWatch();
     steps.ends(0, MINUTE).whileRunning(async () => starters.end());
     const result = await kit.run(hiddenArgs, { steps, starters });
-    assert.deepEqual(result, { code: 0, stdout: [`2030-01-08 10:00:00 UTC detached run ${DETACHED_ID}: pid 4242`, '2030-01-08 10:00:02 UTC running: build api (killed after 1h30m)', 'DONE exit 0'], stderr: [] });
+    assert.deepEqual(result, { code: 0, stdout: [`# folder: ${APP}\n# git: none, it ran outside a git repository`, `2030-01-08 10:00:00 UTC detached run ${DETACHED_ID}: pid 4242`, '2030-01-08 10:00:02 UTC running: build api (killed after 1h30m)', 'DONE exit 0'], stderr: [] });
     assert.deepEqual([steps.ran[0]?.stop?.aborted, starters.openWatches], [false, 0], 'the shell that ran --detach ended long ago: it stops nothing');
     assert.deepEqual(await alphaLines(kit), [`queue ${DETACHED_ID} started: build api; log ${DETACHED_LOG}`, `queue ${DETACHED_ID} ended: build api: DONE exit 0; log ${DETACHED_LOG}`]);
     assert.deepEqual(await alphaWakes(kit), [`alpha: queue ${DETACHED_ID} ended: build api: DONE exit 0; log ${DETACHED_LOG}`], 'only the end wakes it');
     assert.equal(ledgerOf(kit).length, 2, "its start and end are recorded as any step's");
+  });
+
+  it('starts its log with the tree it was started on, says one that changed while it waited, and records the tree it ran on (#708)', async () => {
+    const { kit, steps } = harness();
+    const trees = new FakeTrees();
+    const clean: RunTree = { kind: 'git', top: '/work', head: 'c0ffee12345', dirty: false };
+    const looks: RunTree[] = [clean, { ...clean, dirty: true }];
+    trees.ranIn = (dir) => {
+      trees.ranLooks.push(dir);
+      return looks.shift() ?? clean;
+    };
+    const result = await kit.run(DETACHED_BUILD, { steps: steps.ends(0), trees });
+    const changed = '2030-01-08 10:00:02 UTC the tree changed while it waited; it runs on /work at c0ffee12345, with uncommitted changes';
+    assert.equal(result.stdout[0], `# folder: ${APP}\n# git: /work at c0ffee12345, clean`);
+    assert.deepEqual(result.stdout.slice(-3), [changed, '2030-01-08 10:00:02 UTC running: build api (killed after 45m)', 'DONE exit 0']);
+    assert.deepEqual(trees.ranLooks, [APP, APP], 'once as it starts, once as its step starts');
+    const start = parseQueuedStep(ledgerOf(kit)[0]);
+    assert.deepEqual([start?.cwd, start?.gitTop, start?.head, start?.dirty], [APP, '/work', 'c0ffee12345', true]);
+  });
+
+  it("says nothing more of an unchanged tree, and a step that runs in the caller's shell prints no header", async () => {
+    const { kit, steps } = harness();
+    const trees = new FakeTrees();
+    trees.ran = { kind: 'git', top: '/work', head: 'c0ffee12345', dirty: false };
+    const detached = await kit.run(DETACHED_BUILD, { steps: steps.ends(0), trees });
+    assert.equal(detached.stdout.filter((line) => line.includes('tree changed')).length, 0);
+    const shell = await kit.run(BUILD, { steps: steps.ends(0), trees });
+    assert.ok(!shell.stdout.some((line) => line.startsWith('# ')));
+    assert.equal(parseQueuedStep(ledgerOf(kit).at(-1))?.head, 'c0ffee12345', "a step in the caller's shell records its tree too");
   });
 
   it('tells its session of a failed step with its exit code', async () => {
@@ -1313,18 +1385,22 @@ describe("teamrig queue runs a configured ship tool only from main's current cod
     }
   });
 
-  it('refuses at its start, recording its refusal, a ship step whose tool moved to another commit while it waited', async () => {
-    const { kit, steps } = harness(SHIPPING);
-    await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
-    const git = shipGit();
-    const sleep = async (ms: number): Promise<void> => {
-      git.heads.set('/repo/ship', 'old');
-      await kit.clock.sleep(ms);
-    };
-    const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
-    const moved = `the ship tool ${SHIP_TOOL} changed from base while the step waited and is not origin/main's current code in a checkout with no change: ${MOVE}`;
-    assert.deepEqual([result.code, result.stdout.at(-1), steps.ran], [EXIT.refused, `REFUSED ${moved}`, []]);
-    assert.deepEqual(ledgerOf(kit).map((record) => (typeof record === 'object' && record !== null && 'outcome' in record ? record.outcome : undefined)), ['refused']);
+  it("moves back to main's current code and runs a ship step whose tool moved to another commit while it waited, recording a refusal when git cannot move it (T4280)", async () => {
+    for (const stuck of [false, true]) {
+      const { kit, steps } = harness(SHIPPING);
+      await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
+      const git = shipGit();
+      git.detachAtFails = stuck ? 'your local changes would be overwritten' : undefined;
+      const sleep = async (ms: number): Promise<void> => {
+        git.heads.set('/repo/ship', 'old');
+        await kit.clock.sleep(ms);
+      };
+      const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
+      const outcomes = ledgerOf(kit).map((record) => (typeof record === 'object' && record !== null && 'outcome' in record ? record.outcome : undefined));
+      const failed = `the ship tool ${SHIP_TOOL} is behind origin's main at base, and moving its checkout /repo/ship there failed: your local changes would be overwritten: ${MOVE}`;
+      const want = stuck ? [EXIT.refused, `REFUSED ${failed}`, 0, 'old', ['refused']] : [EXIT.ok, result.stdout.at(-1), 1, 'base', outcomes];
+      assert.deepEqual([result.code, result.stdout.at(-1), steps.ran.length, git.heads.get('/repo/ship'), outcomes], want, `stuck ${String(stuck)}`);
+    }
   });
 
   const UNANSWERED = 'git rev-parse in /repo/ship did not answer: ended with 0xC0000142, as a process that died starting does';
@@ -1364,13 +1440,13 @@ describe("teamrig queue runs a configured ship tool only from main's current cod
     }
   });
 
-  it("refuses as stale a tool git did not answer for at its queueing that is not main's current code at its start (T3368)", async () => {
+  it("moves to main's current code, then runs, a tool git did not answer for at its queueing that is not main's current code at its start (T3368, T4280)", async () => {
     const { kit, steps } = harness(SHIPPING);
     const git = shipGit();
     git.unanswered.push(UNANSWERED);
     git.heads.set('/repo/ship', 'old');
     const result = await kit.run(SHIP_STEP, { steps, mergeGit: git });
-    assert.deepEqual([result.code, result.stdout.at(-1), steps.ran], [EXIT.refused, `REFUSED ${STALE}`, []]);
+    assert.deepEqual([result.code, steps.ran.length, git.log], [EXIT.ok, 1, ['fetch /repo/ship origin', 'detachAt /repo/ship origin/main']]);
   });
 
   it('runs a ship step whose tool moved on to the newest main while it waited', async () => {
@@ -1380,6 +1456,7 @@ describe("teamrig queue runs a configured ship tool only from main's current cod
     const sleep = async (ms: number): Promise<void> => {
       git.heads.set('/repo/ship', 'next');
       git.tracking.set('origin/main', 'next');
+      git.origin.set('main', 'next');
       await kit.clock.sleep(ms);
     };
     const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
@@ -1426,7 +1503,7 @@ describe("teamrig queue refuses a waiting ship only when the code its tool runs 
    */
   function movedTwice(kit: CliHarness, changed: readonly string[], to = 'b1'): { git: FakeMergeGit; sleep: (ms: number) => Promise<void> } {
     const git = shipGit();
-    for (const commit of ['base', to]) {
+    for (const commit of ['base', to, 'b2']) {
       git.files.set(`${commit}:tools/ship/ship.ts`, "import { profiles } from './repos.ts';\nimport { teamHome } from '../../src/core/home.ts';\n");
       git.files.set(`${commit}:tools/ship/ship.roots.json`, '{"roots": ["src/cli/main.ts"]}');
       git.files.set(`${commit}:tools/ship/repos.ts`, "import { join } from 'node:path';\nexport const PROFILES_PATH = new URL('./repos.json', import.meta.url);\n");
@@ -1440,57 +1517,71 @@ describe("teamrig queue refuses a waiting ship only when the code its tool runs 
     const sleep = async (ms: number): Promise<void> => {
       git.heads.set('/repo/ship', to);
       git.tracking.set('origin/main', 'b2');
+      git.origin.set('main', 'b2');
       await kit.clock.sleep(ms);
     };
     return { git, sleep };
   }
 
-  /** The refusal of a tool that moved from `base` while the step waited, naming `files` when it can tell them. */
-  const movedFrom = (files: string): string => `the ship tool ${SHIP_TOOL} changed from base while the step waited${files} and is not origin/main's current code in a checkout with no change: ${MOVE}`;
+  /** The git steps that move the tool's checkout to main's current code (T4280). */
+  const CAUGHT_UP = ['fetch /repo/ship origin', 'detachAt /repo/ship origin/main'];
 
-  it("runs a ship whose checkout moved to a later main, main moving on again, when none of the tool's code changed", async () => {
+  it("runs a ship whose checkout moved to a later main, main moving on again, when none of the tool's code changed, moving nothing", async () => {
     const { kit, steps } = harness(SHIPPING);
     await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
     const { git, sleep } = movedTwice(kit, ['src/app.ts', 'docs/commands.md']);
     const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
-    assert.deepEqual([result.code, steps.ran.length], [EXIT.ok, 1]);
+    assert.deepEqual([result.code, steps.ran.length, git.log], [EXIT.ok, 1, []]);
   });
 
-  it('refuses it at its start, naming each file of the code the tool runs that changed: an import, a src file, a data file, a root', async () => {
+  it('moves it to main\'s current code and runs it when a file the tool runs changed: an import, a src file, a data file, a root (T4280)', async () => {
     for (const changed of [['tools/ship/repos.ts'], ['src/core/home.ts', 'src/app.ts'], ['tools/ship/repos.json'], ['src/cli/main.ts'], ['tools/ship/ship.roots.json']]) {
       const { kit, steps } = harness(SHIPPING);
       await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
       const { git, sleep } = movedTwice(kit, changed);
       const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
-      const named = changed.filter((file) => file !== 'src/app.ts').join(', ');
-      assert.deepEqual([result.code, result.stdout.at(-1), steps.ran], [EXIT.refused, `REFUSED ${movedFrom(` (${named})`)}`, []], named);
+      assert.deepEqual([result.code, steps.ran.length, git.log, git.heads.get('/repo/ship')], [EXIT.ok, 1, CAUGHT_UP, 'b2'], changed.join());
     }
   });
 
-  it("refuses it when the commit it moved to is off main's history, or a file the tool runs is not there", async () => {
-    const off = (git: FakeMergeGit): void => void git.ancestry.delete('b1>b2');
-    const missing = (git: FakeMergeGit): void => void git.files.delete('b1:src/core/home.ts');
-    for (const [name, spoil] of Object.entries({ off, missing })) {
+  it("runs it where it is when only a CLI command the ship never runs changed, and moves it first when a command it runs did (#1686, T4280)", async () => {
+    /** A CLI whose command table loads each command when it runs, the ship running only step-aside. */
+    const withCommandTable = (git: FakeMergeGit): void => {
+      for (const commit of ['base', 'b1']) {
+        git.files.set(`${commit}:tools/ship/ship.roots.json`, '{"roots": ["src/cli/main.ts", "src/cli/commands/step-aside.ts"], "staticOnly": ["src/cli/run.ts"]}');
+        git.files.set(`${commit}:src/cli/main.ts`, "import './run.ts';\n");
+        git.files.set(`${commit}:src/cli/run.ts`, "export const table = { 'step-away': () => import('./commands/step-aside.ts'), queue: () => import('./commands/queue.ts') };\n");
+        git.files.set(`${commit}:src/cli/commands/step-aside.ts`, "export {};\n");
+        git.files.set(`${commit}:src/cli/commands/queue.ts`, "export {};\n");
+      }
+    };
+    for (const [changed, moved] of [[['src/cli/commands/queue.ts'], false], [['src/cli/commands/step-aside.ts'], true]] as const) {
       const { kit, steps } = harness(SHIPPING);
       await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
-      const { git, sleep } = movedTwice(kit, ['src/app.ts']);
-      spoil(git);
+      const { git, sleep } = movedTwice(kit, changed);
+      withCommandTable(git);
       const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
-      assert.deepEqual([result.code, result.stdout.at(-1), steps.ran], [EXIT.refused, `REFUSED ${movedFrom('')}`, []], name);
+      assert.deepEqual([result.code, steps.ran.length, git.log], [EXIT.ok, 1, moved ? CAUGHT_UP : []], changed.join());
     }
   });
 
-  it('refuses it when the checkout moved back to a main before its pin, on main\'s history though it is', async () => {
-    const { kit, steps } = harness(SHIPPING);
-    await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
-    const { git, sleep } = movedTwice(kit, ['src/app.ts'], 'b0');
-    git.ancestry.delete('base>b0');
-    git.ancestry.add('b0>base');
-    const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
-    assert.deepEqual([result.code, result.stdout.at(-1), steps.ran], [EXIT.refused, `REFUSED ${movedFrom('')}`, []]);
+  it("moves it to main's current code and runs it when the commit it moved to is off main's history, a file the tool runs is not there, or it is before its pin (T4280)", async () => {
+    const off = (git: FakeMergeGit): void => void git.ancestry.delete('b1>b2');
+    const missing = (git: FakeMergeGit): void => void git.files.delete('b1:src/core/home.ts');
+    for (const [name, spoil, to] of [['off', off, 'b1'], ['missing', missing, 'b1'], ['before its pin', (git: FakeMergeGit): void => {
+      git.ancestry.delete('base>b0');
+      git.ancestry.add('b0>base');
+    }, 'b0']] as const) {
+      const { kit, steps } = harness(SHIPPING);
+      await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
+      const { git, sleep } = movedTwice(kit, ['src/app.ts'], to);
+      spoil(git);
+      const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
+      assert.deepEqual([result.code, steps.ran.length, git.log, git.heads.get('/repo/ship')], [EXIT.ok, 1, CAUGHT_UP, 'b2'], name);
+    }
   });
 
-  it('refuses it when the checkout it moved to has a change', async () => {
+  it('refuses it, moving nothing, when the checkout it moved to has a change', async () => {
     const { kit, steps } = harness(SHIPPING);
     await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
     const { git, sleep: moving } = movedTwice(kit, ['src/app.ts']);
@@ -1499,7 +1590,82 @@ describe("teamrig queue refuses a waiting ship only when the code its tool runs 
       await moving(ms);
     };
     const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
-    assert.deepEqual([result.code, result.stdout.at(-1), steps.ran], [EXIT.refused, `REFUSED ${movedFrom('')}`, []]);
+    const moved = `the ship tool ${SHIP_TOOL} changed from base while the step waited and is not origin/main's current code in a checkout with no change: ${MOVE}`;
+    assert.deepEqual([result.code, result.stdout.at(-1), steps.ran, git.log], [EXIT.refused, `REFUSED ${moved}`, [], []]);
+  });
+});
+
+describe("teamrig queue checks a waiting ship's tool against the remote's own head at its start, not the local ref alone (#1466)", () => {
+  /**
+   * The ship tool's checkout pinned and still at `base`, the local origin/main at `base`, and origin itself gone on to
+   * `b2` with `base..b2` differing in `changed`; the tool imports repos.ts at both.
+   */
+  function remoteAhead(kit: CliHarness, changed: readonly string[]): { git: FakeMergeGit; sleep: (ms: number) => Promise<void> } {
+    const git = shipGit();
+    for (const commit of ['base', 'b2']) {
+      git.files.set(`${commit}:tools/ship/ship.ts`, "import { profiles } from './repos.ts';\n");
+      git.files.set(`${commit}:tools/ship/repos.ts`, 'export const profiles = {};\n');
+    }
+    git.ancestry.add('base>b2');
+    git.diffs.set('base..b2', changed);
+    const sleep = async (ms: number): Promise<void> => {
+      git.origin.set('main', 'b2');
+      await kit.clock.sleep(ms);
+    };
+    return { git, sleep };
+  }
+
+  async function started(git: FakeMergeGit, sleep: (ms: number) => Promise<void>, kit: CliHarness, steps: FakeSteps): Promise<readonly unknown[]> {
+    await kit.files.write(LOCK, heldBy('2030-01-08T10:40:00.000Z'));
+    const result = await kit.run(SHIP_STEP, { steps, mergeGit: git, sleep, sessionProcesses: otherRuns() });
+    return [result.code, result.stdout.at(-1)];
+  }
+
+  it('runs it when the local ref is behind the remote head and none of the code the tool runs changed between them', async () => {
+    const { kit, steps } = harness(SHIPPING);
+    const { git, sleep } = remoteAhead(kit, ['src/app.ts']);
+    assert.deepEqual([...(await started(git, sleep, kit, steps)).slice(0, 1), steps.ran.length], [EXIT.ok, 1]);
+  });
+
+  it("moves a clean checkout to the remote's head and runs it when main moved the tool's code while it waited, when that head is not fetched yet, or when the local ref is off its history (T4280)", async () => {
+    const changed = (): void => undefined;
+    const unfetched = (git: FakeMergeGit): void => void git.absent.add('b2');
+    const off = (git: FakeMergeGit): void => void git.ancestry.delete('base>b2');
+    for (const [name, spoil, files] of [['changed', changed, ['tools/ship/repos.ts', 'src/app.ts']], ['unfetched', unfetched, ['src/app.ts']], ['off', off, ['src/app.ts']]] as const) {
+      const { kit, steps } = harness(SHIPPING);
+      const { git, sleep } = remoteAhead(kit, files);
+      spoil(git);
+      assert.deepEqual([...(await started(git, sleep, kit, steps)).slice(0, 1), steps.ran.length, git.heads.get('/repo/ship'), git.log], [EXIT.ok, 1, 'b2', ['fetch /repo/ship origin', 'detachAt /repo/ship origin/main']], name);
+    }
+  });
+
+  it('refuses it, moving nothing, when the checkout has a change, and names the step that failed when the move does (T4280)', async () => {
+    const failed = (reason: string): string => `the ship tool ${SHIP_TOOL} is behind origin's main at b2, and moving its checkout /repo/ship there failed: ${reason}: ${MOVE}`;
+    const cases: readonly (readonly [string, (git: FakeMergeGit) => void, string, readonly string[]])[] = [
+      ['dirty', (git) => void git.status.set('/repo/ship', [' M tools/ship/repos.ts']), `the ship tool ${SHIP_TOOL} changed from base while the step waited and is not origin/main's current code in a checkout with no change: ${MOVE}`, []],
+      ['unfetched', (git) => void (git.fetchFails = 'could not read from the remote'), failed('could not read from the remote'), ['fetch /repo/ship origin']],
+      ['stuck', (git) => void (git.detachAtFails = 'your local changes would be overwritten'), failed('your local changes would be overwritten'), ['fetch /repo/ship origin', 'detachAt /repo/ship origin/main']],
+    ];
+    for (const [name, spoil, refusal, log] of cases) {
+      const { kit, steps } = harness(SHIPPING);
+      const { git, sleep } = remoteAhead(kit, ['tools/ship/repos.ts']);
+      const moving = async (ms: number): Promise<void> => {
+        spoil(git);
+        await sleep(ms);
+      };
+      assert.deepEqual([...(await started(git, moving, kit, steps)), steps.ran, git.log, git.heads.get('/repo/ship')], [EXIT.refused, `REFUSED ${refusal}`, [], log, 'base'], name);
+    }
+  });
+
+  it('refuses it, naming the read, when the remote keeps giving no head, and reads it again first', async () => {
+    const { kit, steps } = harness(SHIPPING);
+    const git = shipGit();
+    const sleep = async (ms: number): Promise<void> => {
+      git.origin.delete('main');
+      await kit.clock.sleep(ms);
+    };
+    const unread = `could not read the checkout of the ship tool ${SHIP_TOOL}, so the step did not run: git ls-remote origin main in /repo/ship gave no head, at each of ${SHIP_TOOL_READS} reads 15 s apart; git gave no answer, which says nothing of the tool, so queue the step again once git answers on this host`;
+    assert.deepEqual([...(await started(git, sleep, kit, steps)), steps.ran], [EXIT.refused, `REFUSED ${unread}`, []]);
   });
 });
 
@@ -1532,6 +1698,77 @@ describe("teamrig queue gives a ship step the task its worktree's branch names (
       assert.deepEqual([result.code, tasksOf(kit)], [EXIT.ok, [task, task]]);
     });
   }
+
+  /** The repository the share of a step queued with `args` records, its folder APP read through `git`. */
+  async function heldRepo(team: Readonly<Record<string, unknown>>, args: readonly string[], git: FakeMergeGit): Promise<unknown> {
+    const { kit, steps } = harness(team);
+    let held: unknown;
+    steps.ends(0, MINUTE).whileRunning(async () => {
+      const share: unknown = JSON.parse(kit.files.get(`${SHARED}/id-1.json`) ?? kit.files.get(LOCK) ?? '{}');
+      const request = isRecord(share) ? share['request'] : undefined;
+      held = isRecord(request) ? request['repo'] : 'no request';
+    });
+    const result = await kit.run(['queue', '--session', 'alpha', '--what', 'step', ...args], { steps, mergeGit: git });
+    assert.equal(result.code, EXIT.ok, [...result.stdout, ...result.stderr].join('\n'));
+    return held;
+  }
+
+  /** APP a worktree of the app repository, whose main checkout holds run.ts, and /repo/other another repository. */
+  function appGit(inRepo = true): FakeMergeGit {
+    const git = new FakeMergeGit();
+    if (inRepo) {
+      git.checkouts.set(APP, { top: APP, branch: 'feat/t1-cli', mainCheckout: MAIN_CHECKOUT, linked: true });
+      git.checkouts.set(MAIN_CHECKOUT, { top: MAIN_CHECKOUT, branch: 'main', mainCheckout: MAIN_CHECKOUT, linked: false });
+    }
+    git.checkouts.set('/repo/other', { top: '/repo/other', branch: 'main', mainCheckout: '/repo/other', linked: false });
+    return git;
+  }
+
+  it("records on a ship's share the repository its folder is in, and none for a build or a ship outside a repository (#1711)", async () => {
+    const team = { ...TEAM, delivery: { queue: { maxHeavyParallel: 3 } } };
+    const repoOf = (kind: string, inRepo: boolean): Promise<unknown> => heldRepo(team, ['--kind', kind, '--', 'node', '/repo/app/run.ts'], appGit(inRepo));
+    assert.equal(await repoOf('ship', true), `${MAIN_CHECKOUT}/.git`, 'a worktree names its main checkout, so every worktree of it shares the slot');
+    assert.equal(await repoOf('build', true), undefined);
+    assert.equal(await repoOf('ship', false), undefined);
+  });
+
+  it('records none, holding every slot, for a ship whose words may move another repository than its folder (#1711)', async () => {
+    const team = { ...TEAM, delivery: { queue: { maxHeavyParallel: 3 } } };
+    for (const words of [
+      ['git', '-C', '/repo/other', 'push'],
+      ['git', '-C/repo/other', 'push'],
+      ['gh', 'pr', 'merge', '7', '-R', 'acme/other'],
+      ['gh', 'pr', 'merge', '7', '--repo=acme/other'],
+      ['git', '--git-dir=/repo/other/.git', 'push'],
+      ['env', 'GIT_DIR=/repo/other/.git', 'git', 'push'],
+      ['bash', '-c', 'cd /repo/other && git push'],
+      ['node', '/repo/other/deploy.ts'],
+      ['node', '/nowhere/deploy.ts'],
+      ['/repo/other/deploy.sh'],
+      ['/repo/other/deploy.sh', 'main'],
+      // One word runs as a whole shell line, whose words are not read.
+      ['git -C /repo/other push'],
+      ['cd /repo/other && git push'],
+      ['$OTHER/deploy.sh'],
+      ['git push'],
+    ]) {
+      assert.equal(await heldRepo(team, ['--kind', 'ship', '--', ...words], appGit()), undefined, words.join(' '));
+    }
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'git', 'push', 'origin', 'HEAD'], appGit()), `${MAIN_CHECKOUT}/.git`, 'words naming no place');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', '/usr/bin/git', 'push', 'origin', 'HEAD'], appGit()), `${MAIN_CHECKOUT}/.git`, 'a program in no repository');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', '/repo/app/deploy.sh'], appGit()), `${MAIN_CHECKOUT}/.git`, "a program of the folder's own repository");
+  });
+
+  it("records for a ship tool's merge the repository of the worktree it merges, not of the folder it was queued in (#1711)", async () => {
+    const git = shipGit();
+    const worktree = '/repo/b/.claude/worktrees/t1-cli';
+    git.checkouts.set(APP, { top: APP, branch: 'main', mainCheckout: '/repo/a', linked: true });
+    git.checkouts.set(worktree, { top: worktree, branch: 'feat/t1-cli', mainCheckout: '/repo/b', linked: true });
+    const team = { ...SHIPPING, delivery: { ...SHIPPING.delivery, queue: { maxHeavyParallel: 3 } } };
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'node', SHIP_TOOL, 'merge', worktree], git), '/repo/b/.git');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'node', SHIP_TOOL, worktree, '/tasks/T1/plan.json', '--merge'], git), '/repo/b/.git');
+    assert.equal(await heldRepo(team, ['--kind', 'ship', '--', 'node', SHIP_TOOL, '/repo/none', '--merge'], git), undefined, 'a worktree in no repository');
+  });
 
   it('names no task for a step that runs no ship tool, whatever the branch of a folder it names', async () => {
     const { kit, steps } = harness(SHIPPING);

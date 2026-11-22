@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { join, parse, resolve } from 'node:path';
 import { PROMPT_MAX } from '../open/prompt.ts';
 import { FakePathProbe } from '../testing/fake-processes.ts';
+import { testSessionPlace } from '../testing/host.ts';
+import { shippedTranscripts } from '../testing/shipped-transcripts.ts';
 import type { RestoreEntry } from './entry.ts';
 import {
   chooseMode,
@@ -64,6 +66,7 @@ function facts(overrides: Partial<JudgeFacts> = {}): JudgeFacts {
     stalled: new Set(),
     transcripts: new Map([[SESSION, '/claude/projects/app/s.jsonl']]),
     kinds: new Map(),
+    placeOf: testSessionPlace(),
     ...overrides,
   };
 }
@@ -134,6 +137,18 @@ describe('judgeEntry', () => {
     assert.equal(judgeEntry(entry({ entrypoint: 'sdk-ts' }), facts()).reason, 'not a terminal session (sdk-ts)');
     assert.equal(judgeEntry(entry({ sessionKind: 'bg' }), facts()).reason, 'background session');
     assert.equal(judgeEntry(entry({ entrypoint: undefined }), facts()).verdict, 'restore');
+  });
+
+  it("reads where a session ran by the host's own words, not Claude Code's", () => {
+    const desk = facts({
+      placeOf: ({ startedAs, sessionKind }) => (sessionKind === 'daemon' ? 'background' : startedAs === 'desk-term' ? 'tab' : startedAs === undefined ? undefined : 'elsewhere'),
+    });
+    assert.equal(judgeEntry(entry({ entrypoint: 'desk-term' }), desk).verdict, 'restore');
+    assert.deepEqual(judgeEntry(entry({ entrypoint: 'desk-term', sessionKind: 'daemon' }), desk), { verdict: 'discard', reason: 'background session' });
+    assert.deepEqual(judgeEntry(entry(), desk), { verdict: 'discard', reason: 'not a terminal session (cli)' });
+    const untold = facts({ placeOf: ({ sessionKind }) => (sessionKind === 'job' ? 'elsewhere' : undefined) });
+    assert.deepEqual(judgeEntry(entry({ entrypoint: undefined, sessionKind: 'job' }), untold), { verdict: 'discard', reason: 'not a terminal session' });
+    assert.equal(judgeEntry(entry({ sessionKind: 'bg' }), untold).verdict, 'restore', 'a host that reads none of it reopens it as a tab');
   });
 
   it('discards a session its transcript shows as a background job or continued in another, though no end was recorded', () => {
@@ -230,8 +245,9 @@ describe('lostWorkOf', () => {
       call('toolu_wake', 'ScheduleWakeup', { delaySeconds: 3600, prompt: 'check CI', reason: 'r' }, at),
       '',
     ].join('\n');
-    assert.deepEqual(lostWorkOf(text, false, SHUTDOWN), { background: 1, crons: 1, wake: true });
-    assert.deepEqual(lostWorkOf('', false, SHUTDOWN), NOTHING);
+    const reader = shippedTranscripts();
+    assert.deepEqual(lostWorkOf(reader, text, false, SHUTDOWN), { background: 1, crons: 1, wake: true });
+    assert.deepEqual(lostWorkOf(reader, '', false, SHUTDOWN), NOTHING);
   });
 });
 
@@ -332,15 +348,16 @@ describe('nearestExistingFolder', () => {
 });
 
 describe('lastRecordedEffort', () => {
+  const reader = shippedTranscripts();
   const turn = (effort: string, model = 'claude-opus-5-5'): string => JSON.stringify({ type: 'assistant', effort, message: { model } });
 
   it('takes the newest real assistant turn that records a known level', () => {
     const text = [turn('high'), turn('max'), turn('low', '<synthetic>'), '{"type":"user"}', ''].join('\n');
-    assert.equal(lastRecordedEffort(text), 'max');
+    assert.equal(lastRecordedEffort(reader, text), 'max');
   });
 
   it('skips unknown levels and torn lines, and is undefined with none', () => {
-    assert.equal(lastRecordedEffort(`"type":"assistant","effort":"max"}\n${turn('turbo')}\n`), undefined);
-    assert.equal(lastRecordedEffort(''), undefined);
+    assert.equal(lastRecordedEffort(reader, `"type":"assistant","effort":"max"}\n${turn('turbo')}\n`), undefined);
+    assert.equal(lastRecordedEffort(reader, ''), undefined);
   });
 });

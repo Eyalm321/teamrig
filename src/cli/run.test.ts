@@ -13,7 +13,8 @@ import { quietWorld } from '../testing/quiet-world.ts';
 import { configChangedMeanwhile, hired } from '../testing/config-race.ts';
 import { KIT_VERSION } from '../core/version.ts';
 import { ASK_REFUSED_NOTE } from '../hooks/permission.ts';
-import { APP, bash, CLAUDE_SESSION, CliHarness, CONFIG_PATH, contextOf, decisionOf, EVENTS_PATH, KIT, POINTER, reasonOf, SKILLS_DIR, TEAM, USER_HOME, type CliResult } from '../testing/cli-harness.ts';
+import { APP, bash, CLAUDE_SESSION, CliHarness, CONFIG_PATH, contextOf, decisionOf, EVENTS_PATH, KIT, POINTER, reasonOf, SKILLS_DIR, TEAM, USER_HOME, type CliResult, type RunOptions } from '../testing/cli-harness.ts';
+import { HOOKS_ONLY_HOST, hostTelling, NO_PATHS_HOST, NO_SESSION_HOST, SHIPPED_HOST } from '../testing/host.ts';
 import { cutLineMessage } from './cmd-shim.ts';
 import { FULL_HELP_POINTER } from './help.ts';
 import { SHORT_FORM_CHARS } from './reports.ts';
@@ -124,7 +125,7 @@ describe('runCli: help, version and usage errors', () => {
       '      again, alone or behind a task or a time, with a note naming no new head; any other set is refused,',
       '      since a merge on it would be: record progress with update --note, or give the approval up for a',
       '      new ask with --drop-approval',
-      '      verifying needs --waits for when its proof runs: a time, or a task in progress or verifying (the',
+      '      verifying needs --waits for when its proof runs: a time, or a task in progress or verifying, or an open one of your own (the',
       "      owner's approval may stand beside one); set verifying again without --waits keeps them, --waits none clears them",
       "      a wait on the owner's decision or approval needs a card the owner decides from alone",
       '      (register.requireDecisionCard): --question "<what is decided>" --options "<a, its numbers> | <b>"',
@@ -168,7 +169,7 @@ describe('runCli: help, version and usage errors', () => {
     const kit = new CliHarness();
     const add = await kit.run(['add', '--help']);
     assert.deepEqual([add.code, add.stdout, add.stderr], [EXIT.ok, [COMMAND_HELP.forCommand('add')], []]);
-    assert.match(add.stdout[0] ?? '', /\n {2}add --title .*\n(?: {6}\[.*\n)+ {6}--description: .*\n {6}\S.*\n {6}--after: .*\n {6}--size: .*\n {6}\S.*\n {6}--type: .*\n(?: {6}\S.*\n)+ {2}add --team /);
+    assert.match(add.stdout[0] ?? '', /\n {2}add --title .*\n(?: {6}\[.*\n)+ {6}--priority: .*\n {6}\S.*\n {6}--description: .*\n {6}\S.*\n {6}--after: .*\n {6}--size: .*\n {6}\S.*\n {6}--type: .*\n(?: {6}\S.*\n)+ {2}add --team /);
     assert.match(add.stdout[0] ?? '', / \[--goals a,b\|none\]\n/, "add's usage names --goals none, which add takes (T1730)");
     assert.deepEqual((await kit.run(['set', 'T1', '-h'])).stdout, [COMMAND_HELP.forCommand('set')]);
     const inbox = await kit.run(['inbox', '--help']);
@@ -182,10 +183,26 @@ describe('runCli: help, version and usage errors', () => {
     assert.equal(kit.files.get(EVENTS_PATH), undefined);
   });
 
+  it("open's help names --terminal print and says open takes no --session (GeneralA6/teamrig#1307)", async () => {
+    const open = (await new CliHarness().run(['open', '--help'])).stdout.join('\n');
+    assert.match(open, /it takes no --session/);
+    assert.match(open, /--terminal print opens no tab\s+and prints the command to run/);
+    assert.doesNotMatch(open, /with no terminal it prints the command/);
+  });
+
   it('gives every command its own lines in the help, and states the short form limit there', () => {
     assert.deepEqual(COMMAND_HELP.undocumented(), []);
     assert.ok(USAGE.includes(`within ${SHORT_FORM_CHARS.toLocaleString('en-US')} characters`));
     assert.match(USAGE, /\nOne command's help: teamrig <command> --help\.$/);
+  });
+
+  it('names the blocker level wherever add and update take --priority (T4329)', () => {
+    const lines = USAGE.split('\n').filter((line) => /^ {2}(add|update) /.test(line) && line.includes('--priority'));
+    assert.equal(lines.length, 3);
+    for (const line of lines) {
+      assert.match(line, /--priority p<n>\|blocker/);
+    }
+    assert.match(USAGE, /--priority: p0 \(urgent, right now\), a level of register\.priorities, or blocker, above p0/);
   });
 
   it('refuses the renamed --tier on any command and a priority in the old spelling, writing nothing', async () => {
@@ -208,12 +225,15 @@ describe('runCli: help, version and usage errors', () => {
     assert.equal(kit.files.get(EVENTS_PATH), undefined);
   });
 
-  it('refuses gh sync and gh migrate with their new group, issue, running neither', async () => {
+  it('refuses gh sync and gh migrate with their new group, issue, running neither, though gh is a command now', async () => {
     const kit = new CliHarness();
-    for (const argv of [['gh', 'sync', '--yes'], ['gh', 'migrate', 'rows.jsonl', '--yes']]) {
+    for (const [argv, line] of [
+      [['gh', 'sync', '--yes'], 'gh sync was renamed: use issue sync'],
+      [['gh', 'migrate', 'rows.jsonl', '--yes'], 'gh migrate was renamed: use issue migrate'],
+    ] as const) {
       const result = await kit.run(argv);
       assert.equal(result.code, EXIT.usage, argv.join(' '));
-      assert.equal(result.stderr[0]?.split('\n')[0], 'gh was renamed: use issue', argv.join(' '));
+      assert.equal(result.stderr[0]?.split('\n')[0], line, argv.join(' '));
     }
     assert.equal(kit.files.get(EVENTS_PATH), undefined);
   });
@@ -811,6 +831,52 @@ describe('runCli: hook secret-guard', () => {
     assert.deepEqual((await kit.run(['hook', 'secret-guard'], { stdin: bash('cat .env | wc -c') })).stdout, []);
   });
 
+  it("refuses a Read and a cat of a shipped host's login file under every host, one telling none of its folders too", async () => {
+    const userHome = resolve(USER_HOME);
+    const login = join(userHome, '.claude', '.credentials.json');
+    for (const host of [SHIPPED_HOST, NO_PATHS_HOST, HOOKS_ONLY_HOST]) {
+      const kit = new CliHarness();
+      assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { host, userHome, stdin: read(login) })), 'deny');
+      assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { host, userHome, stdin: bash('cat ~/.claude/.credentials.json') })), 'deny');
+      assert.deepEqual((await kit.run(['hook', 'secret-guard'], { host, userHome, stdin: read(join(userHome, '.claude', 'settings.json')) })).stdout, []);
+    }
+  });
+
+  it("refuses a read of Claude Code's login and prompt history in the folder CLAUDE_CONFIG_DIR names, and still at the default place", async () => {
+    const kit = new CliHarness();
+    const userHome = resolve(USER_HOME);
+    const moved = resolve(join('/', 'cfg'));
+    // The machine's own platform: the folder's path is absolute by its rules.
+    const run: RunOptions = { userHome, platform: process.platform, env: { CLAUDE_CONFIG_DIR: moved } };
+    for (const name of ['.credentials.json', 'history.jsonl']) {
+      assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { ...run, stdin: read(join(moved, name)) })), 'deny', name);
+      assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { ...run, stdin: read(join(userHome, '.claude', name)) })), 'deny', `${name} at the default place`);
+    }
+    assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { ...run, stdin: bash(`cat ${moved.replaceAll('\\', '/')}/history.jsonl`) })), 'deny');
+    assert.deepEqual((await kit.run(['hook', 'secret-guard'], { ...run, stdin: read(join(moved, 'settings.json')) })).stdout, []);
+  });
+
+  it("refuses a read of Claude Code's login in a folder named like its own that no variable names, and lets one in another folder run", async () => {
+    const kit = new CliHarness();
+    const userHome = resolve(USER_HOME);
+    for (const folder of ['.claude-work', '.claude2']) {
+      assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { userHome, stdin: read(join(userHome, folder, '.credentials.json')) })), 'deny', folder);
+      assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { userHome, stdin: bash(`cat ~/${folder}/.credentials.json`) })), 'deny', `cat in ${folder}`);
+    }
+    assert.deepEqual((await kit.run(['hook', 'secret-guard'], { userHome, stdin: read(join(APP, 'vendor', 'agent', '.credentials.json')) })).stdout, []);
+    assert.deepEqual((await kit.run(['hook', 'secret-guard'], { userHome, stdin: bash('cat vendor/agent/.credentials.json') })).stdout, []);
+  });
+
+  it('keeps to the default place when CLAUDE_CONFIG_DIR is blank', async () => {
+    const kit = new CliHarness();
+    const userHome = resolve(USER_HOME);
+    const run: RunOptions = { userHome, platform: process.platform, env: { CLAUDE_CONFIG_DIR: ' ' } };
+    assert.deepEqual((await kit.run(['hook', 'secret-guard'], { ...run, stdin: read(join(resolve(join('/', 'cfg')), 'history.jsonl')) })).stdout, []);
+    for (const name of ['.credentials.json', 'history.jsonl']) {
+      assert.equal(decisionOf(await kit.run(['hook', 'secret-guard'], { ...run, stdin: read(join(userHome, '.claude', name)) })), 'deny', name);
+    }
+  });
+
   it('refuses a Write whose text holds a secret, and lets one that writes a secret file run', async () => {
     const kit = new CliHarness();
     const token = ['gh', 'p_', 'a1'.repeat(18)].join('');
@@ -1055,6 +1121,15 @@ describe('runCli: which team', () => {
   it("falls back to the session's project folder", async () => {
     const result = await new CliHarness(CURRENT_TEAM).run(['config', 'validate'], { cwd: ELSEWHERE, env: { CLAUDE_PROJECT_DIR: APP } });
     assert.deepEqual(result, VALID);
+  });
+
+  it("asks the running host for the session's project folder, and reads no variable where the host tells none", async () => {
+    const kit = new CliHarness(CURRENT_TEAM);
+    const told = await kit.run(['config', 'validate'], { cwd: ELSEWHERE, env: { CLAUDE_PROJECT_DIR: ELSEWHERE }, host: hostTelling({ projectDir: APP }) });
+    assert.deepEqual(told, VALID);
+    const untold = await kit.run(['config', 'validate'], { cwd: ELSEWHERE, env: { CLAUDE_PROJECT_DIR: APP }, host: NO_SESSION_HOST });
+    assert.equal(untold.code, EXIT.refused);
+    assert.match(untold.stdout[0] ?? '', /^REFUSED no team here: /);
   });
 
   it('takes $TEAMRIG_TEAM over the pointer', async () => {

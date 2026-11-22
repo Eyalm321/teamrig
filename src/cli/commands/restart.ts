@@ -12,6 +12,7 @@ import { RestartLog, type RestartRecord } from '../../refresh/restart-log.ts';
 import { RefreshStore } from '../../refresh/store.ts';
 import { RestoreRegistry, restoreSessionsDir } from '../../restore/registry.ts';
 import { onePositional, requiredFlag, UsageError, type ParsedArgs } from '../args.ts';
+import { hostProgramsOf, leadLaunchOf, sessionProcessCheckOf, transcriptsOf } from '../host.ts';
 import { openKit, reloadTeamConfig, requireConfig, rosterOf } from '../kit.ts';
 import { EXIT, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { inboxDepsOf } from './inbox.ts';
@@ -84,12 +85,15 @@ export async function restart(args: ParsedArgs, runtime: CliRuntime): Promise<Ex
     {
       store,
       files: runtime.files,
+      reader: transcriptsOf(runtime),
       processes: runtime.sessionProcesses,
       clock: runtime.clock,
       sleep: runtime.sleep,
       platform: runtime.platform,
+      hostPrograms: hostProgramsOf(runtime),
       asks: new ClearAsks(runtime.files, clearAskDir(kit.paths.kitHome)),
       restore: new RestoreRegistry(runtime.files, restoreSessionsDir(kit.paths.kitHome)),
+      isSessionProcess: sessionProcessCheckOf(runtime),
       openTab: async () => {
         // A restart is never typed by a person: its tab keeps the focus where the owner left it (T2510).
         const tab: SessionTab = { team, id, name, project, prompt: refreshPrompt(team, id, store.handoverPath(id)), terminal: config.open.terminal, teamWindow: config.open.teamWindow, focus: 'keep' };
@@ -99,7 +103,7 @@ export async function restart(args: ParsedArgs, runtime: CliRuntime): Promise<Ex
       launchEffort: async () => {
         // Read afresh: a typed /effort writes its level back to the config while the restart waits.
         const load = await reloadTeamConfig(runtime, kit);
-        return load.status === 'loaded' ? launchOf(load.config, id).effort : undefined;
+        return load.status === 'loaded' ? launchOf(load.config, id, leadLaunchOf(runtime)).effort : undefined;
       },
     },
     { team, id, at, delayMs: config.refresh.restartDelaySeconds * 1000, endCommand: config.refresh.endCommand, endEnv: withoutCredentials(runtime.env, config.delivery.passEnv), fallbackCwd: project, hold: personHoldOf(config.refresh) },

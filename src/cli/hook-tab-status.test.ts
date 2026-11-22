@@ -1,12 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import type { HostSource } from '../composition/host-ports.ts';
 import type { JsonRecord } from '../core/guards.ts';
+import type { Env } from '../core/home.ts';
+import { bareHost } from '../testing/bare-host.ts';
+import { HOOKS_ONLY_HOST, hostTitledBy, TEST_PROGRAM, testTitleSwitch } from '../testing/host.ts';
 import { TAB_CIRCLES } from '../tabs/status.ts';
 import { APP, CLAUDE_SESSION, CliHarness, TEAM, TEAM_HOME, USER_HOME, type CliResult } from '../testing/cli-harness.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { promptLine, transcript } from '../testing/transcript-lines.ts';
-import { titleLeftToHooks } from './commands/hook-tab-status.ts';
+import { titleHoldOf } from './commands/hook-tab-status.ts';
 import { EXIT } from './runtime.ts';
 
 const AT = '2030-01-08T09:50:00.000Z';
@@ -46,14 +50,36 @@ function titleOf(result: CliResult): string | undefined {
   return typeof sequence === 'string' ? /^\u001b\]0;(.*)\u0007$/su.exec(sequence)?.[1] : undefined;
 }
 
-describe('titleLeftToHooks', () => {
-  it("reads Claude Code's switch as on for 1, true, yes and on, in any case and spacing", () => {
-    for (const value of ['1', 'true', ' YES ', 'On']) {
-      assert.equal(titleLeftToHooks({ CLAUDE_CODE_DISABLE_TERMINAL_TITLE: value }), true, value);
-    }
-    for (const value of [undefined, '', '0', 'false', 'off']) {
-      assert.equal(titleLeftToHooks({ CLAUDE_CODE_DISABLE_TERMINAL_TITLE: value }), false, String(value));
-    }
+describe('titleHoldOf', () => {
+  const runOn = (host: HostSource, env: Env = {}) => ({ host, env, platform: 'linux' as const });
+
+  it("asks the host's hook port which switch leaves the title to hooks, and names the host's program", () => {
+    const host = hostTitledBy(testTitleSwitch('OTHER_TITLE_OFF'));
+    assert.deepEqual(titleHoldOf(runOn(host)), { kind: 'host', hostName: TEST_PROGRAM, variable: 'OTHER_TITLE_OFF', value: 'yes' });
+    assert.deepEqual(titleHoldOf(runOn(host, TITLE_OFF)), { kind: 'host', hostName: TEST_PROGRAM, variable: 'OTHER_TITLE_OFF', value: 'yes' }, "another host's switch is no switch here");
+    assert.deepEqual(titleHoldOf(runOn(host, { OTHER_TITLE_OFF: 'yes' })), { kind: 'hooks' });
+  });
+
+  it('leaves the title to hooks on a host that writes none of its own, and to no one on a host that calls no hook', () => {
+    assert.deepEqual(titleHoldOf(runOn(hostTitledBy(undefined))), { kind: 'hooks' });
+    assert.deepEqual(titleHoldOf(runOn(() => bareHost())), { kind: 'no-hooks' });
+  });
+});
+
+describe('hook tab-status: the host that holds the title', () => {
+  it("shows the circle once the switch the host's hook port names is on, and not on another host's switch", async () => {
+    const host = hostTitledBy(testTitleSwitch('OTHER_TITLE_OFF'));
+    const event = payload('UserPromptSubmit', { prompt: 'go' });
+    assert.deepEqual((await (await teamWith()).run(['hook', 'tab-status'], { stdin: event, env: TITLE_OFF, host })).stdout, []);
+    const shown = await (await teamWith()).run(['hook', 'tab-status'], { stdin: event, env: { OTHER_TITLE_OFF: 'yes' }, host });
+    assert.equal(titleOf(shown), `${TAB_CIRCLES.working} fix the build`);
+    const stopped = await (await teamWith()).run(['hook', 'stop'], { stdin: payload('Stop', { stop_hook_active: false }), env: { OTHER_TITLE_OFF: 'yes' }, host });
+    assert.equal(titleOf(stopped), `${TAB_CIRCLES.ready} fix the build`);
+  });
+
+  it('shows the circle with no switch set on a host that writes no title of its own', async () => {
+    const shown = await (await teamWith()).run(['hook', 'tab-status'], { stdin: payload('UserPromptSubmit', { prompt: 'go' }), host: hostTitledBy(undefined) });
+    assert.equal(titleOf(shown), `${TAB_CIRCLES.working} fix the build`);
   });
 });
 
@@ -66,6 +92,17 @@ describe('hook tab-status', () => {
     assert.equal(titleOf(asking), `${TAB_CIRCLES.waiting} web`);
     const failed = await kit.run(['hook', 'tab-status'], { stdin: payload('StopFailure'), env: TITLE_OFF });
     assert.equal(titleOf(failed), `${TAB_CIRCLES.error} fix the build`);
+  });
+
+  it("takes the topic from the payload alone on a host that keeps no transcript it can read", async () => {
+    const kit = await teamWith(ON_TEAM, [JSON.stringify({ type: 'custom-title', customTitle: 'scout' })]);
+    const bare: HostSource = HOOKS_ONLY_HOST;
+    const kept = await kit.run(['hook', 'tab-status'], { stdin: payload('UserPromptSubmit', { prompt: 'and the tests' }), env: TITLE_OFF });
+    assert.equal(titleOf(kept), `${TAB_CIRCLES.working} scout`);
+    const prompt = await kit.run(['hook', 'tab-status'], { stdin: payload('UserPromptSubmit', { prompt: 'and the tests' }), env: TITLE_OFF, host: bare });
+    assert.equal(titleOf(prompt), `${TAB_CIRCLES.working} and the tests`);
+    const named = await kit.run(['hook', 'tab-status'], { stdin: payload('UserPromptSubmit', { session_title: 'web' }), env: TITLE_OFF, host: bare });
+    assert.equal(titleOf(named), `${TAB_CIRCLES.working} web`);
   });
 
   // T2256: the picker guard refuses the lead's picker in the meeting too, so its title stays there as well.
@@ -115,6 +152,13 @@ describe('hook stop: tab status', () => {
     assert.equal(titleOf(await (await teamWith()).run(['hook', 'stop'], { stdin: stop(), env: TITLE_OFF })), `${TAB_CIRCLES.ready} fix the build`);
     const busy = await teamWith(ON_TEAM, HELPER);
     assert.equal(titleOf(await busy.run(['hook', 'stop'], { stdin: stop(), env: TITLE_OFF })), `${TAB_CIRCLES.working} fix the build`);
+  });
+
+  it('shows ready at a turn end on a host that keeps no transcript it can read, whose helpers it cannot see', async () => {
+    const busy = await teamWith(ON_TEAM, HELPER);
+    const bare: HostSource = HOOKS_ONLY_HOST;
+    const title = titleOf(await busy.run(['hook', 'stop'], { stdin: stop(), env: TITLE_OFF, host: bare }));
+    assert.equal(title?.startsWith(TAB_CIRCLES.ready), true, title);
   });
 
   it('shows the decision circle at a turn end that asks the user to decide, even while a helper runs, and ready at the next plain end', async () => {

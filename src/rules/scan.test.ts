@@ -2,6 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
 import type { RuleConflict } from '../config/types.ts';
+import { sessionSettingsFiles } from '../doctor/settings-env.ts';
+import { testPaths } from '../testing/host.ts';
 import { MemoryFiles, MemoryPathProbe } from '../testing/memory-files.ts';
 import type { RulePlaceLocations } from './places.ts';
 import { readRuleLines, recordedLine, ruleLinesOf, scanRules } from './scan.ts';
@@ -9,10 +11,12 @@ import { readRuleLines, recordedLine, ruleLinesOf, scanRules } from './scan.ts';
 const USER_HOME = resolve('/', 'u');
 const CLAUDE_DIR = join(USER_HOME, '.claude');
 const PROJECT = resolve('/', 'work', 'app');
+const PATHS = testPaths();
 const AT: RulePlaceLocations = {
-  claudeDir: CLAUDE_DIR,
+  paths: PATHS,
   userHome: USER_HOME,
   project: PROJECT,
+  sessionSettings: sessionSettingsFiles({ paths: PATHS, userHome: USER_HOME }, PROJECT),
   skills: join(CLAUDE_DIR, 'skills'),
   teamRules: [resolve('/', 'kit', 'teams', 'app', 'rules.md')],
 };

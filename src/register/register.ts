@@ -6,8 +6,8 @@ import { EVENT_VERSION, TASK_LINE_VERSION, type ApprovalVerdict, type CreateEven
 import { foldEvents, taskNumber, type RegisterState, type Task } from './fold.ts';
 import { NO_SLICED_GOALS, type SlicedGoal } from './focus.ts';
 import { NO_GOAL_TAGS } from './goals.ts';
-import { GITHUB_ACTOR, NO_SKILL, type AddInput, type AskInput, type AuditChange, type AuditSubject, type DeferChange, type ImportChanges, type ImportInput, type OwnerChange, type RegisterPolicy, type StatusContext, type StatusInput, type TriageChanges, type UpdateChange, type Verdict } from './policy.ts';
-import { ACTIVE_STATUSES } from './model.ts';
+import { NO_SKILL, type AddInput, type AskInput, type AuditChange, type AuditSubject, type DecideChange, type DeferChange, type ImportChanges, type ImportInput, type OwnerAnswer, type OwnerChange, type RegisterPolicy, type StatusContext, type StatusInput, type TriageChanges, type UpdateChange, type Verdict } from './policy.ts';
+import { ACTIVE_STATUSES, type ImportSource } from './model.ts';
 import type { TaskNumbering } from './numbering.ts';
 import { isWritable, type RegisterSnapshot } from './snapshot.ts';
 import type { EventLog } from './store.ts';
@@ -200,28 +200,28 @@ export class Register {
   }
 
   /**
-   * The GitHub import's writes (github/sync.ts): each is judged again under the lock, on the register as it
-   * then stands, and written by GITHUB_ACTOR, which is on no roster. The policy limits them to the import's
-   * own tasks: a new one per issue, its title and priority, and open, done or dropped as GitHub has it.
+   * An import's writes (sync/sync.ts): each is judged again under the lock, on the register as it then stands,
+   * and written by its source (`github`, `jira`), which is on no roster. The policy limits them to that import's
+   * own tasks: a new one per issue, its title and priority, and open, done or dropped as the tracker has it.
    */
-  importAdd(input: ImportInput): Promise<Verdict<WriteResult>> {
-    return this.writeNew(({ state }, id) => single(this.created(GITHUB_ACTOR, id, this.deps.policy.importAdd(input, state))));
+  importAdd(source: ImportSource, input: ImportInput): Promise<Verdict<WriteResult>> {
+    return this.writeNew(({ state }, id) => single(this.created(source, id, this.deps.policy.importAdd(source, input, state))));
   }
 
-  importUpdate(id: string, changes: ImportChanges, note: string): Promise<Verdict<WriteResult>> {
+  importUpdate(source: ImportSource, id: string, changes: ImportChanges, note: string): Promise<Verdict<WriteResult>> {
     return this.write((snapshot, elsewhere) =>
       onTask(snapshot, elsewhere, id, (task) => {
-        const change = this.deps.policy.importUpdate(task, changes, note);
-        return single(change.ok ? { ok: true, value: { ...this.base(id, GITHUB_ACTOR), type: 'update', ...change.value } } : change);
+        const change = this.deps.policy.importUpdate(source, task, changes, note);
+        return single(change.ok ? { ok: true, value: { ...this.base(id, source), type: 'update', ...change.value } } : change);
       }),
     );
   }
 
-  importStatus(id: string, input: StatusInput): Promise<Verdict<WriteResult>> {
+  importStatus(source: ImportSource, id: string, input: StatusInput): Promise<Verdict<WriteResult>> {
     return this.write((snapshot, elsewhere) =>
       onTask(snapshot, elsewhere, id, (task) => {
-        const change = this.deps.policy.importStatus(task, input);
-        return single(change.ok ? { ok: true, value: { ...this.base(id, GITHUB_ACTOR), type: 'status', ...change.value } } : change);
+        const change = this.deps.policy.importStatus(source, task, input);
+        return single(change.ok ? { ok: true, value: { ...this.base(id, source), type: 'status', ...change.value } } : change);
       }),
     );
   }
@@ -373,7 +373,21 @@ export class Register {
     });
   }
 
-  private ownerEvent(task: Task, change: Verdict<OwnerChange>): Verdict<UpdateEvent> {
+  /**
+   * The owner's answer to a card from the pane (T4078): a Decided naming the option chosen, or yes or no, written as in
+   * ownerNote.
+   */
+  ownerDecide(id: string, answer: OwnerAnswer): Promise<Verdict<WriteResult>> {
+    return this.write((snapshot, elsewhere) => onTask(snapshot, elsewhere, id, (task) => single(this.ownerEvent(task, this.deps.policy.ownerDecide(task, answer)))));
+  }
+
+  /** The owner's Later from the pane (T4078): the card put off to `until` (stored form), written as in ownerNote. */
+  ownerLater(id: string, until: string): Promise<Verdict<WriteResult>> {
+    return this.write((snapshot, elsewhere) => onTask(snapshot, elsewhere, id, (task) => single(this.ownerEvent(task, this.deps.policy.ownerLater(task, until, this.timeContext())))));
+  }
+
+  /** An owner's action as its event: a Later or a Decided carries the waits it leaves, and a Decided its mark. */
+  private ownerEvent(task: Task, change: Verdict<OwnerChange & Partial<Pick<DecideChange, 'waits' | 'decided'>>>): Verdict<UpdateEvent> {
     if (!change.ok) {
       return change;
     }

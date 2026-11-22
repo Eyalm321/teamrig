@@ -8,7 +8,7 @@ import type { TimeZone } from '../core/zone.ts';
 import { resumeVerdict } from '../hiring/rehire.ts';
 import { bookedMeetingOf, MeetingSchedule, type ScheduledMeeting } from '../meeting/schedule.ts';
 import { workCutOffBy, type TabEnder } from '../open/end-tab.ts';
-import { isClaudeProcess, type ProcessInfo } from '../open/session-processes.ts';
+import type { ProcessInfo } from '../open/session-processes.ts';
 import { readRunningWork } from '../refresh/running.ts';
 import { RefreshStore } from '../refresh/store.ts';
 import type { Task } from '../register/fold.ts';
@@ -24,8 +24,10 @@ import { REPLY_TAIL_BYTES } from '../turn-log/reply.ts';
 import { seenLinesOf, unseenLinesOf } from '../inbox/inbox.ts';
 import { asksNowOf, urgentLinesText, WakeAsks, type WakeAsk } from '../wake/asks.ts';
 import { startableTasks } from '../wake/day-start.ts';
+import type { RestExemption } from '../wake/exempt.ts';
 import { inboxDepsOf } from './commands/inbox.ts';
 import { measureTranscript, type LastSession } from './commands/rehire.ts';
+import { hostProgramsOf, sessionProcessCheckOf, transcriptsIfKept } from './host.ts';
 import { teamZone, type Kit } from './kit.ts';
 import { RefusedError, type CliRuntime } from './runtime.ts';
 import { teamRegister } from './team-register.ts';
@@ -77,6 +79,8 @@ export interface IdleFacts {
  */
 export interface IdleOptions {
   readonly maxPriority: number;
+  /** The waited-on work past `maxPriority` that still keeps a held session open (`restExemptionOf`); absent: none. */
+  readonly exemption?: RestExemption | undefined;
   readonly project: string;
 }
 
@@ -141,15 +145,20 @@ async function transcriptTailOf(runtime: CliRuntime, transcript: string): Promis
 
 /**
  * Where `record`'s tab stands now, read from its transcript's last turn as the idle check reads it: undefined when no
- * transcript of its Claude Code session is found.
+ * transcript of its host session is found, or on a host whose transcript teamrig cannot read. `owner wake` then posts
+ * its line: with the tab's state unknown, the wake waits for the tab's next prompt as any inbox line does.
  */
 export async function tabActivityNow(runtime: CliRuntime, record: SessionRecord, project: string): Promise<TabActivity | undefined> {
+  const reader = transcriptsIfKept(runtime);
+  if (reader === undefined) {
+    return undefined;
+  }
   const last = await measuredTranscriptOf(runtime, record, claudeProjectsDir(runtime.env, runtime.userHome), project);
   if (last === undefined) {
     return undefined;
   }
   const { tail, cut } = await transcriptTailOf(runtime, last.transcript);
-  return tabActivityOf(tail, cut);
+  return tabActivityOf(reader, tail, cut);
 }
 
 /**
@@ -216,7 +225,7 @@ export async function idleVerdictOf(runtime: CliRuntime, config: KitConfig, rost
     return keep(notRunning);
   }
   const { now, zone, tasks, elsewhere } = facts;
-  const startable = startableTasks(tasks, elsewhere, id, now, zone, parkRulesOf(config), options.maxPriority);
+  const startable = startableTasks(tasks, elsewhere, id, now, zone, parkRulesOf(config), options.maxPriority, options.exemption);
   if (startable.length > 0) {
     return keep(`has work it can start (${startable.map((task) => task.id).join(', ')})`);
   }
@@ -237,9 +246,15 @@ export async function idleVerdictOf(runtime: CliRuntime, config: KitConfig, rost
   if (last === undefined) {
     return keep(`has no transcript of Claude Code session ${record.claudeSession} in any project folder, so its idle time is unknown`);
   }
+  // Unread, a transcript shows no work running: a close then could cut some off.
+  const reader = transcriptsIfKept(runtime);
+  if (reader === undefined) {
+    return keep('runs on a host whose transcript teamrig cannot read, so what it still runs is unknown');
+  }
   const { tail, cut } = await transcriptTailOf(runtime, last.transcript);
-  // A tail with no timed own entry falls back to the file's last change, which is never earlier.
-  const idleMinutes = Math.floor((now - (lastTurnAtOf(tail, cut) ?? last.changedAt)) / MINUTE_MS);
+  // A tail with no timed own entry falls back to the file's last change, which is never earlier. `now` is read before
+  // the transcript, so an entry the tab wrote meanwhile (or a clock ahead of this host's) is stamped after it: quiet 0 min.
+  const idleMinutes = Math.max(0, Math.floor((now - (lastTurnAtOf(reader, tail, cut) ?? last.changedAt)) / MINUTE_MS));
   const needed = config.open.headroom.closeIdleMinutes;
   if (idleMinutes < needed) {
     return keep(`has been quiet ${idleMinutes} min; it closes after ${needed} (open.headroom.closeIdleMinutes)`);
@@ -248,11 +263,11 @@ export async function idleVerdictOf(runtime: CliRuntime, config: KitConfig, rost
   if (folder === undefined) {
     return keep(`could not be resumed once closed (its transcript is in ${dirname(last.transcript)}, the project folder of neither ${options.project} nor a folder it ran in)`);
   }
-  const activity = tabActivityOf(tail, cut);
+  const activity = tabActivityOf(reader, tail, cut);
   if (activity !== 'idle') {
     return keep(TAB_ACTIVITY_CLAUSES[activity]);
   }
-  if ((await readRunningWork(runtime.files, last.transcript, now)) > 0) {
+  if ((await readRunningWork(reader, runtime.files, last.transcript, now)) > 0) {
     return keep('still runs background work its transcript shows');
   }
   const resume = resumeVerdict({ claudeSession: record.claudeSession, changedAt: last.changedAt, tokens: last.tokens }, config.hiring, now);
@@ -261,7 +276,7 @@ export async function idleVerdictOf(runtime: CliRuntime, config: KitConfig, rost
     return keep(`could not be resumed once closed (${resume.detail}); retire it with its handover instead`);
   }
   const claude = await runtime.sessionProcesses.describe(record.claudePid);
-  if (claude === undefined || !isClaudeProcess(claude)) {
+  if (claude === undefined || !sessionProcessCheckOf(runtime)(claude)) {
     return keep(notRunning);
   }
   const cutOff = await workCutOffBy(enderOf(runtime), claude);
@@ -273,5 +288,5 @@ export async function idleVerdictOf(runtime: CliRuntime, config: KitConfig, rost
 
 /** What ends a session's tab and checks what that would cut off, from the runtime. */
 export function enderOf(runtime: CliRuntime): TabEnder {
-  return { processes: runtime.sessionProcesses, clock: runtime.clock, sleep: runtime.sleep, platform: runtime.platform };
+  return { processes: runtime.sessionProcesses, clock: runtime.clock, sleep: runtime.sleep, platform: runtime.platform, hostPrograms: hostProgramsOf(runtime) };
 }

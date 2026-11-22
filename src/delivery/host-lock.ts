@@ -12,7 +12,7 @@ import { admissionOrder, classOf, placeInLine, type AdmissionRules, type Admissi
 import type { CpuGate } from './cpu.ts';
 import { charge, DEFAULT_EXPECTED_MINUTES, EMPTY_TURNS, endedAtOf, endedText, isNewerTurns, parseTurns, settle, turnsFor, turnsText, type OpenCharge, type TurnsState } from './class-turns.ts';
 import { shortText, type CommitShort, type MemoryGate, type MemoryLook, type MemoryShort } from './memory-gate.ts';
-import { isLineRequest, takesShipSlot, type LineRequest, type RequestSource } from './process-request.ts';
+import { isLineRequest, sharesShipSlot, takesShipSlot, type LineRequest, type RequestSource } from './process-request.ts';
 import { WAIT_CAUSES, type WaitCause } from './wait-cause.ts';
 import { causeOfLockWait } from './wait-log.ts';
 
@@ -71,6 +71,8 @@ export interface LockWaiter {
   readonly request?: TicketRequest;
   /** What it waited on at its last look; left out before its first look, and by an older kit. */
   readonly waitingOn?: WaitingOn;
+  /** True when its step is taking back the share it set aside ({@link HostLock.takeBack}), so admission keeps its arrival place (T4196); left out otherwise. */
+  readonly back?: boolean;
 }
 
 /**
@@ -145,6 +147,8 @@ interface RunningLock {
   readonly info: HostLockInfo;
   readonly small: boolean;
   readonly shipSlot: boolean;
+  /** The repository whose slot its share holds (#1711); left out, every repository's. */
+  readonly shipRepo?: string;
 }
 
 /** One look in line: the waiters ahead that this step may not pass, and what it found. */
@@ -296,8 +300,8 @@ export interface CpuWait {
 
 /**
  * A step that moves a main branch (`takesShipSlot`: a ship, a merge, a deploy) first in line while another such step
- * shares the host (`running`, T2727): the two would race to main, and the later one's rebase or merge would fail after
- * its whole run.
+ * of the same repository (`sharesShipSlot`, #1711) shares the host (`running`, T2727): the two would race to main, and
+ * the later one's rebase or merge would fail after its whole run.
  */
 export interface ShipSlotWait {
   readonly kind: 'shipSlot';
@@ -514,7 +518,8 @@ function isLockWaiter(value: unknown): value is LockWaiter {
     isTime(value['expiresAt']) &&
     (value['stopsOnWithdraw'] === undefined || typeof value['stopsOnWithdraw'] === 'boolean') &&
     (value['request'] === undefined || isTicketRequest(value['request'])) &&
-    (value['waitingOn'] === undefined || isWaitingOn(value['waitingOn']))
+    (value['waitingOn'] === undefined || isWaitingOn(value['waitingOn'])) &&
+    (value['back'] === undefined || typeof value['back'] === 'boolean')
   );
 }
 
@@ -911,8 +916,8 @@ class Patience {
  * `maxHeavyParallel` heavy shares run, else it waits in its place on them (`heavyCap`), and a small step shares it
  * while fewer than `maxSmallParallel` small shares run, else it waits on them (`smallCap`). An exclusive step (a merge, a
  * deploy) and every heavy step in `serial` mode take the lock file instead, which waits for every share to end.
- * A step that moves a main branch (`takesShipSlot`) shares the host only while no other such step does, else it waits
- * in its place on the one ship slot (`shipSlot`, T2727), which other steps pass.
+ * A step that moves a main branch (`takesShipSlot`) shares the host only while no other such step of its repository
+ * does, else it waits in its place on that repository's ship slot (`shipSlot`, T2727, #1711), which other steps pass.
  * With a memory gate in its ports, the first in line takes the lock or a share only once the gate finds the host's
  * memory has room for it, the MB held for the small steps sharing the host counted as taken; until then it waits in
  * its place, and a lone step is gated as much as one beside others. In arrival order a later step never passes a step
@@ -1006,7 +1011,7 @@ export class HostLock {
    */
   async acquire(session: string, purpose: string, maxWaitMs: number, pollMs: number, onWait: Tell, ask: StepAsk = {}, stop?: AbortSignal): Promise<Taking> {
     const patience = new Patience(this.ports.clock.now(), maxWaitMs);
-    const ticket = await this.joinLine(session, purpose, patience.deadline, this.ticketRequestOf(ask, await this.rulesNow()), ask.arrivedAt, ask.back?.id);
+    const ticket = await this.joinLine(session, purpose, patience.deadline, this.ticketRequestOf(ask, await this.rulesNow()), ask.arrivedAt, ask.back?.id, ask.back !== undefined);
     const reports = new WaitReports(onWait, this.ports.zone);
     try {
       const waited = await this.waitInLine(ticket, patience, pollMs, reports, ask, stop);
@@ -1351,7 +1356,7 @@ export class HostLock {
     const running = await this.running();
     const turns = await this.turnsLook(new Set(running.map(({ info }) => info.id)));
     const waiting = new Set(line.map(({ waiter }) => classOf(waiter, rules)));
-    const steps = running.map(({ info, small, shipSlot }) => ({ session: info.session, small, shipSlot }));
+    const steps = running.map(({ info, small, shipSlot, shipRepo }) => ({ session: info.session, small, shipSlot, ...(shipRepo === undefined ? {} : { shipRepo }) }));
     const now = this.ports.clock.now();
     const place = placeInLine(admissionOrder(line, now, rules, turnsFor(turns.state, waiting)), ticket.name, steps, rules, now);
     if (place === undefined) {
@@ -1428,7 +1433,12 @@ export class HostLock {
   private async running(): Promise<RunningLock[]> {
     const seen = await this.read();
     const holder = seen.kind === 'held' && !this.isStale(seen.info) ? [{ info: seen.info, small: false, shipSlot: false }] : [];
-    const shares = (await this.liveShares()).map((share) => ({ info: share, small: !isHeavyShare(share), shipSlot: takesShipSlot(share.request?.kind) }));
+    const shares = (await this.liveShares()).map((share) => ({
+      info: share,
+      small: !isHeavyShare(share),
+      shipSlot: takesShipSlot(share.request?.kind),
+      ...(share.request?.repo === undefined ? {} : { shipRepo: share.request.repo }),
+    }));
     return [...holder, ...shares];
   }
 
@@ -1580,7 +1590,7 @@ export class HostLock {
     const others = await this.liveShares();
     // Only shares need the check: a whole-lock holder (an exclusive merge or deploy) already keeps every step out.
     if (takesShipSlot(waiter.request?.kind)) {
-      const running = others.filter((share) => takesShipSlot(share.request?.kind));
+      const running = others.filter((share) => takesShipSlot(share.request?.kind) && sharesShipSlot(share.request?.repo, waiter.request?.repo));
       if (running.length > 0) {
         return { kind: 'busy', holder: { kind: 'shipSlot', running } };
       }
@@ -1741,9 +1751,10 @@ export class HostLock {
 
   /**
    * Writes this step's ticket in line, its wait running out at `deadline`, saying what it asks when it names a `request`:
-   * at the end, or at its first arrival `arrivedAt` when it joins again (never later than now).
+   * at the end, or at its first arrival `arrivedAt` when it joins again (never later than now), marked `back` when it
+   * joins to take back its share.
    */
-  private async joinLine(session: string, purpose: string, deadline: number, request: TicketRequest | undefined, arrivedAt?: number, id?: string): Promise<OwnTicket> {
+  private async joinLine(session: string, purpose: string, deadline: number, request: TicketRequest | undefined, arrivedAt?: number, id?: string, back = false): Promise<OwnTicket> {
     const now = Math.min(arrivedAt ?? this.ports.clock.now(), this.ports.clock.now());
     const waiter: LockWaiter = {
       id: id ?? this.ports.newId(),
@@ -1755,6 +1766,7 @@ export class HostLock {
       expiresAt: ticketExpiry(deadline),
       stopsOnWithdraw: true,
       ...(request === undefined ? {} : { request }),
+      ...(back ? { back: true } : {}),
     };
     const name = `${String(now).padStart(ARRIVAL_DIGITS, '0')}-${waiter.id}.json`;
     await this.ports.files.write(join(this.queue, name), stored(waiter));

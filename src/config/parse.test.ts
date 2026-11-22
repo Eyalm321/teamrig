@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_BUDGET, DEFAULT_BURST, DEFAULT_RUSH, DEFAULT_CHECK_TIMEOUT_SECONDS, DEFAULT_FREEZES, DEFAULT_COMMITS, DEFAULT_FOCUS, DEFAULT_ISSUE_FIELDS, DEFAULT_QUEUE, DEFAULT_HIRING, DEFAULT_IDLE, DEFAULT_OPEN, DEFAULT_PERMISSIONS, DEFAULT_REFRESH, DEFAULT_REGISTER, DEFAULT_STATUS_LINE, DEFAULT_WAKE, DEFAULT_STABLE_PERIODS, DEFAULT_MEETING, DEFAULT_BRANCHES } from './defaults.ts';
 import { HIRE_CAP_DROPPED, IDLE_RETIRE_DROPPED } from './migrate.ts';
-import { GITHUB_LABEL_MAX_LENGTH } from './limits.ts';
+import { ADAPTER_ID } from '../plugin-api/index.ts';
+import { CONNECTOR_LIMITS, GITHUB_LABEL_MAX_LENGTH } from './limits.ts';
 import { parseConfig } from './parse.ts';
 import { CONFIG_VERSION, type AccountBudget, type BudgetConfig } from './types.ts';
 import type { ConfigIssue } from './reader.ts';
@@ -161,6 +162,12 @@ describe('parseConfig', () => {
     assert.deepEqual(config.launch, { alpha: { model: 'opus', effort: 'max' }, bravo: { model: 'claude-haiku-5-5' } });
   });
 
+  it("keeps another host's model name: which names run is the host's models port, asked where a name is used", () => {
+    const { config, issues } = parseConfig({ ...ROSTER, launch: { alpha: { model: 'gpt-5' }, bravo: { model: 'gemini-2.5-pro' } } });
+    assert.deepEqual(issues, []);
+    assert.deepEqual(config.launch, { alpha: { model: 'gpt-5' }, bravo: { model: 'gemini-2.5-pro' } });
+  });
+
   it("keeps a session's project folder, and refuses one that is relative or on more than one line", () => {
     const kept = parseConfig({ ...ROSTER, launch: { alpha: { project: '/srv/app' } } });
     assert.deepEqual(kept.issues, []);
@@ -179,12 +186,12 @@ describe('parseConfig', () => {
   it('reports launch settings of strangers and wrong models and efforts, and leaves each out', () => {
     const { config, issues } = parseConfig({
       ...ROSTER,
-      launch: { alpha: { model: 'gpt-5', effort: 'high' }, bravo: { model: 'sonnet', effort: 'turbo' }, zulu: { model: 'opus' }, constructor: {}, charlie: 'opus' },
+      launch: { alpha: { model: 'opus; rm -rf /', effort: 'high' }, bravo: { model: 'sonnet', effort: 'turbo' }, zulu: { model: 'opus' }, constructor: {}, charlie: 'opus' },
     });
     assert.deepEqual(
       issues.map((issue) => `${issue.path}: ${issue.message}`),
       [
-        'launch.alpha.model: expected a model alias (default, best, fable, opus, sonnet, haiku, opusplan, fable[1m], opus[1m], sonnet[1m], opusplan[1m]) or a model id starting claude- (got "gpt-5")',
+        'launch.alpha.model: expected a model name: a letter or digit, then letters, digits or . _ @ : / -, at most 100 characters (got "opus; rm -rf /")',
         'launch.bravo.effort: expected one of low, medium, high, xhigh, max (got "turbo")',
         'launch.zulu: is not one of the sessions',
         'launch.constructor: is not one of the sessions',
@@ -213,6 +220,16 @@ describe('parseConfig', () => {
     const { config, issues } = parseConfig({ ...ROSTER, leadBoundary: { searchNudgeAt: 51 } });
     assert.deepEqual(paths(issues), ['leadBoundary.searchNudgeAt']);
     assert.equal(config.leadBoundary.searchNudgeAt, 3);
+  });
+
+  it('reads changes.sources as known source ids, every source by default, and refuses an unknown one', () => {
+    assert.deepEqual(parseConfig(ROSTER).config.changes, { sources: [] });
+    assert.deepEqual(parseConfig({ ...ROSTER, changes: { sources: ['git', 'notes', 'git'] } }).config.changes.sources, ['git', 'notes']);
+    const { config, issues } = parseConfig({ ...ROSTER, changes: { sources: ['git', 'jira'] } });
+    assert.deepEqual(paths(issues), ['changes.sources[1]']);
+    assert.match(issues[0]?.message ?? '', /one of notes, register, git/);
+    assert.deepEqual(config.changes.sources, ['git']);
+    assert.deepEqual(paths(parseConfig({ ...ROSTER, changes: { sources: 'auto' } }).issues), ['changes.sources']);
   });
 
   it('reads exec.path as absolute folders, empty by default, and refuses one against the cwd or holding a PATH separator', () => {
@@ -283,6 +300,20 @@ describe('parseConfig', () => {
     assert.deepEqual(paths(parseConfig({ ...ROSTER, turnLog: { keepHours: 169 } }).issues), ['turnLog.keepHours']);
   });
 
+  it('reads ui.path as an absolute file, absent by default, and drops one that is not (T4761)', () => {
+    assert.deepEqual(parseConfig(ROSTER).config.ui, {});
+    for (const path of ['D:\\pane\\out\\ui\\main.js', '/srv/pane/out/ui/main.js']) {
+      const { config, issues } = parseConfig({ ...ROSTER, ui: { path } });
+      assert.deepEqual(config.ui, { path });
+      assert.deepEqual(issues, []);
+    }
+    for (const path of ['out/ui/main.js', 'C:out', '/a\n/b', 'https://example.com/main.js', 7]) {
+      const { config, issues } = parseConfig({ ...ROSTER, ui: { path } });
+      assert.deepEqual(paths(issues), ['ui.path'], String(path));
+      assert.deepEqual(config.ui, {}, String(path));
+    }
+  });
+
   it('reads needsYou, leaves out an unknown kind, and refuses a list that is no list or names more kinds than there are', () => {
     const own = { enabled: false, kinds: ['error'], osToast: true };
     assert.deepEqual(parseConfig({ ...ROSTER, needsYou: own }).config.needsYou, own);
@@ -314,12 +345,21 @@ describe('parseConfig', () => {
   });
 
   it('reads wake, on for p1 by default, and refuses a priority under 1 or waits past their bounds', () => {
-    assert.deepEqual(parseConfig(ROSTER).config.wake, { enabled: true, priority: 1, batchSeconds: 120, minGapMinutes: 15 });
-    const own = { enabled: false, priority: 2, batchSeconds: 0, minGapMinutes: 0 };
+    assert.deepEqual(parseConfig(ROSTER).config.wake, { enabled: true, priority: 1, batchSeconds: 120, minGapMinutes: 15, maxGapMinutes: 30 });
+    const own = { enabled: false, priority: 2, batchSeconds: 0, minGapMinutes: 0, maxGapMinutes: 0 };
     assert.deepEqual(parseConfig({ ...ROSTER, wake: own }).config.wake, own);
-    const { config, issues } = parseConfig({ ...ROSTER, wake: { priority: 0, batchSeconds: 3601, minGapMinutes: 1441 } });
-    assert.deepEqual(paths(issues), ['wake.priority', 'wake.batchSeconds', 'wake.minGapMinutes']);
+    const { config, issues } = parseConfig({ ...ROSTER, wake: { priority: 0, batchSeconds: 3601, minGapMinutes: 1441, maxGapMinutes: 1441 } });
+    assert.deepEqual(paths(issues), ['wake.priority', 'wake.batchSeconds', 'wake.minGapMinutes', 'wake.maxGapMinutes']);
     assert.deepEqual(config.wake, DEFAULT_WAKE);
+  });
+
+  it('reads wake.maxGapMinutes, at least the least gap, and reads one below it as the least (T4852)', () => {
+    assert.equal(parseConfig({ ...ROSTER, wake: { minGapMinutes: 10, maxGapMinutes: 45 } }).config.wake.maxGapMinutes, 45);
+    assert.equal(parseConfig({ ...ROSTER, wake: { minGapMinutes: 40 } }).config.wake.maxGapMinutes, 40, 'a least gap past the default most keeps one gap');
+    const { config, issues } = parseConfig({ ...ROSTER, wake: { minGapMinutes: 20, maxGapMinutes: 10 } });
+    assert.deepEqual(paths(issues), ['wake.maxGapMinutes']);
+    assert.match(issues[0]?.message ?? '', /less than wake\.minGapMinutes \(20\); read as 20/);
+    assert.equal(config.wake.maxGapMinutes, 20);
   });
 
   it('reads meeting.panel.enabled, on by default, and refuses a value that is not a boolean (T2512)', () => {
@@ -580,14 +620,15 @@ describe('parseConfig', () => {
   });
 
   it('reads a service role whose commands come from the table and whose holders are sessions of the team (T2984)', () => {
-    const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close', 'issue comment'] } } });
+    const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { github: { holders: ['bravo'], commands: ['issue close'] } } });
     assert.deepEqual(issues, []);
-    assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close', 'issue comment'] } });
+    assert.deepEqual(config.serviceRoles, { github: { holders: ['bravo'], commands: ['issue close'] } });
   });
 
   it('fails the load on an unknown command, a holder off the roster or a misspelt key, and leaves the role out (T2984 C3)', () => {
     const cases: readonly [unknown, readonly string[]][] = [
       [{ holders: ['bravo'], commands: ['issue delete'] }, ['serviceRoles.github.commands[0]']],
+      [{ holders: ['bravo'], commands: ['issue close', 'issue comment'] }, ['serviceRoles.github.commands[1]']],
       [{ holders: ['bravo'], commands: ['issue *'] }, ['serviceRoles.github.commands[0]']],
       [{ holders: ['bravo'], commands: ['issue close', 'issue close'] }, ['serviceRoles.github.commands[1]']],
       [{ holders: ['bravo'], commands: [] }, ['serviceRoles.github.commands']],
@@ -611,8 +652,8 @@ describe('parseConfig', () => {
     const { config, issues } = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'queue merge'] } } });
     assert.deepEqual(issues, []);
     assert.deepEqual(config.serviceRoles, { ship: { holders: 'team', commands: ['queue ship', 'queue merge'] } });
-    const mixed = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'issue comment'] } } });
-    assert.match(mixed.issues[0]?.message ?? '', /every session issue comment,/);
+    const mixed = parseConfig({ ...ROSTER, serviceRoles: { ship: { holders: 'team', commands: ['queue ship', 'issue close'] } } });
+    assert.match(mixed.issues[0]?.message ?? '', /every session issue close,/);
   });
 
   it('refuses "team" holders for a command that acts as whoever runs it (T2984 C4)', () => {
@@ -630,6 +671,40 @@ describe('parseConfig', () => {
     assert.deepEqual(paths(parsed.issues), ['serviceRoles']);
     assert.deepEqual(parsed.config.serviceRoles, {});
     assert.equal(Object.keys(parseConfig({ ...ROSTER, serviceRoles: Object.fromEntries(Object.entries(many).slice(0, 16)) }).config.serviceRoles).length, 16);
+  });
+
+  it('reads no connector section by default', () => {
+    assert.deepEqual(parseConfig(ROSTER).config.connectors, {});
+  });
+
+  it('keeps each connector section as written, reading no key inside it (T4766)', () => {
+    const connectors = { tracker2: { site: 'acme', nested: { depth: [1, 'two'] } }, 'code-host': {} };
+    const { config, issues } = parseConfig({ ...ROSTER, connectors });
+    assert.deepEqual(issues, []);
+    assert.deepEqual(config.connectors, connectors);
+  });
+
+  it('fails the load on a connector id no adapter could declare or a section that is no object, and leaves it out (T4766)', () => {
+    const parsed = parseConfig({ ...ROSTER, connectors: { 'Code Host': {}, 'tracker-': {}, listed: ['site'], named: 'acme', kept: { site: 'acme' } } });
+    assert.deepEqual(paths(parsed.issues), ['connectors.Code Host', 'connectors.tracker-', 'connectors.listed', 'connectors.named']);
+    assert.match(parsed.issues[0]?.message ?? '', /expected a connector id: lower-case words joined by -/);
+    assert.deepEqual(parsed.config.connectors, { kept: { site: 'acme' } });
+    assert.deepEqual(paths(parseConfig({ ...ROSTER, connectors: 'acme' }).issues), ['connectors']);
+  });
+
+  it('refuses more connector sections than the limit', () => {
+    const many = Object.fromEntries(Array.from({ length: CONNECTOR_LIMITS.maxConnectors + 1 }, (_, index) => [`c${index}`, {}]));
+    const parsed = parseConfig({ ...ROSTER, connectors: many });
+    assert.deepEqual(paths(parsed.issues), ['connectors']);
+    assert.match(parsed.issues[0]?.message ?? '', /names 17 connectors; at most 16/);
+    assert.deepEqual(parsed.config.connectors, {});
+    const atLimit = Object.fromEntries(Object.entries(many).slice(0, CONNECTOR_LIMITS.maxConnectors));
+    assert.equal(Object.keys(parseConfig({ ...ROSTER, connectors: atLimit }).config.connectors).length, CONNECTOR_LIMITS.maxConnectors);
+  });
+
+  it('takes as a connector id exactly what an adapter may declare as its id', () => {
+    assert.equal(CONNECTOR_LIMITS.idPattern.source, ADAPTER_ID.source);
+    assert.equal(CONNECTOR_LIMITS.idPattern.flags, ADAPTER_ID.flags);
   });
 
   it('reads each area label\'s session with the label in lowercase, in the config\'s order', () => {
@@ -730,11 +805,17 @@ describe('parseConfig', () => {
     assert.deepEqual(paths(issues), ['contextFiles.maxMemoryIndexChars']);
   });
 
+  it('refuses a blocker allowance under an hour and keeps the default (T4329)', () => {
+    const { config, issues } = parseConfig({ ...ROSTER, register: { check: { blockerOpenAfterHours: 0 } } });
+    assert.equal(config.register.check.blockerOpenAfterHours, 4);
+    assert.deepEqual(paths(issues), ['register.check.blockerOpenAfterHours']);
+  });
+
   it('keeps valid overrides', () => {
     const { config, issues } = parseConfig({
       ...ROSTER,
       roles: { lead: 'alpha', deliveryOwner: 'bravo', securityReviewer: 'bravo' },
-      register: { priorities: [{ id: 1, name: 'now' }], goalPattern: '^G\\d+$', requireNoteOn: ['waiting'], check: { prioritySkipAfterHours: 12, maxSelfMadePerDay: 0, goalProgressDays: 2, overSizeMultiple: 1.5 } },
+      register: { priorities: [{ id: 1, name: 'now' }], goalPattern: '^G\\d+$', requireNoteOn: ['waiting'], check: { prioritySkipAfterHours: 12, blockerOpenAfterHours: 2, maxSelfMadePerDay: 0, goalProgressDays: 2, overSizeMultiple: 1.5 } },
       delivery: { schedule: { queueCutoffUtc: '22:30' } },
       budget: { enabled: true, targetPct: 95 },
       paths: { inbox: '/srv/team/inbox' },
@@ -748,6 +829,7 @@ describe('parseConfig', () => {
       staleAfterHours: 72,
       notPickedUpAfterHours: 24,
       prioritySkipAfterHours: 12,
+      blockerOpenAfterHours: 2,
       maxSelfMadePerDay: 0,
       goalProgressDays: 2,
       overSizeMultiple: 1.5,
@@ -2338,12 +2420,12 @@ describe('parseConfig: the decision card', () => {
 });
 
 describe('parseConfig: the owner decision batches', () => {
-  it('reads no batch times, a batch at 5 and no dedicated owners by default', () => {
-    assert.deepEqual(parseConfig(ROSTER).config.decisions, { batchTimesUtc: [], batchAt: 5, dedicatedOwners: [] });
+  it('reads no batch times, a batch at 5 and no dedicated owners nor own-meeting teams by default', () => {
+    assert.deepEqual(parseConfig(ROSTER).config.decisions, { batchTimesUtc: [], batchAt: 5, dedicatedOwners: [], ownMeetingTeams: [] });
   });
 
-  it('keeps valid batch times, count and dedicated owners', () => {
-    const decisions = { batchTimesUtc: ['13:03', '19:03'], batchAt: 0, dedicatedOwners: ['ledger', 'pricing'] };
+  it('keeps valid batch times, count and dedicated owners and own-meeting teams', () => {
+    const decisions = { batchTimesUtc: ['13:03', '19:03'], batchAt: 0, dedicatedOwners: ['ledger', 'pricing'], ownMeetingTeams: ['web'] };
     const { config, issues } = parseConfig({ ...ROSTER, decisions });
     assert.deepEqual([issues, config.decisions], [[], decisions]);
   });
@@ -2351,7 +2433,7 @@ describe('parseConfig: the owner decision batches', () => {
   it('drops a time that is no HH:MM and falls back on a count out of bounds', () => {
     const { config, issues } = parseConfig({ ...ROSTER, decisions: { batchTimesUtc: ['13:03', '25:00'], batchAt: 51 } });
     assert.deepEqual(paths(issues).sort(), ['decisions.batchAt', 'decisions.batchTimesUtc[1]']);
-    assert.deepEqual(config.decisions, { batchTimesUtc: ['13:03'], batchAt: 5, dedicatedOwners: [] });
+    assert.deepEqual(config.decisions, { batchTimesUtc: ['13:03'], batchAt: 5, dedicatedOwners: [], ownMeetingTeams: [] });
   });
 
   it('drops a dedicated owner that is no session name, and refuses a list past its cap', () => {
@@ -2361,11 +2443,18 @@ describe('parseConfig: the owner decision batches', () => {
     assert.deepEqual([paths(many.issues), many.config.decisions.dedicatedOwners], [['decisions.dedicatedOwners'], []]);
   });
 
+  it('drops an own-meeting team that is no team name, and refuses a list past its cap (#1430)', () => {
+    const named = parseConfig({ ...ROSTER, decisions: { ownMeetingTeams: ['web', 'Web Team'] } });
+    assert.deepEqual([paths(named.issues), named.config.decisions.ownMeetingTeams], [['decisions.ownMeetingTeams[1]'], ['web']]);
+    const many = parseConfig({ ...ROSTER, decisions: { ownMeetingTeams: Array.from({ length: 33 }, (_, index) => `team${index}`) } });
+    assert.deepEqual([paths(many.issues), many.config.decisions.ownMeetingTeams], [['decisions.ownMeetingTeams'], []]);
+  });
+
   // T2256: the meeting asks only in plain text, so a config still naming askWith is told to delete it.
   it('flags askWith as no longer read, whatever its value, and reads the rest', () => {
     for (const askWith of ['picker', 'text', 'cards', true]) {
       const { config, issues } = parseConfig({ ...ROSTER, decisions: { askWith, batchAt: 3 } });
-      assert.deepEqual([paths(issues), config.decisions], [['decisions.askWith'], { batchTimesUtc: [], batchAt: 3, dedicatedOwners: [] }]);
+      assert.deepEqual([paths(issues), config.decisions], [['decisions.askWith'], { batchTimesUtc: [], batchAt: 3, dedicatedOwners: [], ownMeetingTeams: [] }]);
       assert.match(issues[0]?.message ?? '', /is no longer read: the daily meeting asks the owner each decision in plain text.*; delete it$/);
     }
   });

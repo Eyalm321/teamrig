@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { admissionOrder, agedPriority, isAdmissionMode, laneOf, placeInLine, UNNAMED_PRIORITY, type AdmissionRules, type InLine, type RunningStep } from './admission.ts';
+import { BLOCKER_PRIORITY_ID } from '../register/model.ts';
 import type { StepKind } from './process-request.ts';
 import type { WaitCause } from './wait-cause.ts';
 
@@ -31,6 +32,8 @@ interface Asked {
   readonly frontedMinutes?: number;
   /** What its last look found it waiting on, for this many minutes before NOW. */
   readonly waitingOn?: { readonly reason: WaitCause; readonly forMinutes: number };
+  /** The repository its step moves, on its request (#1711). */
+  readonly repo?: string;
 }
 
 /** A ticket that arrived `waitedMinutes` before NOW, its name in arrival order like the line's; a request only when a class or kind is given. */
@@ -44,6 +47,7 @@ function ticket(id: string, asked: Asked = {}): InLine {
         ...(asked.kind === undefined ? {} : { kind: asked.kind }),
         ...(asked.small === undefined ? {} : { heavy: !asked.small }),
         ...(asked.frontedMinutes === undefined ? {} : { frontAt: new Date(NOW - asked.frontedMinutes * MINUTE).toISOString() }),
+        ...(asked.repo === undefined ? {} : { repo: asked.repo }),
       }
     : undefined;
   const waitingOn = asked.waitingOn === undefined ? undefined : { reason: asked.waitingOn.reason, since: new Date(NOW - asked.waitingOn.forMinutes * MINUTE).toISOString() };
@@ -105,6 +109,15 @@ describe('admissionOrder', () => {
     assert.deepEqual(idsOf(admissionOrder(line, NOW, PIPELINE, turns)), ['p0-first', 'p0-later', 'roadmap-p1']);
   });
 
+  it('puts a blocker step ahead of earlier p0 steps (T4329)', () => {
+    const line = [
+      ticket('p0-first', { waitedMinutes: 9, priority: 0, class: 'Roadmap' }),
+      ticket('blocker', { waitedMinutes: 1, priority: BLOCKER_PRIORITY_ID, class: 'Improvements' }),
+      ticket('p1', { waitedMinutes: 9, priority: 1, class: 'Roadmap' }),
+    ];
+    assert.deepEqual(idsOf(admissionOrder(line, NOW, PIPELINE, NO_TURNS)), ['blocker', 'p0-first', 'p1']);
+  });
+
   it("puts the steps of a task its lead put at the front before p0 ones, the earliest front first; serial mode keeps arrival order (T4082)", () => {
     const line = [
       ticket('p0', { waitedMinutes: 9, priority: 0, class: 'Roadmap' }),
@@ -147,6 +160,31 @@ describe('admissionOrder', () => {
     const line = [ticket('roadmap', { waitedMinutes: 5, priority: 2, class: 'Roadmap' }), ticket('new-class', { waitedMinutes: 1, priority: 2, class: 'Maintenance' })];
     const turns = new Map([['Roadmap', 7], ['Improvements', 1]]);
     assert.deepEqual(idsOf(admissionOrder(line, NOW, PIPELINE, turns)), ['roadmap', 'new-class']);
+  });
+
+  it('keeps a step taking back its share ahead of later arrivals a turn or a priority ranks first, never of fronted or more urgent ones (T4196)', () => {
+    const back = (id: string, asked: Asked): InLine => {
+      const entry = ticket(id, asked);
+      return { ...entry, waiter: { ...entry.waiter, back: true } };
+    };
+    const line = [
+      ticket('earlier-roadmap', { waitedMinutes: 30, priority: 3, class: 'Roadmap' }),
+      back('merge', { waitedMinutes: 20, priority: 3, class: 'Maintenance' }),
+      ticket('later-roadmap', { waitedMinutes: 10, priority: 1, class: 'Roadmap' }),
+      ticket('later-p0', { waitedMinutes: 5, priority: 0, class: 'Improvements' }),
+      ticket('later-fronted', { waitedMinutes: 4, priority: 2, class: 'Improvements', frontedMinutes: 1 }),
+    ];
+    const turns = new Map([['Roadmap', 0], ['Maintenance', 60], ['Improvements', 60]]);
+    assert.deepEqual(idsOf(admissionOrder(line, NOW, PIPELINE, turns)), ['later-fronted', 'later-p0', 'earlier-roadmap', 'merge', 'later-roadmap']);
+  });
+
+  it('keeps two steps taking back their shares in arrival order between them (T4196)', () => {
+    const back = (id: string, asked: Asked): InLine => {
+      const entry = ticket(id, asked);
+      return { ...entry, waiter: { ...entry.waiter, back: true } };
+    };
+    const line = [back('first', { waitedMinutes: 20, priority: 3, class: 'Maintenance' }), back('second', { waitedMinutes: 10, priority: 1, class: 'Roadmap' })];
+    assert.deepEqual(idsOf(admissionOrder(line, NOW, PIPELINE, new Map([['Roadmap', 0], ['Maintenance', 60]]))), ['first', 'second']);
   });
 
   it('leaves the line it was given as it was', () => {
@@ -339,6 +377,54 @@ describe('placeInLine', () => {
       assert.deepEqual(ahead('later', shipping), ['build'], 'the build ahead still holds it back');
       assert.deepEqual(ahead('later', runs({ charlie: 1 })), ['merge', 'deploy', 'build'], 'with the slot free, the merge may start next');
       assert.deepEqual(ahead('deploy', shipping), ['merge'], 'ships keep their order');
+    });
+
+    describe('held per repository (#1711)', () => {
+      const ahead = (line: readonly InLine[], id: string, running: readonly RunningStep[] = runs({ charlie: 1 })): string[] => {
+        const name = line.find((entry) => idsOf([entry])[0] === id)?.name ?? '';
+        return idsOf(placeInLine(line, name, running, PIPELINE, NOW)?.ahead ?? []);
+      };
+      const onSlot = { reason: 'shipSlot', forMinutes: 20 } as const;
+
+      it("lets a ship of another repository pass a ship waiting on its own repository's slot, never one of the same repository", () => {
+        const line: InLine[] = [
+          ticket('shipA', { session: 'alpha', waitedMinutes: 30, kind: 'ship', repo: '/r/a', waitingOn: onSlot }),
+          ticket('shipB', { session: 'beta', waitedMinutes: 3, kind: 'merge', repo: '/r/b' }),
+          ticket('shipA2', { session: 'gamma', waitedMinutes: 2, kind: 'deploy', repo: '/r/a' }),
+          ticket('keyless', { session: 'delta', waitedMinutes: 1, kind: 'ship' }),
+        ];
+        assert.deepEqual(ahead(line, 'shipB'), []);
+        assert.deepEqual(ahead(line, 'shipA2'), ['shipA', 'shipB'], 'the ship of its own repository keeps its place, and shipB may start');
+        assert.deepEqual(ahead(line, 'keyless'), ['shipA', 'shipB', 'shipA2'], 'a ship that names no repository holds the slot of every one');
+      });
+
+      it('holds a ship of any repository behind a waiter on the slot that names none', () => {
+        const line: InLine[] = [ticket('keyless', { session: 'alpha', waitedMinutes: 30, kind: 'ship', waitingOn: onSlot }), ticket('shipB', { session: 'beta', waitedMinutes: 1, kind: 'ship', repo: '/r/b' })];
+        assert.deepEqual(ahead(line, 'shipB'), ['keyless']);
+      });
+
+      it("lets a ship pass the ships held by a running ship of another repository, and keeps their order behind one of its own or one that names none", () => {
+        const line: InLine[] = [
+          ticket('mergeA', { session: 'alpha', waitedMinutes: 30, kind: 'merge', repo: '/r/a', waitingOn: { reason: 'line', forMinutes: 0 } }),
+          ticket('shipB', { session: 'beta', waitedMinutes: 1, kind: 'ship', repo: '/r/b' }),
+        ];
+        const runningA: RunningStep[] = [{ session: 'charlie', small: false, shipSlot: true, shipRepo: '/r/a' }];
+        const runningB: RunningStep[] = [{ session: 'charlie', small: false, shipSlot: true, shipRepo: '/r/b' }];
+        const runningKeyless: RunningStep[] = [{ session: 'charlie', small: false, shipSlot: true }];
+        assert.deepEqual(ahead(line, 'shipB', runningA), [], 'mergeA waits on the slot of its repository');
+        assert.deepEqual(ahead(line, 'shipB', runningB), ['mergeA'], 'mergeA may start, so it keeps its place');
+        assert.deepEqual(ahead(line, 'shipB', runningKeyless), ['mergeA'], 'both wait on the same running ship');
+      });
+
+      it('lets a step that holds no slot pass only the ships whose own slot is held', () => {
+        const line: InLine[] = [
+          ticket('shipA', { session: 'alpha', waitedMinutes: 30, kind: 'ship', repo: '/r/a', waitingOn: onSlot }),
+          ticket('shipB', { session: 'beta', waitedMinutes: 20, kind: 'ship', repo: '/r/b', waitingOn: { reason: 'line', forMinutes: 5 } }),
+          ticket('shipA2', { session: 'gamma', waitedMinutes: 10, kind: 'merge', repo: '/r/a', waitingOn: { reason: 'line', forMinutes: 5 } }),
+          ticket('build', { session: 'epsilon', waitedMinutes: 1, kind: 'build' }),
+        ];
+        assert.deepEqual(ahead(line, 'build'), ['shipB'], 'shipB may start; shipA2 waits behind shipA');
+      });
     });
   });
 });

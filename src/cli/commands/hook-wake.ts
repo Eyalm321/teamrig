@@ -8,12 +8,12 @@ import { claudeProjectsDir, lastWriteOf } from '../../budget/discover.ts';
 import { autoRestartOf } from '../../config/refresh.ts';
 import type { Roster } from '../../config/roster.ts';
 import type { KitConfig } from '../../config/types.ts';
-import { isRecord, stringField } from '../../core/guards.ts';
+import { stringField } from '../../core/guards.ts';
 import { LockBusyError } from '../../core/lock.ts';
 import { MeetingStore, phaseOf } from '../../meeting/state.ts';
 import { restartMayAct } from '../../refresh/restart.ts';
 import { RefreshStore } from '../../refresh/store.ts';
-import { seenLinesOf, sessionIdOf, unseenLinesOf } from '../../inbox/inbox.ts';
+import { seenLinesOf, unseenLinesOf } from '../../inbox/inbox.ts';
 import { dayProbeClaimLine, dayProbePath } from '../../restore/day-probe.ts';
 import { DayProbeStore } from '../../restore/day-probe-store.ts';
 import { claudeCredentialsPath, LOGIN_LOCK, loginHoldsDayStart, loginMarkerPath, loginRetryLine, type LoginRetryWhy } from '../../restore/login.ts';
@@ -21,6 +21,7 @@ import { LoginStore } from '../../restore/login-store.ts';
 import { apiRetryLine, claimApiRetry } from '../../restore/api-error.ts';
 import { RestoreRegistry, restoreLogPath, restoreSessionsDir } from '../../restore/registry.ts';
 import type { Task } from '../../register/fold.ts';
+import { unfinishedAfter, waitContext } from '../../register/waits.ts';
 import { parkRulesOf } from '../../register/park.ts';
 import type { TasksElsewhere } from '../../register/tree.ts';
 import { askVerdictOf, asksFolderOf, asksNowOf, handedPrompt, handedToast, WakeAsks, type WakeAsk } from '../../wake/asks.ts';
@@ -36,6 +37,7 @@ import {
   type DayStartVerdict,
 } from '../../wake/day-start.ts';
 import { decideWake, effectivePriority, HELD_PRIORITY, wakeCost, wakeRestOf, type WakeDecision, type WakeInput, type WakeState, type WakeVerdict } from '../../wake/decide.ts';
+import { isExemptFromRest, restExemptionOf } from '../../wake/exempt.ts';
 import { apiRetryPrompt, apiRetryToast, type ApiRetryFacts } from '../../wake/api-retry.ts';
 import { loginRetryPrompt, loginRetryToast } from '../../wake/login-retry.ts';
 import { WakePrompts } from '../../wake/prompts.ts';
@@ -51,7 +53,7 @@ import { inboxDepsOf } from './inbox.ts';
 import { runIdlePass } from './hook-idle-pass.ts';
 import { runTreeIdlePasses } from './hook-tree-idle-pass.ts';
 import { sessionFoldersOf } from './setup.ts';
-import { parseJson, sessionTeam, teamSessionOf } from './hook-input.ts';
+import { readHookInput, readModRequest, sessionTeam, teamSessionOf, type HookOrigin } from './hook-input.ts';
 import { armParkedRestart, parkedHere, rearmDeadRestart, type RearmScope } from './hook-restart.ts';
 import { fileLockOf } from '../file-locks.ts';
 import { dayStartFor } from '../day-schedule.ts';
@@ -122,12 +124,13 @@ export type WakeScope =
   | { readonly kind: 'found'; readonly kit: Kit; readonly config: KitConfig; readonly roster: Roster; readonly id: string; readonly tab: string; readonly from: string }
   | { readonly kind: 'off'; readonly why: string };
 
-export async function wakeScopeOf(runtime: CliRuntime, payload: unknown, needsWake: boolean): Promise<WakeScope> {
-  const tab = sessionIdOf(payload);
-  if (tab === null) {
+/** The scope of the call `origin` names: the hook event's, or the mod's own request; undefined when the input was no JSON record. */
+export async function wakeScopeOf(runtime: CliRuntime, origin: HookOrigin | undefined, needsWake: boolean): Promise<WakeScope> {
+  const tab = origin?.session;
+  if (origin === undefined || tab === undefined) {
     return { kind: 'off', why: 'no session id' };
   }
-  const found = await sessionTeam(payload, runtime);
+  const found = await sessionTeam(origin.cwd, runtime);
   if (found.kind !== 'team') {
     return { kind: 'off', why: 'not in a team' };
   }
@@ -161,6 +164,7 @@ function dueIdsOf(verdict: WakeVerdict): ReadonlySet<string> {
  * the budget's quiet hours (unless its lift
  * exempts it) for p1 and p0, p0 alone when they block (`effectivePriority`). Then it decides again at that priority, which wakes for a part of
  * what was due, and leaves the tasks the rest cut out of what the session knows, so they wake it once the rest ends.
+ * A task another session waits on is never cut by a rest that yields (`restExemptionOf`, T4948).
  */
 async function restCappedDecision(runtime: CliRuntime, scope: Extract<WakeScope, { kind: 'found' }>, input: WakeInput): Promise<WakeDecision> {
   const { config } = scope;
@@ -174,11 +178,12 @@ async function restCappedDecision(runtime: CliRuntime, scope: Extract<WakeScope,
   const lastTurnAt = await lastWriteOf(runtime.transcripts, claudeProjectsDir(runtime.env, runtime.userHome), [scope.tab]);
   const rest = wakeRestOf(facts, config.budget.quietHours, input.now, wakeWOf(config, lastTurnAt, input.now));
   const maxPriority = effectivePriority(input.maxPriority, rest, config.budget.quietHours);
-  const cut = new Set(dueTasks.filter((task) => task.priority > maxPriority).map((task) => task.id));
+  const exemption = restExemptionOf(rest, input.maxPriority, input.tasks, input.elsewhere);
+  const cut = new Set(dueTasks.filter((task) => task.priority > maxPriority && !isExemptFromRest(task, exemption)).map((task) => task.id));
   if (cut.size === 0) {
     return decision;
   }
-  const capped = decideWake({ ...input, maxPriority });
+  const capped = decideWake({ ...input, maxPriority, exemption });
   return { verdict: capped.verdict, state: { ...capped.state, known: decision.state.known.filter((id) => !cut.has(id)) } };
 }
 
@@ -251,7 +256,8 @@ async function pokeOf(
   if (rush === undefined || !rush.sessions.includes(id)) {
     return { kind: 'none' };
   }
-  const startable = startableTasks(tasks, elsewhere, id, now, teamZone(config, runtime), parkRulesOf(config));
+  const zone = teamZone(config, runtime);
+  const startable = startableTasks(tasks, elsewhere, id, now, zone, parkRulesOf(config));
   const lastTurnAt = await lastWriteOf(runtime.transcripts, claudeProjectsDir(runtime.env, runtime.userHome), [tab]);
   const idleMs = config.rush.pokeAfterMinutes * MINUTE_MS;
   const pokeInput: PokeInput = { rush, startable, lastTurnAt, now, idleMs, lastPokeAt: state.settled.poke, queued: new Set() };
@@ -281,7 +287,8 @@ async function pokeOf(
   if (stepRunningFor(ledger, id, now, config.delivery.queue.maxRunMinutes * MINUTE_MS)) {
     return { kind: 'later', at: now + idleMs };
   }
-  return { kind: 'poke', rush, task: verdict.task, idleMs: verdict.idleMs, lastTurnAt, mark: pokeMarkOf(seen) };
+  const plannedAfter = unfinishedAfter(verdict.task.after, waitContext(tasks, new Date(now), zone, elsewhere))[0];
+  return { kind: 'poke', rush, task: verdict.task, idleMs: verdict.idleMs, plannedAfter, lastTurnAt, mark: pokeMarkOf(seen) };
 }
 
 type CheckVerdict =
@@ -290,7 +297,7 @@ type CheckVerdict =
   | { readonly kind: 'login'; readonly why: LoginRetryWhy; readonly failAt: number }
   | { readonly kind: 'api'; readonly retry: ApiRetryFacts }
   | { readonly kind: 'fresh' }
-  | { readonly kind: 'poke'; readonly rush: Rush; readonly task: Task; readonly idleMs: number; readonly lastTurnAt: number }
+  | { readonly kind: 'poke'; readonly rush: Rush; readonly task: Task; readonly idleMs: number; readonly plannedAfter: string | undefined; readonly lastTurnAt: number }
   | { readonly kind: 'wait'; readonly recheckAt: number | null; readonly watch: readonly string[] };
 
 /**
@@ -430,6 +437,7 @@ async function decide(
       parking: parkRulesOf(config),
       batchMs,
       minGapMs: config.wake.minGapMinutes * MINUTE_MS,
+      maxGapMs: config.wake.maxGapMinutes * MINUTE_MS,
       previous: await store.read(id),
     });
     const handed = decision.verdict.kind === 'wake' || asked.kind === 'wake';
@@ -485,8 +493,8 @@ async function decide(
  */
 export async function wakeCheck(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
-  const payload = parseJson(await runtime.readStdin());
-  const scope = await wakeScopeOf(runtime, payload, true);
+  const { event } = await readHookInput(runtime);
+  const scope = await wakeScopeOf(runtime, event, true);
   if (scope.kind === 'off') {
     return answer(runtime, scope);
   }
@@ -500,7 +508,7 @@ export async function wakeCheck(args: ParsedArgs, runtime: CliRuntime): Promise<
     return answer(runtime, waitAnswer(scope, null));
   }
   const restarts = new RefreshStore(runtime.files, kit.paths);
-  const rearm: RearmScope = { team: kit.paths.team, id, tab, refresh: { enabled: config.refresh.enabled, autoRestart: autoRestartOf(config, id) }, cwd: isRecord(payload) ? stringField(payload, 'cwd') : undefined };
+  const rearm: RearmScope = { team: kit.paths.team, id, tab, refresh: { enabled: config.refresh.enabled, autoRestart: autoRestartOf(config, id) }, cwd: event?.cwd };
   if (await restartHoldsWake(runtime, restarts, rearm)) {
     return answer(runtime, waitAnswer(scope, runtime.clock.now() + RESTART_RECHECK_MS));
   }
@@ -542,9 +550,9 @@ export async function wakeCheck(args: ParsedArgs, runtime: CliRuntime): Promise<
     return wake(runtime, scope, { kind: 'wake', ids: [], text, toast: apiRetryToast(retry, cost) });
   }
   if (verdict.kind === 'poke') {
-    const { rush, task, idleMs } = verdict;
+    const { rush, task, idleMs, plannedAfter } = verdict;
     await logWake(runtime.files, kit.paths.wakeLog, { kind: 'wake', at: now, session: id, tab, ids: [task.id], cost, poke: true });
-    return wake(runtime, scope, { kind: 'wake', ids: [task.id], text: rushPokePrompt(id, rush, task, idleMs, cost), toast: rushPokeToast(rush, task, idleMs, cost) });
+    return wake(runtime, scope, { kind: 'wake', ids: [task.id], text: rushPokePrompt(id, rush, task, idleMs, cost, plannedAfter), toast: rushPokeToast(rush, task, idleMs, cost) });
   }
   const ids = verdict.tasks.map((task) => task.id);
   if (verdict.kind === 'handed') {
@@ -573,12 +581,13 @@ async function wake(runtime: CliRuntime, scope: Extract<WakeScope, { kind: 'foun
  */
 export async function wakeDropped(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
-  const payload = parseJson(await runtime.readStdin());
-  const scope = await wakeScopeOf(runtime, payload, false);
+  const request = await readModRequest(runtime);
+  const scope = await wakeScopeOf(runtime, request?.event, false);
   if (scope.kind === 'off') {
     return EXIT.ok;
   }
-  const reason = (isRecord(payload) ? stringField(payload, 'reason') : undefined) ?? 'no reason given';
+  // The request's own reason, the mod's word for why the wake was dropped: never the event's, which is a session end's.
+  const reason = (request === undefined ? undefined : stringField(request.fields, 'reason')) ?? 'no reason given';
   await logWake(runtime.files, scope.kit.paths.wakeLog, { kind: 'dropped', at: runtime.clock.now(), session: scope.id, tab: scope.tab, reason });
   await new WakePrompts(runtime.files, scope.kit.paths.wake).forget(scope.id, scope.tab);
   return EXIT.ok;

@@ -306,7 +306,7 @@ describe('GIT_MERGE rebase', () => {
       assert.deepEqual(stopped, {
         ok: false,
         reason:
-          'rebase onto origin/main stopped (conflicts in app.txt); aborted, the branch is as it was; to land it, rebase onto origin/main by hand, resolve those files and merge again, a branch already pushed for review under a new name, never force-pushed',
+          'rebase onto origin/main stopped (conflicts in app.txt); aborted, the branch is as it was; to land it, rebase onto origin/main by hand, resolve those files and merge again; a branch already pushed for review goes back to the same branch with --force-with-lease',
       });
       assert.equal(git.sha(repo.dir, 'HEAD'), mine);
       assert.equal(git.checkoutOf(repo.dir)?.branch, 'feat');
@@ -337,7 +337,7 @@ describe('rebaseStopReason', () => {
   it('names conflicting paths with a newline or ESC escaped, on the one line of the reason', () => {
     assert.equal(
       rebaseStopReason('origin/main', ['a\nb.txt', 'c\u001b[2J.txt'], 'git rebase failed', { ok: true }),
-      'rebase onto origin/main stopped (conflicts in a\\nb.txt, c\\x1b[2J.txt); aborted, the branch is as it was; to land it, rebase onto origin/main by hand, resolve those files and merge again, a branch already pushed for review under a new name, never force-pushed',
+      'rebase onto origin/main stopped (conflicts in a\\nb.txt, c\\x1b[2J.txt); aborted, the branch is as it was; to land it, rebase onto origin/main by hand, resolve those files and merge again; a branch already pushed for review goes back to the same branch with --force-with-lease',
     );
   });
 
@@ -378,6 +378,7 @@ describe('GIT_MERGE cleanup', () => {
       const head = git.sha(repo.dir, 'HEAD');
       assert.deepEqual(git.checkout(repo.dir, '--orphan'), { ok: false, reason: 'git checkout refused "--orphan": a branch or commit name never starts with "-"' });
       assert.deepEqual(git.resetTo(repo.dir, '--hard'), { ok: false, reason: 'git reset --keep refused "--hard": a branch or commit name never starts with "-"' });
+      assert.deepEqual(git.detachAt(repo.dir, '--orphan'), { ok: false, reason: 'git switch --detach refused "--orphan": a branch or commit name never starts with "-"' });
       assert.equal(git.sha(repo.dir, 'HEAD'), head);
       assert.equal(git.checkoutOf(repo.dir)?.branch, 'main');
     } finally {
@@ -410,6 +411,25 @@ describe('GIT_MERGE cleanup', () => {
       assert.deepEqual(git.resetTo(repo.dir, before), { ok: true });
       assert.equal(git.sha(repo.dir, 'HEAD'), before);
       assert.deepEqual(git.changes(repo.dir, true), []);
+    } finally {
+      repo.remove();
+    }
+  });
+
+  it('moves a checkout on no branch to a commit, and refuses where a local change would be lost (T4280)', () => {
+    const { repo } = repoWithOrigin('merge-detach-at');
+    try {
+      const before = git.sha(repo.dir, 'HEAD');
+      assert.ok(before !== undefined);
+      const after = commit(repo, 'other.txt', 'other\n', 'other');
+      assert.deepEqual(git.detachAt(repo.dir, before), { ok: true });
+      assert.deepEqual([git.sha(repo.dir, 'HEAD'), git.checkoutOf(repo.dir)?.branch], [before, undefined]);
+      repo.write('other.txt', 'mine\n');
+      assert.equal(git.detachAt(repo.dir, after).ok, false);
+      assert.equal(git.sha(repo.dir, 'HEAD'), before);
+      repo.git('clean', '-fq', '--', 'other.txt');
+      assert.deepEqual(git.detachAt(repo.dir, after), { ok: true });
+      assert.deepEqual([git.sha(repo.dir, 'HEAD'), git.changes(repo.dir, true)], [after, []]);
     } finally {
       repo.remove();
     }

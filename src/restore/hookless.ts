@@ -1,10 +1,11 @@
-import { parseTranscriptLine } from '../budget/line.ts';
+import { callLineOf } from '../budget/line.ts';
 import { roleHolderOf } from '../config/roster.ts';
 import type { RolesConfig } from '../config/types.ts';
 import type { SessionAddress } from '../core/address.ts';
 import { parseObject, toJsonlLine, VERSION_FIELD } from '../core/jsonl.ts';
 import { MS_PER_MINUTE } from '../core/time.ts';
 import type { TimeZone } from '../core/zone.ts';
+import type { EntryKind, HostSteps, TranscriptReader } from '../ports/host/index.ts';
 import type { RestoreEntry } from './entry.ts';
 
 /**
@@ -131,16 +132,20 @@ export function workedPastHook(hookAt: number, at: number, now: number): boolean
   return now - at <= HOOKLESS_MS && at - hookAt > HOOKLESS_MS;
 }
 
+/** The one entry kind the check reads, so every other line of a transcript's end is never parsed. */
+const REPLY_ONLY = ['reply'] as const satisfies readonly EntryKind[];
+
 /**
  * The main thread's last reply in a transcript's lines, in epoch ms; undefined where they hold none (`lines` holds
  * whole lines only: a caller reading from inside a file drops its first). A helper's reply (a sidechain) is left
  * out: a helper's tool ends write the heartbeat, but its replies can outlive its parent's turn.
  */
-export function lastReplyAt(lines: readonly string[]): number | undefined {
+export function lastReplyAt(reader: TranscriptReader, lines: readonly string[]): number | undefined {
   let turnAt: number | undefined;
   for (const raw of lines) {
-    const line = parseTranscriptLine(raw);
-    if (line !== undefined && line.at !== undefined && line.kind === 'call' && line.mainThread) {
+    const entry = reader.entry(raw, REPLY_ONLY);
+    const line = entry?.kind === 'reply' ? callLineOf(entry) : undefined;
+    if (line !== undefined && line.at !== undefined && line.mainThread) {
       turnAt = Math.max(turnAt ?? line.at, line.at);
     }
   }
@@ -188,9 +193,10 @@ export function hooklessReader(tab: Pick<HooklessTab, 'session'>, roles: RolesCo
  * The inbox line naming a hookless tab, written at `now`, its times on `zone`'s clock: `14:20 IDT` on the line's
  * day, else with their date (`10-20 16:37 IDT`), so a tab hookless for days does not read as hours (T1069). It
  * asks for a restart in the tab's folder, never a reload: a /reload-plugins does not bring a tab's hooks back
- * (T1055). It names the tab's session as `session`, as the reader's team writes it: `app/lead` on a team above.
+ * (T1055), in the words the host's person types there (`steps`). It names the tab's session as `session`, as the
+ * reader's team writes it: `app/lead` on a team above.
  */
-export function hooklessLine(tab: HooklessTab, session: string, zone: TimeZone, now: number): string {
+export function hooklessLine(tab: HooklessTab, session: string, steps: HostSteps, zone: TimeZone, now: number): string {
   const today = zone.day(new Date(now));
   const time = (at: number): string => {
     const date = new Date(at);
@@ -200,6 +206,6 @@ export function hooklessLine(tab: HooklessTab, session: string, zone: TimeZone, 
   return (
     `HOOKLESS ${session}: its tab (Claude session ${tab.claudeSession.slice(0, 8)}) worked ${minutes} min past its last teamrig hook ` +
     `(hook ${time(tab.hookAt)}, last reply ${time(tab.turnAt)}), so it gets no inbox, guards or tab status: ` +
-    `/exit that tab and run claude --resume ${tab.claudeSession} in ${tab.projectDir}`
+    `${steps.exit} that tab and run ${steps.resume(tab.claudeSession)} in ${tab.projectDir}`
   );
 }

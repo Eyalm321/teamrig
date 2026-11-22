@@ -1,18 +1,24 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
-import { claudeMemoryDir } from '../doctor/context-files.ts';
+import { sessionSettingsFiles, type SessionSettingsHost } from '../doctor/settings-env.ts';
+import { testPaths } from '../testing/host.ts';
 import { MemoryFiles, MemoryPathProbe, normalisePath } from '../testing/memory-files.ts';
-import { findRulePlaces, isPlaceKind, NESTED_FOLDERS_MAX, type RulePlace, type RulePlaceLocations } from './places.ts';
+import { findRulePlaces, isPlaceKind, NESTED_FOLDERS_MAX, type RulePlace, type RulePlaceLocations, type RulePlacePaths } from './places.ts';
 
 const USER_HOME = resolve('/', 'u');
 const CLAUDE_DIR = join(USER_HOME, '.claude');
 const PROJECT = resolve('/', 'work', 'app');
 const TEAM_RULES = resolve('/', 'kit', 'teams', 'app', 'rules.md');
+/** The shipped host's paths: its own folder is `.claude` in the home folder. */
+const PATHS = testPaths();
+const MEMORY = PATHS.memoryFolder(USER_HOME, PROJECT);
+const HOST: SessionSettingsHost = { paths: PATHS, userHome: USER_HOME };
 const AT: RulePlaceLocations = {
-  claudeDir: CLAUDE_DIR,
+  paths: PATHS,
   userHome: USER_HOME,
   project: PROJECT,
+  sessionSettings: sessionSettingsFiles(HOST, PROJECT),
   skills: join(CLAUDE_DIR, 'skills'),
   teamRules: [TEAM_RULES],
 };
@@ -60,8 +66,8 @@ function world(extra: Readonly<Record<string, string>> = {}): { files: MemoryFil
     [join(CLAUDE_DIR, 'skills', 'web-deploy', 'SKILL.md')]: 'skill',
     [join(CLAUDE_DIR, 'skills', 'cache', 'readme.md')]: 'not a skill',
     [join(PROJECT, '.claude', 'skills', 'api-check', 'SKILL.md')]: 'project skill',
-    [join(claudeMemoryDir(CLAUDE_DIR, PROJECT), 'MEMORY.md')]: 'index',
-    [join(claudeMemoryDir(CLAUDE_DIR, PROJECT), 'feedback.md')]: 'memory',
+    [join(MEMORY, 'MEMORY.md')]: 'index',
+    [join(MEMORY, 'feedback.md')]: 'memory',
     [TEAM_RULES]: 'team rules',
     [join(CLAUDE_DIR, 'settings.json')]: JSON.stringify(SETTINGS),
     [join(PROJECT, '.claude', 'settings.local.json')]: '\uFEFF{"autoMode": {}}',
@@ -96,8 +102,8 @@ describe('findRulePlaces', () => {
       `rules ${path(CLAUDE_DIR, 'rules', 'global.md')}`,
       `skill ${path(CLAUDE_DIR, 'skills', 'web-deploy', 'SKILL.md')}`,
       `skill ${path(PROJECT, '.claude', 'skills', 'api-check', 'SKILL.md')}`,
-      `memory ${path(claudeMemoryDir(CLAUDE_DIR, PROJECT), 'MEMORY.md')}`,
-      `memory ${path(claudeMemoryDir(CLAUDE_DIR, PROJECT), 'feedback.md')}`,
+      `memory ${path(MEMORY, 'MEMORY.md')}`,
+      `memory ${path(MEMORY, 'feedback.md')}`,
       `team-rules ${path(TEAM_RULES)}`,
       `hook ${path(CLAUDE_DIR, 'hooks', 'policy.cjs')}`,
       `hook ${path(PROJECT, '.claude', 'hooks', 'guard.js')}`,
@@ -128,8 +134,54 @@ describe('findRulePlaces', () => {
 
   it('lists a file once when the project is the home folder', async () => {
     const files = new MemoryFiles({ [join(CLAUDE_DIR, 'CLAUDE.md')]: 'user' });
-    const { places } = await findRulePlaces(files, new MemoryPathProbe(files), { ...AT, project: USER_HOME });
+    const { places } = await findRulePlaces(files, new MemoryPathProbe(files), { ...AT, project: USER_HOME, sessionSettings: sessionSettingsFiles(HOST, USER_HOME) });
     assert.deepEqual(shown(places), [`claude-md ${normalisePath(join(CLAUDE_DIR, 'CLAUDE.md'))}`]);
+  });
+
+  it('lists the settings files it is told a session reads and the scripts their hooks run, joining no settings name of its own', async () => {
+    const told = resolve('/', 'etc', 'agent', 'rules.json');
+    const script = resolve('/', 'etc', 'agent', 'guard.js');
+    const files = new MemoryFiles({
+      [told]: JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'node', args: [script] }] }] } }),
+      [script]: '// guard',
+      [join(CLAUDE_DIR, 'settings.json')]: JSON.stringify(SETTINGS),
+    });
+    const { places } = await findRulePlaces(files, new MemoryPathProbe(files), { ...AT, sessionSettings: [told, resolve('/', 'etc', 'agent', 'missing.json')] });
+    assert.deepEqual(shown(places), [`hook ${normalisePath(script)}`, `settings ${normalisePath(told)}`]);
+  });
+
+  it("looks in the places the host's paths name, joining no folder or file name of the host's own", async () => {
+    const told = (...parts: string[]): string => resolve('/', 'agent', ...parts);
+    const paths: RulePlacePaths = {
+      userInstructions: () => told('me.md'),
+      folderInstructions: (folder) => [join(folder, 'AGENT.md')],
+      userRules: () => told('rules'),
+      projectRules: (project) => join(project, 'agent-rules'),
+      projectSkills: (project) => join(project, 'agent-skills'),
+      memoryFolder: () => told('memory'),
+    };
+    // The world holds the shipped host's files too, and none of them is a place here.
+    const { files, probe } = world({
+      [told('me.md')]: 'user',
+      [join(PROJECT, 'AGENT.md')]: 'project',
+      [join(PROJECT, 'api', 'AGENT.md')]: 'depth 1',
+      [join(PROJECT, 'agent-rules', 'deploy.md')]: 'rules',
+      [told('rules', 'global.md')]: 'user rules',
+      [join(PROJECT, 'agent-skills', 'api-run', 'SKILL.md')]: 'project skill',
+      [told('memory', 'feedback.md')]: 'memory',
+    });
+    const { places } = await findRulePlaces(files, probe, { ...AT, paths, sessionSettings: [], teamRules: [] });
+    const path = (...parts: string[]) => normalisePath(join(...parts));
+    assert.deepEqual(shown(places), [
+      `claude-md ${path(told('me.md'))}`,
+      `claude-md ${path(PROJECT, 'AGENT.md')}`,
+      `claude-md ${path(PROJECT, 'api', 'AGENT.md')}`,
+      `rules ${path(PROJECT, 'agent-rules', 'deploy.md')}`,
+      `rules ${path(told('rules', 'global.md'))}`,
+      `skill ${path(CLAUDE_DIR, 'skills', 'web-deploy', 'SKILL.md')}`,
+      `skill ${path(PROJECT, 'agent-skills', 'api-run', 'SKILL.md')}`,
+      `memory ${path(told('memory', 'feedback.md'))}`,
+    ]);
   });
 
   it(`stops looking for CLAUDE.md files below the project after ${NESTED_FOLDERS_MAX} folders, and says so`, async () => {

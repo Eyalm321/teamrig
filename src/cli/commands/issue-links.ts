@@ -1,14 +1,15 @@
-import { ENV, KIT_NAME } from '../../core/home.ts';
+import { KIT_NAME } from '../../core/home.ts';
 import { SecretScanner } from '../../core/secrets.ts';
-import type { IssueHost } from '../../issues/host.ts';
+import { GITHUB_REPOS_HOST, type IssueLinks } from '../../issues/host.ts';
 import { changedIssues, planLinks, type LinkPlan, type LinkWrite } from '../../issues/links.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
-import { hostOf, reposOf } from '../issue-hosts.ts';
+import { hostsOf, reposOf } from '../issue-hosts.ts';
 import { openTeamKit, requireConfig } from '../kit.ts';
 import { EXIT, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { teamRegister } from '../team-register.ts';
-import { GITHUB_OFF, githubOff } from './issue-sync-auto.ts';
-import { shown } from './issue-sync.ts';
+import { CONNECTOR_OFF } from '../connector-off.ts';
+import { githubOffBy } from './issue-sync-auto.ts';
+import { shown } from './issue-sync-lines.ts';
 
 /**
  * `issue links [--repo <owner/name>] [--yes]`: puts the task tree on the GitHub issues of the team's `github.repos`.
@@ -24,8 +25,9 @@ export async function issueLinks(args: ParsedArgs, runtime: CliRuntime): Promise
   const kit = await openTeamKit(runtime);
   const config = requireConfig(kit, runtime, 'read');
   const say = (line: string): void => runtime.out.stdout(line);
-  if (githubOff(runtime.env)) {
-    say(`OFF ${ENV.github}=${GITHUB_OFF} turns GitHub off on this machine; nothing was read or written`);
+  const offBy = githubOffBy(runtime.env);
+  if (offBy !== undefined) {
+    say(`OFF ${offBy}=${CONNECTOR_OFF} turns GitHub off on this machine; nothing was read or written`);
     return EXIT.ok;
   }
   if (config.github.repos.length === 0) {
@@ -33,8 +35,8 @@ export async function issueLinks(args: ParsedArgs, runtime: CliRuntime): Promise
     return EXIT.ok;
   }
   const tasks = (await teamRegister(runtime, kit.paths, config).snapshot()).state.tasks;
-  // github.repos is GitHub's list, so every repository it names is GitHub's.
-  const host = hostOf('github', runtime, new SecretScanner(config.register.secretPatterns), config.github.stamp);
+  // github.repos is GitHub's list, so every repository it names is GitHub's; the links are its tracker's.
+  const host = (await hostsOf(GITHUB_REPOS_HOST, runtime, new SecretScanner(config.register.secretPatterns), config.github.stamp, config.connectors)).tracker;
   const told = new Set<string>();
   let failed = false;
   let added = 0;
@@ -72,7 +74,7 @@ export async function issueLinks(args: ParsedArgs, runtime: CliRuntime): Promise
 }
 
 /** Adds each link in turn, stopping at the first failure: a refused token or a rate limit would refuse the rest too. */
-async function addLinks(host: IssueHost, writes: readonly LinkWrite[]): Promise<{ readonly added: number; readonly failure: string | undefined }> {
+async function addLinks(host: IssueLinks, writes: readonly LinkWrite[]): Promise<{ readonly added: number; readonly failure: string | undefined }> {
   let added = 0;
   for (const link of writes) {
     const end = link.kind === 'sub-issue' ? await host.addSubIssue(link.parent, link.childId) : await host.addBlockedBy(link.target, link.blockerId);

@@ -59,8 +59,9 @@ or take it to the lead.
 | `REFUSED T3 -> T2 -> T3 would be a loop, and no task in a loop can finish: make the step T3 needs from T2 its own task: teamrig add --owner api --title "<the step>", then teamrig update T3 --after <its id>` (an `--after` link) or `...: teamrig set T3 --status waiting --ask api --text "<the step>"` (a `--waits task:` link) | T2 already needs T3, by a plan dependency or a task wait. Run the command it names: the step T3 needs becomes a task of its own that needs nothing back. |
 | `REFUSED verifying needs --proof saying what will prove the shipped change works` | Add `--proof` naming the proof you wait for: a test run, a night's flow, a number. |
 | `REFUSED verifying needs --note saying what proves it` (with `register.requireProofOnVerifying` off) | Add `--note` naming the proof you wait for. |
-| `REFUSED verifying needs --waits saying when its proof runs: time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying whose end runs it; if tests or a dry run proved it and its proof is a sighting, close it done with --watch "<what a sighting shows>" instead` | Add `--waits` with the time the proof runs, or the task whose end runs it. If only a live sighting is left, set it `done` with `--evidence` and `--watch`. |
-| `REFUSED T2 is open: a proof waits only on a task in progress or verifying; until it starts, set T1 waiting on it (--status waiting --waits task:T2)` | Set T1 `waiting` on T2; set it `verifying` with `--waits task:T2` once T2 has started. |
+| `REFUSED verifying needs --waits saying when its proof runs: time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying, or an open one of your own, whose end runs it; if tests or a dry run proved it and its proof is a sighting, close it done with --watch "<what a sighting shows>" instead` | Add `--waits` with the time the proof runs, or the task whose end runs it. If only a live sighting is left, set it `done` with `--evidence` and `--watch`. |
+| `REFUSED T2 is open and api's: a proof waits only on a task in progress or verifying, or an open one of its own owner's; until it starts, set T1 waiting on it (--status waiting --waits task:T2)` | T2 is another session's and not started: set T1 `waiting` on T2; set it `verifying` with `--waits task:T2` once T2 has started. An open task of T1's own owner is taken as it is, once it can start. |
+| `REFUSED T2 is planned after T5, not finished yet, so it cannot start now: a proof waits on an open task of its own owner's only once it can start; until then, set T1 waiting on it (--status waiting --waits task:T2)` | T2 cannot start before T5 ends, so the proof's end is not in sight: set T1 `waiting` on T2, and `verifying` with `--waits task:T2` once T5 is finished. |
 | `REFUSED T1's proof waited on task:T2, which has cleared: run the proof now and set it done, or name when it runs with --waits (...)` | The proof is due now: run it and set T1 `done`, or give `--waits` with the time or task it now runs on. |
 | `REFUSED T1's proof was put off to other waits 2 times [register.maxReparks]: run the proof now and set it done, close it done with --watch "<what a sighting shows>" if tests or a dry run proved it, or reopen it (teamrig set T1 --status in-progress)` | Do one of the three; the limit stops a proof that keeps moving and never runs. |
 | `REFUSED --watch goes only with --status done` | Drop `--watch`, or set `done`. |
@@ -80,7 +81,7 @@ or take it to the lead.
 | `REFUSED only the owner (web) or the lead (lead) changes T2` | Ask the owner or a leader it names (a sub-lead's member: `a leader above web (backend or lead)`). |
 | `REFUSED backend hands T2 only to itself or a session it leads (importer, search); the lead (lead) moves work between groups` | Hand it within your group, or ask the lead to move it to another. |
 | `REFUSED nothing to change: give a field or a --note` | `update` needs a field flag, or a `--note` to add alone. |
-| `REFUSED priority p9 is not one of p0, p1, p2, p3, p4, p5` | Use a priority the team defines, or p0 for urgent work. |
+| `REFUSED priority p9 is not one of blocker, p0, p1, p2, p3, p4, p5` | Use a priority the team defines, p0 for urgent work, or blocker for what blocks the team now. |
 | `REFUSED the title has 141 characters; the limit is 140` | Shorten the title; put the detail in `--description`. |
 | `REFUSED add needs --description "<what and why, in plain words>"` | Add `--description` saying what the task is and why, for a person who has not seen the ask. A team that does not want it sets `register.requireDescription` to `false`. |
 | `REFUSED the description has 2001 characters; the limit is 2000` | Shorten it; point at a file for the rest. |
@@ -260,7 +261,7 @@ From `teamrig restore install` and `uninstall` ([commands.md](commands.md#teamri
 | `priority "2" is not p<n>: write p2` | Write priorities as `p2`. |
 | `priority "t2" is the old tier spelling: write p2` | Write `p2`. |
 | `--tier was renamed: use --priority` | Use `--priority`. |
-| `gh was renamed: use issue` | gh sync is now `teamrig issue sync`, and gh migrate is `teamrig issue migrate`. |
+| `gh sync was renamed: use issue sync` | Run the command the line names: `teamrig issue sync`, or `teamrig issue migrate` for the old migrate. |
 | `"9" is not a task id like T12` | Write task ids as `T9`. |
 | `--status "finished" is not open\|in-progress\|verifying\|waiting\|done\|dropped` | Use one of those six. |
 | `--status blocked was replaced by waiting: use --status waiting --waits <reason> (...)` | Set `waiting` with what it waits for. |
@@ -289,7 +290,7 @@ A guard hook that cannot answer blocks the call instead of letting it through
 
 | Output | Fix |
 | --- | --- |
-| teamrig `blocked this call: its <hook> guard could not load (...)`, `crashed (...)`, `ended with exit <n>` or `printed something other than its JSON answer (...)` | The install is broken: run `claude plugin update teamrig@teamrig` and restart the session; if that does not clear it, tell your lead. |
+| teamrig `blocked this call: its <hook> guard could not load (...)`, `crashed (...)`, `ended with exit <n>` or `printed something other than its JSON answer (...)` | The install is broken: update the teamrig plugin and restart the session; if that does not clear it, tell your lead. |
 | teamrig `blocked this call: its <hook> guard gave no answer within 12 s` | Retry the call; if every call times out, the host is overloaded or the guard hangs: tell your lead. |
 
 ## Failures (exit 1)

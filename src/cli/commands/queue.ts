@@ -8,8 +8,9 @@ import { pipelineFrozenRefusal } from '../../delivery/pipeline-freezes.ts';
 import { formatRunRecord, RUN_RECORD_FORMAT, runRecordPathOf, type DetachedRunRecord, type LedgerStep } from '../../delivery/detached-runs.ts';
 import { deliveryPlaces, detachedDirOf, detachedLogOf } from '../../delivery/places.ts';
 import { passOf, PRE_PUSH_MAX_WAIT_MS, recordPass, type CheckedTree, type CleanTree } from '../../delivery/push-pass.ts';
-import { isStepKind, kindOfCommand, processRequest, STEP_KINDS, taskOfLabel, type ProcessRequest, type StepKind } from '../../delivery/process-request.ts';
+import { isStepKind, kindOfCommand, processRequest, STEP_KINDS, takesShipSlot, taskOfLabel, type LineRequest, type ProcessRequest, type StepKind } from '../../delivery/process-request.ts';
 import { recordRefusal, runRecorded, type RefusalMark, type StepOwner } from '../../delivery/recorded-step.ts';
+import { treeFieldsOf, treeHeader, treeText, type RunTree } from '../../delivery/run-tree.ts';
 import { stepNeedOf, type NeedAsk } from '../../delivery/step-need.ts';
 import { causeOfLockWait, WaitLog } from '../../delivery/wait-log.ts';
 import { queueCutoffReason, minutesText } from '../../delivery/schedule.ts';
@@ -28,12 +29,13 @@ import { TASK_ID } from '../../register/model.ts';
 import { commandLine } from '../../test-run/shell.ts';
 import { requiredFlag, UsageError, type ParsedArgs } from '../args.ts';
 import { hostLockOf, logLineOf, type Say, teamAdmissionOf } from '../delivery-ports.ts';
+import { childEnvOf, identityOf } from '../host.ts';
 import { sessionRef, shellWordsOf } from '../inputs.ts';
 import { openTeamKit, reloadTeamConfig, requireConfig, rosterOf, sessionIdOf, teamZone, type Kit } from '../kit.ts';
 import { parentLockOf } from '../parent-lock.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { rerunAdvice, stoppedWhileWaiting, unlessStopped, watchStarters } from '../stoppable.ts';
-import { shipKindRefusal, shipTaskOfWords, shipToolOfWords, shipToolPinOf, shipToolStartRefusal } from '../ship-role-check.ts';
+import { shipKindRefusal, shipSlotRepoOf, shipTaskOfWords, shipToolOfWords, shipToolPinOf, shipToolStartRefusal } from '../ship-role-check.ts';
 import { postUrgentLine } from '../urgent-line.ts';
 import { envSession, markedSessionOf } from './hook-input.ts';
 import { inboxDepsOf } from './inbox.ts';
@@ -112,6 +114,16 @@ function requestOf(args: ParsedArgs, words: readonly string[], what: string): Pr
 function withShipTask(request: ProcessRequest, shipped: () => string | undefined): ProcessRequest {
   const task = request.task ?? shipped();
   return task === request.task ? request : processRequest(request.kind, task);
+}
+
+/**
+ * `line`, for a step that holds the ship slot, with the repository it moves (#1711, `shipSlotRepoOf`), so a ship of
+ * another repository passes it. Left as it is for any other step, and for one whose repository is in doubt, which then
+ * holds the slot of every repository.
+ */
+function withRepo(line: LineRequest, repoOf: () => string | undefined): LineRequest {
+  const repo = takesShipSlot(line.kind) ? repoOf() : undefined;
+  return repo === undefined || repo === '' ? line : { ...line, repo };
 }
 
 /**
@@ -249,6 +261,18 @@ interface Reporting {
 }
 
 const UNREPORTED: Reporting = { started: async () => undefined, opened: async () => undefined, ended: async () => undefined };
+
+/**
+ * The tree the step runs on, read as it starts, for its ledger record (#708). A detached run's log began with the tree
+ * it was started on; one changed while it waited is said, so the log names the head that ran.
+ */
+function runTree(runtime: CliRuntime, say: Say, startTree: RunTree | undefined): RunTree {
+  const tree = runtime.trees.ranIn(runtime.cwd);
+  if (startTree !== undefined && treeText(tree) !== treeText(startTree)) {
+    say(`the tree changed while it waited; it runs on ${treeText(tree)}`);
+  }
+  return tree;
+}
 
 /** A detached run (`--detached-run`) as `--detach` started it: its id, its session and its log. */
 interface DetachedRun {
@@ -406,7 +430,7 @@ async function startDetached(runtime: CliRuntime, places: DetachedPlaces, args: 
     log: places.log,
     argv: detachedArgsOf(args, words, session, id, arrivedAt),
     cwd: runtime.cwd,
-    env: parkedEnvOf(runtime.env),
+    env: parkedEnvOf(runtime.env, childEnvOf(runtime).parked),
     parkedAt: new Date(runtime.clock.now()).toISOString(),
   });
   runtime.out.stdout(`QUEUED ${id}: ${what} runs detached; log ${places.log}; ${session}'s inbox gets a line when it starts and when it ends`);
@@ -441,7 +465,7 @@ async function sessionOf(args: ParsedArgs, runtime: CliRuntime, kit: Kit, roster
   if (named !== undefined) {
     return sessionIdOf(roster, sessionRef('--session', named));
   }
-  const found = parent?.session ?? (await markedSessionOf(runtime, kit, roster, runtime.env[ENV.claudeSession]?.trim() ?? null));
+  const found = parent?.session ?? (await markedSessionOf(runtime, kit, roster, identityOf(runtime).sessionId ?? null));
   if (found === undefined) {
     throw new UsageError(`--session (or $${ENV.session}) is required outside a tab bound to a session`);
   }
@@ -613,6 +637,11 @@ export async function queue(args: ParsedArgs, runtime: CliRuntime): Promise<Exit
     refuseDetachUsage(args);
   }
   const detachedId = detachedRunIdOf(args);
+  // A detached run's log starts with the tree it was started on (#708): the log is what a reviewer is shown.
+  const startTree = detachedId === undefined ? undefined : runtime.trees.ranIn(runtime.cwd);
+  if (startTree !== undefined) {
+    runtime.out.stdout(treeHeader(runtime.cwd, startTree).trimEnd());
+  }
   const firstArrival = arrivedAtOf(args, runtime.clock.now());
   const kit = await openTeamKit(runtime);
   const config = requireConfig(kit, runtime, 'read');
@@ -654,7 +683,7 @@ export async function queue(args: ParsedArgs, runtime: CliRuntime): Promise<Exit
     await refuseUnstartable(runtime, gate);
     // The register and the front are read only for a step that queues: a nested step or one refused at once records nothing.
     const shipped = withShipTask(request, () => shipTaskOfWords(runtime.mergeGit, kit, config, words, runtime.cwd));
-    const line = await requests.current(shipped);
+    const line = withRepo(await requests.current(shipped), () => shipSlotRepoOf(runtime.mergeGit, kit, config, words, runtime.cwd));
     // Only the ticket carries the class for now: the ledger's start and refusal records keep the fields their readers take.
     const owner: StepOwner = { session, ...processRequest(line.kind, line.task, line.priority) };
     const waits = new WaitLog(runtime.clock, runtime.memory.freeMb());
@@ -665,7 +694,8 @@ export async function queue(args: ParsedArgs, runtime: CliRuntime): Promise<Exit
       watching.stop,
       lock.acquire(
         session,
-        `heavy: ${what}`,
+        // The purpose is what withdraw's list and other steps' wait lines show, so it names the step's real weight (#1511).
+        `${small ? 'small' : 'heavy'}: ${what}`,
         delivery.queue.waitMinutes * MINUTE_MS,
         delivery.wait.pollSeconds * 1_000,
         (holder, ahead, arrivedAfter) => {
@@ -704,13 +734,14 @@ export async function queue(args: ParsedArgs, runtime: CliRuntime): Promise<Exit
       if (sharing !== undefined) {
         say(sharing);
       }
+      const tree = runTree(runtime, say, startTree);
       say(`running: ${what} (killed after ${minutesText(maxRunMinutes)})`);
       await reporting.started();
       // A merge that steps away while its checks run (teamrig step-away) holds nothing meanwhile: that time, and its wait
       // in line to take its share back, does not count against its limit (T4218).
       const awayMs = (): Promise<number> => lock.awayMs(taking.lock.id);
       const run = { command: commandLine(words, runtime.platform), cwd: runtime.cwd, env: underLock(step.env, taking.lock), timeoutMs: maxRunMinutes * MINUTE_MS, awayMs, stop: watching.stop };
-      const mark = { ...owner, what, ...waited, ...(taking.sharing === undefined || taking.sharing.heavy ? {} : { shared: true as const }), request: run };
+      const mark = { ...owner, what, ...waited, ...(taking.sharing === undefined || taking.sharing.heavy ? {} : { shared: true as const }), ranIn: treeFieldsOf(runtime.cwd, tree), request: run };
       const end = await runRecorded(runtime, { places, delivery, opened: (start) => reporting.opened({ ledger: places.ledger, start }) }, mark);
       const code = await report(runtime, say, end, step);
       return prePush === undefined ? code : await afterPrePush(runtime, prePush, what, code, waitedMs);

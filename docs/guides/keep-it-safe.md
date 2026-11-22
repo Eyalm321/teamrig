@@ -297,7 +297,8 @@ never shows, and any of teamrig's hook commands, which take the tab they run for
 A tab keeps the session it was first bound to: a tool call cannot make it another session by reading that session's
 inbox, so the review checks above see the tab's own session; you move a tab by typing `/teamrig inbox read` in it.
 The commands also refuse to write wherever Claude Code set `$CLAUDECODE` (a script a session's tool call runs, a hook
-command), which the pane's buttons and a typed `/teamrig` line lack. Every session runs as your OS user, so these stop
+command), which the pane's buttons and a typed `/teamrig` line lack; on a host whose adapter names no such mark they
+refuse every write of this kind, as an agent's run cannot be told from yours there. Every session runs as your OS user, so these stop
 the routine route and an instruction slipped into what a session reads, not a session set on forging the owner: a
 script can clear that variable, and a session can write the register's files directly. A task line written as the owner is no proof
 that you acted until your own actions run under an account the sessions cannot use.
@@ -329,7 +330,7 @@ hands it to bash ([what it cannot see](../../plugins/teamrig/skills/teamrig-guid
 Claude Code runs a tool call whose hook crashed or timed out, so a broken guard would let through the very line it
 exists to stop. teamrig's guards fail closed instead: when one cannot load, throws, hangs (even in a loop that never
 waits, since each guard runs on its own thread) or answers wrongly, the call is blocked and Claude reads `teamrig blocked this call: its <name> guard ...` with the fix. A broken install
-therefore blocks the guarded calls (shell lines, reads, edits, sends and helper launches) until you run
-`claude plugin update teamrig@teamrig` and restart the session; a block for a guard that gave no answer in time
+therefore blocks the guarded calls (shell lines, reads, edits, sends and helper launches) until you update
+the teamrig plugin and restart the session; a block for a guard that gave no answer in time
 clears on a retry once the host is less loaded
 ([what the runner cannot catch](../../plugins/teamrig/skills/teamrig-guide/hooks.md#a-guard-that-cannot-answer)).

@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { describeLaunch, launchOf } from '../../config/launch.ts';
+import { describeLaunch, launchModelProblem, launchOf } from '../../config/launch.ts';
 import type { Roster } from '../../config/roster.ts';
 import { isEffortLevel, isTerminalChoice, TERMINALS, type EffortLevel, type KitConfig, type TerminalChoice } from '../../config/types.ts';
 import { splitAddress } from '../../core/address.ts';
@@ -10,9 +10,9 @@ import { HiringLog } from '../../hiring/log.ts';
 import { rehiredFrom, type RetireRecord } from '../../hiring/record.ts';
 import type { ResumeVerdict } from '../../hiring/rehire.ts';
 import { CLAUDE_SESSION_ID } from '../../inbox/marks.ts';
-import { findClaude, type ClaudeProgram } from '../../open/claude.ts';
+import { findProgram, type HostProgram } from '../../open/host-program.ts';
 import type { FocusOutcome } from '../../open/focus.ts';
-import { launchFlags } from '../../open/launch-flags.ts';
+import { sessionStartOf } from '../../open/session-start.ts';
 import { openTab, type OpenOutcome } from '../../open/open-tab.ts';
 import { decodePrompt, defaultPrompt, encodePrompt, PROMPT_MAX, promptProblem, recoverPrompt, refreshPrompt, rehirePrompt, reopenPrompt, resumePrompt } from '../../open/prompt.ts';
 import { shellCommand } from '../../open/quote.ts';
@@ -25,6 +25,7 @@ import { teamWindowOf, type TabFocus, type Terminal } from '../../open/terminals
 import { urgentFirstPrompt, type WakeAsk } from '../../wake/asks.ts';
 import { onePositional, requiredFlag, UsageError, type ParsedArgs } from '../args.ts';
 import { admitBusyText, admitTab, dropTabHold } from '../headroom.ts';
+import { cacheBinOf, childEnvOf, launcherOf, launchHostOf } from '../host.ts';
 import { findTeam, openKit, reloadTeamConfig, requireConfig, rosterOf, sessionIdOf, teamZone, type Kit } from '../kit.ts';
 import { liveRunOf, liveRunText } from '../live-run.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
@@ -259,7 +260,7 @@ export async function openSession(runtime: CliRuntime, kit: Kit, config: KitConf
   // teamrig's own first prompt has a resumed session read its list; a --prompt one may not, so its wake check decides.
   const unnoted = resume !== undefined && request.prompt === undefined ? await noteResumedTab(runtime, kit, config, id, resume) : undefined;
   const wakeNote = unnoted === undefined ? '' : `; its wake state was not written, so its tab may wake once more for work it reads now: ${unnoted}`;
-  return { kind: 'opened', line: `OPENED ${name} (session ${id}) in a new ${TERMINAL_LABELS[outcome.terminal]} in ${folder}, on ${describeLaunch(launchOf(config, id))}${startNoteOf(resume, reopen)}${wakeNote}` };
+  return { kind: 'opened', line: `OPENED ${name} (session ${id}) in a new ${TERMINAL_LABELS[outcome.terminal]} in ${folder}, on ${describeLaunch(launchOf(config, id, launchHostOf(runtime).leadDefault))}${startNoteOf(resume, reopen)}${wakeNote}` };
 }
 
 /** A closed session's reopen while its refresh is ready: fresh, so its start takes the handover (T2354). */
@@ -446,14 +447,18 @@ async function closeSince(runtime: CliRuntime, log: SessionLog, id: string, resu
   }
 }
 
-/** How to start Claude Code in `env`; refused when it is not on that PATH. */
-export async function claudeProgramOf(runtime: CliRuntime, env: Env): Promise<ClaudeProgram> {
-  const claude = await findClaude({ env, platform: runtime.platform, probe: runtime.probe, files: runtime.files, node: runtime.self.node });
-  if (claude.kind === 'missing') {
-    const skipped = claude.skipped.length === 0 ? '' : ` (skipped: ${claude.skipped.join('; ')})`;
-    throw new RefusedError(`Claude Code (claude) is not on PATH${skipped}; install it, then run this again`);
+/**
+ * How to start the running host's program in `env`: the program its session launcher names, found on that PATH.
+ * Refused when it is not there, and with the host's own reason on a host that tells nothing of its sessions.
+ */
+export async function hostProgramOf(runtime: CliRuntime, env: Env): Promise<HostProgram> {
+  const { program } = launcherOf(runtime);
+  const found = await findProgram({ env, platform: runtime.platform, probe: runtime.probe, files: runtime.files, node: runtime.self.node }, program);
+  if (found.kind === 'missing') {
+    const skipped = found.skipped.length === 0 ? '' : ` (skipped: ${found.skipped.join('; ')})`;
+    throw new RefusedError(`Claude Code (${program}) is not on PATH${skipped}; install it, then run this again`);
   }
-  return claude.program;
+  return found.program;
 }
 
 /** The exit for how Claude Code ended, for a command that ran it on this terminal. */
@@ -498,18 +503,28 @@ export async function launch(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
   const prompt = launchPrompt(args, team, id);
   const resume = resumeFlag(args.flags.get('resume'));
   const effort = effortFlag(args.flags.get('effort'));
-  const env = { ...sessionEnv(runtime.env, { id, team, home: args.flags.get('home') }, runtime.platform), [ENV.launched]: id };
+  const inherited = childEnvOf(runtime);
+  const env = { ...sessionEnv(runtime.env, { id, team, home: args.flags.get('home') }, runtime.platform, cacheBinOf(runtime), inherited.session), [ENV.launched]: id };
   const sessionRuntime: CliRuntime = { ...runtime, env };
   const kit = await openKit(sessionRuntime, team);
   const config = requireConfig(kit, sessionRuntime, 'read');
-  const claudeEnv = sessionCredentialFree(env, config.delivery.passEnv);
+  const claudeEnv = sessionCredentialFree(env, config.delivery.passEnv, inherited.login);
   const roster = await rosterOf(sessionRuntime, kit, config);
   if (!roster.ids.includes(id)) {
     throw new RefusedError(`${id} is not a session of team ${team}`);
   }
-  const { command, prefix } = await claudeProgramOf(runtime, claudeEnv);
+  const { command, prefix } = await hostProgramOf(runtime, claudeEnv);
+  const launcher = launcherOf(runtime);
   const name = roster.nameOf(id) ?? id;
-  let settings = effort === undefined ? launchOf(config, id) : { ...launchOf(config, id), effort };
+  const host = launchHostOf(runtime);
+  const { leadDefault } = host;
+  let settings = effort === undefined ? launchOf(config, id, leadDefault) : { ...launchOf(config, id, leadDefault), effort };
+  // The config takes any model name, so a model this host does not run (another provider's) is refused here, before
+  // the host starts and fails on it.
+  const modelProblem = launchModelProblem(settings, host);
+  if (modelProblem !== undefined) {
+    throw new RefusedError(`launch.${id}.model ${settings.model ?? ''}: ${modelProblem}; fix it in the team config, or \`${KIT_NAME} doctor\` lists each`);
+  }
   const resumed = resume === undefined ? '' : `, resuming Claude Code session ${resume}`;
   let listing = await launchListing(sessionRuntime, kit, config, roster, id);
   runtime.out.stdout(`Starting Claude Code as ${name} (session ${id} of team ${team}) in ${project}, on ${describeLaunch(settings)}${resumed}${listing.note}`);
@@ -519,8 +534,9 @@ export async function launch(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
   let resuming = resume;
   for (;;) {
     await refuseLiveRun(runtime, kit, roster, id, name);
-    const resumeArgs = resuming === undefined ? [] : ['--resume', resuming];
-    const args = [...prefix, ...launchFlags(settings), ...listing.args, ...resumeArgs, '--name', name, ...(first === undefined ? [] : [first])];
+    // The host spells its own flags: this start only says what the session is to be.
+    const start = sessionStartOf(settings, { name, resume: resuming, settingsFile: listing.settingsFile, prompt: first });
+    const args = [...prefix, ...launcher.launchArgs(start)];
     const startedAt = runtime.clock.now();
     const result = await runtime.processes.run({ command, args, cwd: project, env: claudeEnv });
     if (!(await restartTaken(store, id))) {
@@ -537,7 +553,7 @@ export async function launch(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
     // The restart ended a session that ran at another level than its config's (T2444): it starts again at the
     // config's level as it is now, which a typed /effort may have changed, and no longer at --effort's.
     const reload = await reloadTeamConfig(sessionRuntime, kit);
-    settings = launchOf(reload.status === 'loaded' ? reload.config : config, id);
+    settings = launchOf(reload.status === 'loaded' ? reload.config : config, id, leadDefault);
     // A skill added or a Used by line changed since the last start is listed as it is now.
     listing = await launchListing(sessionRuntime, kit, config, roster, id);
   }

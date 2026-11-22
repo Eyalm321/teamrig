@@ -1,24 +1,27 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { missingCliLine, missingCliOf, missingCliOutput } from './missing-cli.ts';
+import type { HookEvent } from '../ports/host/index.ts';
+import { hookEventOf, replyText } from '../testing/host.ts';
+import { OTHER_STEPS, shippedSteps } from '../testing/shipped-steps.ts';
+import { missingCliLine, missingCliOf } from './missing-cli.ts';
 
-function succeeded(toolResponse: unknown, toolName = 'Bash'): unknown {
-  return { hook_event_name: 'PostToolUse', tool_name: toolName, tool_input: { command: 'teamrig list | head' }, tool_response: toolResponse };
+function succeeded(toolResponse: unknown, toolName = 'Bash'): HookEvent {
+  return hookEventOf({ hook_event_name: 'PostToolUse', tool_name: toolName, tool_input: { command: 'teamrig list | head' }, tool_response: toolResponse });
 }
 
-function failed(error: string, toolName = 'Bash'): unknown {
-  return { hook_event_name: 'PostToolUseFailure', tool_name: toolName, tool_input: { command: 'teamrig list' }, error };
+function failed(error: string, toolName = 'Bash'): HookEvent {
+  return hookEventOf({ hook_event_name: 'PostToolUseFailure', tool_name: toolName, tool_input: { command: 'teamrig list' }, error });
 }
 
 describe('missingCliOf', () => {
   it('reads a failed shell call whose error says the bare command was not found', () => {
-    assert.equal(missingCliOf(failed('Exit code 127\n/usr/bin/bash: line 1: teamrig: command not found')), 'PostToolUseFailure');
+    assert.equal(missingCliOf(failed('Exit code 127\n/usr/bin/bash: line 1: teamrig: command not found')), 'tool-failed');
   });
 
   it('reads a piped call that exits 0 with the not-found line on stdout or stderr, or as the result text', () => {
-    assert.equal(missingCliOf(succeeded({ stdout: '', stderr: 'bash: teamrig: command not found' })), 'PostToolUse');
-    assert.equal(missingCliOf(succeeded({ stdout: 'bash: teamrig: command not found\n', stderr: '' })), 'PostToolUse');
-    assert.equal(missingCliOf(succeeded('bash: teamrig: command not found')), 'PostToolUse');
+    assert.equal(missingCliOf(succeeded({ stdout: '', stderr: 'bash: teamrig: command not found' })), 'tool-end');
+    assert.equal(missingCliOf(succeeded({ stdout: 'bash: teamrig: command not found\n', stderr: '' })), 'tool-end');
+    assert.equal(missingCliOf(succeeded('bash: teamrig: command not found')), 'tool-end');
   });
 
   it('knows what sh, zsh, fish, PowerShell and cmd print', () => {
@@ -29,7 +32,7 @@ describe('missingCliOf', () => {
       "teamrig : The term 'teamrig' is not recognized as the name of a cmdlet, function, script file, or operable program.",
       "'teamrig' is not recognized as an internal or external command,",
     ]) {
-      assert.equal(missingCliOf(failed(text, 'PowerShell')), 'PostToolUseFailure', text);
+      assert.equal(missingCliOf(failed(text, 'PowerShell')), 'tool-failed', text);
     }
   });
 
@@ -47,7 +50,7 @@ describe('missingCliOf', () => {
 
   it('knows the line of a script, of zsh running one, and a line ending in a carriage return', () => {
     for (const text of ['./run.sh: line 3: teamrig: command not found', 'zsh:1: command not found: teamrig', 'out\r\nbash: teamrig: command not found\r\nmore']) {
-      assert.equal(missingCliOf(succeeded({ stdout: text, stderr: '' })), 'PostToolUse', text);
+      assert.equal(missingCliOf(succeeded({ stdout: text, stderr: '' })), 'tool-end', text);
     }
   });
 
@@ -65,24 +68,28 @@ describe('missingCliOf', () => {
 
   it('ignores any other tool and any other event', () => {
     assert.equal(missingCliOf(succeeded('bash: teamrig: command not found', 'Read')), undefined);
-    assert.equal(missingCliOf({ hook_event_name: 'PreToolUse', tool_name: 'Bash', error: 'bash: teamrig: command not found' }), undefined);
-    assert.equal(missingCliOf('bash: teamrig: command not found'), undefined);
+    assert.equal(missingCliOf(hookEventOf({ hook_event_name: 'PreToolUse', tool_name: 'Bash', error: 'bash: teamrig: command not found' })), undefined);
+    assert.equal(missingCliOf(hookEventOf({ hook_event_name: 'PostToolUseFailure', error: 'bash: teamrig: command not found' })), undefined);
     assert.equal(missingCliOf(succeeded(undefined)), undefined);
   });
 });
 
 describe('missingCliLine', () => {
   it('names the copy the hooks run, by a path both shells take, and the reload that brings the bare name back', () => {
-    const line = missingCliLine(String.raw`C:\plugins\teamrig\0.9.0\dist\cli\main.js`, 'teamrig');
+    const line = missingCliLine(String.raw`C:\plugins\teamrig\0.9.0\dist\cli\main.js`, 'teamrig', shippedSteps());
     assert.ok(line.startsWith('teamrig: the shell did not find the bare `teamrig` command'));
     assert.ok(line.includes('run the installed copy by its path: `node "C:/plugins/teamrig/0.9.0/dist/cli/main.js" <command> ...`'));
     assert.ok(line.includes('never another copy from the plugin cache'));
     assert.ok(line.endsWith("The user's /reload-plugins brings the bare name back."));
   });
 
+  it("names the reload as the host's person types it, and none on a host that names no steps", () => {
+    assert.ok(missingCliLine('/opt/teamrig/main.js', 'teamrig', OTHER_STEPS).endsWith("The user's :reload brings the bare name back."));
+    assert.ok(missingCliLine('/opt/teamrig/main.js', 'teamrig', undefined).endsWith('never another copy from the plugin cache (another version).'));
+  });
+
   it('hands the line to the model under the event it answers', () => {
-    assert.deepEqual(JSON.parse(missingCliOutput('PostToolUseFailure', 'the line')), {
-      hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: 'the line' },
-    });
+    assert.equal(replyText('tool-failed', { context: 'the line' }), '{"hookSpecificOutput":{"hookEventName":"PostToolUseFailure","additionalContext":"the line"}}');
+    assert.equal(replyText('tool-end', { context: 'the line' }), '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"the line"}}');
   });
 });

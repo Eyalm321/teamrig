@@ -6,7 +6,7 @@
  * List a key only when changing it grants or takes away nothing a session may do, runs no program, moves no folder,
  * and leaves the budget, the host's shared resources and every guard as they are: those are owner gates (core rule 6).
  * Three listed keys rest on the lead's judgment and the docs say so: register.review.mode and register.review.requireOn
- * (which parts a bug's review needs) and github.repos (a repository gh migrate and issue comment may write to).
+ * (which parts a bug's review needs) and github.repos (a repository gh migrate and issue reply may write to).
  * github.watcher, who hears the GitHub news no task owner takes, is staffing like the roster's work order, not a
  * permission: the loader refuses a name that is not one of the sessions, so a set cannot name one.
  */
@@ -16,7 +16,7 @@ export const LEAD_KEYS: ReadonlySet<string> = new Set([
   'register.requireEvidenceOnDone', 'register.requireSkillOnDone', 'register.requireNoteOn', 'register.requireFollowupsOn',
   'register.autoArchive', 'register.requireDecisionCard', 'register.requireProofOnVerifying', 'register.verifyGate',
   'register.maxVerifying', 'register.maxReparks', 'register.check.staleAfterHours', 'register.check.notPickedUpAfterHours',
-  'register.check.prioritySkipAfterHours', 'register.check.maxSelfMadePerDay', 'register.check.goalProgressDays',
+  'register.check.blockerOpenAfterHours', 'register.check.prioritySkipAfterHours', 'register.check.maxSelfMadePerDay', 'register.check.goalProgressDays',
   'register.check.overSizeMultiple', 'register.check.weekLengthDays', 'register.check.stopgapFiles',
   'register.review.mode', 'register.review.requireOn', 'register.review.hintPattern',
   'skills.sharedPrefix', 'skills.maxDescriptionWords', 'skills.maxPerArea', 'skills.maxVerifiedAgeDays', 'skills.otherAreas',
@@ -28,7 +28,7 @@ export const LEAD_KEYS: ReadonlySet<string> = new Set([
   'delivery.stablePeriods.assumedDeployMinutes', 'delivery.stablePeriods.minMinutes', 'delivery.wait.pollSeconds',
   'delivery.wait.maxMinutes', 'delivery.schedule.resetBlackoutHours', 'delivery.schedule.queueCutoffUtc',
   'loops.chainNudgeAt',
-  'wake.enabled', 'wake.priority', 'wake.batchSeconds', 'wake.minGapMinutes', 'wake.dayStartUtc',
+  'wake.enabled', 'wake.priority', 'wake.batchSeconds', 'wake.minGapMinutes', 'wake.maxGapMinutes', 'wake.dayStartUtc',
   'tests.maxFailureChars',
   'github.repos', 'github.watcher', 'github.closedDays', 'github.probeSeconds', 'github.similarThreshold', 'github.acceptLabel',
   'decisions.batchTimesUtc', 'decisions.batchAt',

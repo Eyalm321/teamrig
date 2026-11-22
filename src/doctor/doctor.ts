@@ -50,12 +50,13 @@ export const UNREAD_INBOX_DAYS = 7;
  * - `model-env`: `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` set, which at 1 beats every per-call Agent model;
  * - `settings-json`: a Claude Code settings file that is not a JSON object, so its `env` block went unchecked;
  * - `launch-effort`: a session's `launch` names a model but no effort, so it starts at the model's default effort;
+ * - `launch-model`: a session's `launch` names a model this host does not run, so `open` refuses to start it;
  * - `allow-wide`: local allow rules off `permissions.keepAllow` that approve a whole tool or program, so auto mode's
  *   classifier never sees those calls, or hold a credential saved with an approved command (`teamrig permissions trim`
  *   removes them, run by the owner);
  * - `quiet-ask`: `budget.quietHours.action` is `ask`, so a helper launch in the quiet hours waits on a permission prompt
  *   nobody at the host answers at night, and its tab stalls;
- * - `deny-missing`: secret deny lines (the platform's `secretDenyLines`) in no settings file a session reads, so a hook's allow or
+ * - `deny-missing`: secret deny lines (the host's deny lines for the platform) in no settings file a session reads, so a hook's allow or
  *   auto mode can approve a read of a credential file or an environment dump; the user pastes the lines printed;
  * - `project-missing`: a `team.project` or `launch.<id>.project` that is no folder on this machine, so a tab `open`
  *   starts there refuses to launch;
@@ -83,6 +84,7 @@ export type FindingKind =
   | 'model-env'
   | 'settings-json'
   | 'launch-effort'
+  | 'launch-model'
   | 'allow-wide'
   | 'quiet-ask'
   | 'deny-missing'
@@ -114,8 +116,9 @@ export interface DenyFinding extends Finding {
 }
 
 /**
- * The `permissions.deny` lines of the settings files a session in the project reads, the secret deny lines this
- * machine's platform needs (`secretDenyLines`), and the user's file, where the missing ones go.
+ * The deny lines of the settings files a session in the project reads, the secret deny lines this machine's platform
+ * needs (the host's deny lines), and the user's file, where the missing ones go; no line on a host that keeps no
+ * permission rule.
  */
 export interface SecretDeny {
   readonly files: readonly SettingsDeny[];
@@ -141,6 +144,8 @@ export interface SessionLaunch {
   readonly id: string;
   /** As `launchOf` resolves it: the lead's unset keys filled in. */
   readonly launch: LaunchConfig;
+  /** Why the host would not run its model (`launchModelProblem`); absent when it would. */
+  readonly modelProblem?: string;
 }
 
 /** The lead's start as the SessionStart hook gives it after a compaction, its live tasks block too. */
@@ -186,8 +191,8 @@ export interface DoctorInput {
   readonly wideAllow: WideAllow;
   /** The `env` blocks of the Claude Code settings files the team's sessions read (`readSettingsEnv`). */
   readonly settingsEnv: readonly SettingsEnv[];
-  /** The deny lines of the same settings files (`readSettingsDeny`). */
-  readonly settingsDeny: SecretDeny;
+  /** The deny lines of the same settings files (`readSettingsDeny`); undefined on a host whose settings files are not known. */
+  readonly settingsDeny: SecretDeny | undefined;
   /** Each session on the team and the model and effort it starts on. */
   readonly launches: readonly SessionLaunch[];
   /** The project folders the config names, `team.project` first, then each `launch.<id>.project`. */
@@ -499,13 +504,19 @@ function routingEnvFindings({ env, settingsEnv }: DoctorInput): Finding[] {
   return [...overrides, ...unreadable];
 }
 
-/** A session whose launch names a model but no effort: it starts at that model's default effort, whatever the team meant. */
+/**
+ * A session whose launch names a model the host does not run, which `open` refuses; else one that names a model but no
+ * effort: it starts at that model's default effort, whatever the team meant.
+ */
 function launchFindings({ launches, roster }: DoctorInput): Finding[] {
-  return launches.flatMap(({ id, launch }): Finding[] => {
+  return launches.flatMap(({ id, launch, modelProblem }): Finding[] => {
+    const name = roster.nameOf(id) ?? id;
+    if (modelProblem !== undefined) {
+      return [{ kind: 'launch-model', detail: `${name} (session ${id}) launches on model ${launch.model ?? ''}, which this host does not run (${modelProblem}): \`open\` refuses it until launch.${id}.model is fixed in the team config` }];
+    }
     if (isDefaultModel(launch.model) || launch.effort !== undefined) {
       return [];
     }
-    const name = roster.nameOf(id) ?? id;
     const detail = `${name} (session ${id}) launches on model ${launch.model} with no effort, so it runs at that model's default effort (medium on Opus, Sonnet and Haiku 5.5): set launch.${id}.effort in the team config`;
     return [{ kind: 'launch-effort', detail }];
   });
@@ -519,9 +530,14 @@ export function allowFindings(wide: WideAllow): AllowFinding[] {
 
 /**
  * One finding while a secret deny line is in no settings file a session reads, with the missing lines as a JSON list to
- * paste; `check` shows it the lead too. A file that is not a JSON object counts as holding none, and is named.
+ * paste; `check` shows it the lead too. A file that is not a JSON object counts as holding none, and is named. None
+ * where the host's settings files are not known (`deny` undefined): there is no file to read, or to name for the paste.
  */
-export function denyFindings({ files, lines, pasteInto }: SecretDeny): DenyFinding[] {
+export function denyFindings(deny: SecretDeny | undefined): DenyFinding[] {
+  if (deny === undefined) {
+    return [];
+  }
+  const { files, lines, pasteInto } = deny;
   const missing = missingDenyLines(files, lines);
   if (missing.length === 0) {
     return [];

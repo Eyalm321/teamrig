@@ -3,15 +3,17 @@ import type { RuleConflict } from '../config/types.ts';
 import type { Files } from '../core/files.ts';
 import type { PathProbe } from '../core/path-probe.ts';
 import type { SecretScanner } from '../core/secrets.ts';
+import type { HostPaths, HostPermissions, HostPlugin, TranscriptReader } from '../ports/host/index.ts';
 import { readSessionLists, type SessionListKind, type SessionLists, type SessionListSource } from '../doctor/session-lists.ts';
 import type { KeepList } from '../permissions/allow-rules.ts';
 import type { SettingsFile } from '../permissions/settings-scope.ts';
+import type { RulePlacePaths } from '../rules/places.ts';
 import { scanRules, type Candidate } from '../rules/scan.ts';
-import { readSessionContext, type Listed, type SessionContext, type SessionContextLocations } from './scan-context.ts';
+import { readSessionContext, type Listed, type SessionContext, type SessionContextLocations, type SessionContextPaths } from './scan-context.ts';
 import { findDuplicates, type Duplicate } from './scan-duplicates.ts';
 import { scanPluginHooks } from './scan-plugin-hooks.ts';
 import { scanSettings, type SettingsFinding } from './scan-settings.ts';
-import { readTranscriptUse, type TranscriptUse } from './scan-usage.ts';
+import { readTranscriptUse, type TranscriptUse, type WorktreePaths } from './scan-usage.ts';
 import type { SkillDoctor, SkillDoctorRead } from './skill-doctor.ts';
 
 /**
@@ -25,15 +27,27 @@ export interface Listing {
   readonly sources: readonly SessionListSource[] | undefined;
 }
 
-/** What the scan reads through: the setup's files, which paths exist, the machine's transcripts and Claude Code's `/skill-doctor`. */
+/** What the scan reads through: the setup's files, which paths exist, the machine's transcripts, the host's permission rules and its `/skill-doctor`. */
 export interface SetupScanPorts {
   readonly files: Files;
+  /** The host's reading of the permission rules in a settings file. */
+  readonly permissions: HostPermissions;
+  /** The host's plugin store, whose installs' hooks the scan reads; undefined on a host that keeps none. */
+  readonly plugin: HostPlugin | undefined;
   readonly probe: PathProbe;
   readonly transcripts: TranscriptSource;
+  /** The host's reader of a transcript's lines. */
+  readonly reader: TranscriptReader;
+  /** The host's paths: a session started in one of the host's worktrees counts under the project that worktree copies. */
+  readonly paths: WorktreePaths;
   readonly doctor: SkillDoctor;
 }
 
 export interface SetupScanInput extends SessionContextLocations {
+  /** The host's paths: what a session loads at its start, the places a local rule lives in and the person's settings file. */
+  readonly paths: SessionContextPaths & RulePlacePaths & Pick<HostPaths, 'userSettings'>;
+  /** The host's own folder, which holds its installed plugins (`scanPluginHooks`). */
+  readonly claudeDir: string;
   /** Claude Code's transcripts folder (`claudeProjectsDir`). */
   readonly projectsDir: string;
   /** Skills used in a transcript written since then count as used. */
@@ -42,6 +56,8 @@ export interface SetupScanInput extends SessionContextLocations {
   readonly maxBytes: number;
   /** The settings files sessions in the project run under. */
   readonly settings: readonly SettingsFile[];
+  /** The settings files a session started in the project reads, in the order the host reads them (`sessionSettingsFiles`). */
+  readonly sessionSettings: readonly string[];
   readonly keep: KeepList;
   readonly secrets: SecretScanner;
   /** The conflicts the team recorded with `rules keep`; none before a team exists. */
@@ -97,7 +113,7 @@ export async function scanSetup(ports: SetupScanPorts, at: SetupScanInput): Prom
   const context = await readSessionContext(ports.files, ports.probe, at);
   const rules = await scanRules(ports.files, ports.probe, at, at.conflicts);
   const [usage, doctor] = await Promise.all([
-    readTranscriptUse(ports.transcripts, at.projectsDir, { since: at.since, maxBytes: at.maxBytes }),
+    readTranscriptUse({ source: ports.transcripts, reader: ports.reader, paths: ports.paths }, at.projectsDir, { since: at.since, maxBytes: at.maxBytes }),
     ports.doctor.read(at.project),
   ]);
   const recorded = await readSessionLists(ports.transcripts, at.projectsDir, at.project);
@@ -108,7 +124,10 @@ export async function scanSetup(ports: SetupScanPorts, at: SetupScanInput): Prom
     duplicates: findDuplicates(context.files),
     overrides: rules.candidates.filter((candidate) => !at.cleared(candidate)),
     recorded: rules.recorded.length,
-    settings: [...(await scanSettings(ports.files, at.claudeDir, at.settings, at.keep, at.secrets, usage.hooks)), ...(await scanPluginHooks(ports.files, at, usage.hooks, at.secrets))],
+    settings: [
+      ...(await scanSettings(ports.permissions, ports.files, at.paths.userSettings(at.userHome), at.settings, at.keep, at.secrets, usage.hooks)),
+      ...(ports.plugin === undefined ? [] : await scanPluginHooks(ports.files, ports.plugin, at, usage.hooks, at.secrets)),
+    ],
     usage,
     recent: await changedSince(ports.files, [...context.skills, ...context.agents], usage.since),
     doctor,

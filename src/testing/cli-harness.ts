@@ -10,27 +10,29 @@ import type { FileBytes } from '../core/file-bytes.ts';
 import type { Files } from '../core/files.ts';
 import { isRecord, stringField, type JsonRecord } from '../core/guards.ts';
 import type { Env } from '../core/home.ts';
-import { ghHostsDenyLine, secretDenyLines } from '../doctor/deny-lines.ts';
 import type { PathProbe } from '../core/path-probe.ts';
-import type { StoreFolders } from '../core/plugin-store.ts';
+import type { StoreFolders } from '../plugin-store/store.ts';
 import type { TranscriptSource } from '../budget/discover.ts';
+import type { HostSource } from '../composition/host-ports.ts';
 import type { RequirementsCheck } from '../requirements/requirements.ts';
 import type { WorktreePorts } from '../worktree/remove.ts';
 import type { RestorePorts } from '../restore/ports.ts';
 import type { Processes } from '../open/processes.ts';
 import type { SessionProcesses } from '../open/session-processes.ts';
 import type { CommitLog } from '../push-guard/commit-size.ts';
+import type { ChangeGit } from '../changes/source.ts';
 import type { RepoState } from '../push-guard/push.ts';
 import type { SecretsGit } from '../secret-guard/secrets-git.ts';
-import type { CredentialStore } from '../github/credentials.ts';
-import type { GhRunner } from '../github/gh.ts';
+import type { CredentialStore } from '../core/credentials.ts';
+import type { HttpClient } from '../core/http.ts';
+import type { GhRunner } from '../adapters/connectors/github/gh.ts';
 import type { ShellRunner } from '../test-run/shell.ts';
 import type { HostCpu } from '../delivery/cpu.ts';
 import type { HostMemory } from '../delivery/memory.ts';
 import type { StarterWatch } from '../delivery/starter-watch.ts';
 import type { StepRunner } from '../delivery/steps.ts';
 import type { HookRunner } from '../deploy/hooks.ts';
-import type { PullGit } from '../github/pull-conflicts.ts';
+import type { PullGit } from '../sync/pull-conflicts.ts';
 import type { MergeGit } from '../merge/git.ts';
 import type { TreeState } from '../delivery/push-pass.ts';
 import type { PackageRegistry } from '../package-guard/registry.ts';
@@ -41,7 +43,9 @@ import type { PointerGit } from '../setup/pointer-ignore.ts';
 import { FakeClock } from './fake-clock.ts';
 import { FakeSessionProcesses } from './fake-session-processes.ts';
 import { MemoryFiles } from './memory-files.ts';
+import { programOverGh } from './program-over-gh.ts';
 import { quietWorld } from './quiet-world.ts';
+import { shippedPermissions } from './shipped-permissions.ts';
 import { textFileBytes } from './text-file-bytes.ts';
 
 /** The user's home folder the CLI sees; the default skills folder lives under it. */
@@ -57,7 +61,12 @@ export const SKILLS_DIR = join(USER_HOME, '.claude', 'skills');
 /** The user's Claude Code settings, where doctor tells the user to paste the secret deny lines no settings file holds. */
 export const USER_SETTINGS = join(USER_HOME, '.claude', 'settings.json');
 /** Claude Code settings that hold every secret deny line of every platform, for a spec that writes the user's settings itself. */
-export const HELD_DENY: JsonRecord = { permissions: { deny: [...secretDenyLines('linux'), ghHostsDenyLine('win32')] } };
+export const HELD_DENY: JsonRecord = { permissions: { deny: heldDenyLines() } };
+
+function heldDenyLines(): string[] {
+  const permissions = shippedPermissions();
+  return [...new Set([...permissions.denyLines('linux'), ...permissions.denyLines('win32')])];
+}
 /** The project folder the CLI runs in, tied to team `app` by its pointer. */
 export const APP = resolve('/', 'work', 'app');
 export const POINTER = join(APP, '.teamrig.json');
@@ -114,6 +123,12 @@ export interface RunOptions {
   /** Where git puts the team pointer `team create` writes; default outside any repository. */
   readonly pointerGit?: PointerGit;
   readonly cwd?: string;
+  /**
+   * The person's home folder; default `USER_HOME`. A spec of a file a guard finds by the home folder gives
+   * `resolve(USER_HOME)`: on a Windows machine `USER_HOME` names no drive, and the guards place a path with none on
+   * the current folder's drive, as Windows does, so they would look for the file elsewhere than the home they are told.
+   */
+  readonly userHome?: string;
   /** The files the CLI sees for this run, such as a `FaultyFiles` over `files`; default `files`. */
   readonly files?: Files;
   /** The byte-exact files the CLI sees, such as one that fails on a path; default the run's files as UTF-8 text. */
@@ -122,6 +137,8 @@ export interface RunOptions {
   readonly configFormat?: ConfigFormat;
   /** cmd.exe's command line the `teamrig.cmd` shim passes; default none, as from Bash. */
   readonly cmdShimLine?: string;
+  /** The project history `teamrig changes` reads, such as a `FakeChangeGit`; default none. */
+  readonly changeGit?: ChangeGit;
   /** The commits git lists for any range; default none. */
   readonly commitLog?: CommitLog;
   /** The repository `teamrig secrets` scans, such as a `FakeSecretsGit`; default none it can read. */
@@ -142,6 +159,8 @@ export interface RunOptions {
   readonly gh?: GhRunner;
   /** The saved secrets `issue sync` reads tokens from; default a store with none. */
   readonly credentials?: CredentialStore;
+  /** The outside API a connector adapter reaches; default one where no request is answered. */
+  readonly http?: HttpClient;
   /** The folders and programs the CLI sees; default none. */
   readonly probe?: PathProbe;
   /** The plugin store the idle pass dates; default one with nothing in it. */
@@ -150,6 +169,10 @@ export interface RunOptions {
   readonly requirements?: RequirementsCheck;
   /** The Claude Code transcripts `budget` measures; default none. */
   readonly transcripts?: TranscriptSource;
+  /** The host ports the run is given; default the shipped host's (the quiet world's). */
+  readonly host?: HostSource;
+  /** The host adapters teamrig ships with, as the run sees them; default the shipped host alone (the quiet world's). */
+  readonly shippedHosts?: readonly HostSource[];
   /** The worktrees `worktree remove` sees; default none. */
   readonly worktrees?: WorktreePorts;
   /** The shutdown log and countdown `restore` sees; default no shutdown on record and a countdown that goes at once. */
@@ -178,6 +201,8 @@ export interface RunOptions {
   readonly webhook?: ChatWebhook;
   /** Where the CLI runs from and the node options it was started with; default the quiet world's, with none. */
   readonly self?: SelfLocation;
+  /** The signal that the run's stdout reader is gone (`Output.closed`), which a spec aborts; default an output that never closes. */
+  readonly outputClosed?: AbortSignal;
 }
 
 /**
@@ -213,7 +238,11 @@ export class CliHarness {
   async run(argv: readonly string[], options: RunOptions = {}): Promise<CliResult> {
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const out: Output = { stdout: (line) => stdout.push(line), stderr: (line) => stderr.push(line) };
+    const out: Output = {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+      ...(options.outputClosed === undefined ? {} : { closed: options.outputClosed }),
+    };
     const code = await runCli(argv, this.runtime(options, out));
     return { code, stdout, stderr };
   }
@@ -222,7 +251,7 @@ export class CliHarness {
   runtime(options: RunOptions = {}, out: Output = { stdout: () => undefined, stderr: () => undefined }): CliRuntime {
     return {
       env: { TEAMRIG_HOME: KIT, ...options.env },
-      userHome: USER_HOME,
+      userHome: options.userHome ?? USER_HOME,
       cwd: options.cwd ?? APP,
       pid: CLI_PID,
       files: options.files ?? this.files,
@@ -234,17 +263,21 @@ export class CliHarness {
       ...(options.git === undefined ? {} : { git: options.git }),
       ...(options.pointerGit === undefined ? {} : { pointerGit: options.pointerGit }),
       ...(options.commitLog === undefined ? {} : { commitLog: options.commitLog }),
+      ...(options.changeGit === undefined ? {} : { changeGit: options.changeGit }),
       ...(options.secretsGit === undefined ? {} : { secretsGit: options.secretsGit }),
       ...(options.platform === undefined ? {} : { platform: options.platform }),
       ...(options.processes === undefined ? {} : { processes: options.processes }),
       sessionProcesses: options.sessionProcesses ?? this.sessionProcesses,
       ...(options.shell === undefined ? {} : { shell: options.shell }),
-      ...(options.gh === undefined ? {} : { gh: options.gh }),
+      ...(options.gh === undefined ? {} : { run: programOverGh(options.gh) }),
       ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+      ...(options.http === undefined ? {} : { http: options.http }),
       ...(options.probe === undefined ? {} : { probe: options.probe }),
       ...(options.pluginStore === undefined ? {} : { pluginStore: options.pluginStore }),
       ...(options.requirements === undefined ? {} : { requirements: options.requirements }),
       ...(options.transcripts === undefined ? {} : { transcripts: options.transcripts }),
+      ...(options.host === undefined ? {} : { host: options.host }),
+      ...(options.shippedHosts === undefined ? {} : { shippedHosts: options.shippedHosts }),
       ...(options.worktrees === undefined ? {} : { worktrees: options.worktrees }),
       ...(options.restore === undefined ? {} : { restore: options.restore }),
       ...(options.steps === undefined ? {} : { steps: options.steps }),

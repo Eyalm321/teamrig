@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { commandLine, endOf, nodeShellRunner, unrunnableReason } from './shell.ts';
+import { commandLine, nodeShellRunner, unrunnableReason } from './shell.ts';
 
 const DIR = mkdtempSync(join(tmpdir(), 'teamrig-shell-'));
 const ENV = { ...process.env, TEAMRIG_PROBE: 'probe value' };
@@ -75,23 +75,21 @@ describe('unrunnableReason', () => {
   });
 });
 
-describe('endOf', () => {
-  it('reads an exit code, or the signal when there is none', () => {
-    assert.deepEqual(endOf(3, null), { kind: 'exited', code: 3 });
-    assert.deepEqual(endOf(null, 'SIGTERM'), { kind: 'signal', signal: 'SIGTERM' });
-    assert.deepEqual(endOf(null, null), { kind: 'signal', signal: 'an unknown signal' });
-  });
-});
-
 describe('nodeShellRunner', () => {
   const shell = nodeShellRunner();
 
-  it('keeps stdout and stderr together in the order they arrived', async () => {
+  it('keeps stdout and stderr together, each stream in the order it was written', async () => {
     const command = script(
       'order.mjs',
       "const wait = () => new Promise((done) => setTimeout(done, 40));\nprocess.stdout.write('one\\n'); await wait();\nprocess.stderr.write('two\\n'); await wait();\nprocess.stdout.write('three é\\n');\n",
     );
-    assert.deepEqual(await shell.run({ command, cwd: DIR, env: ENV }), { end: { kind: 'exited', code: 0 }, output: 'one\ntwo\nthree é\n' });
+    const { end, output } = await shell.run({ command, cwd: DIR, env: ENV });
+    assert.deepEqual(end, { kind: 'exited', code: 0 });
+    // stdout and stderr are two pipes, read as each one's reads fire: a parent starved past the child's gaps may
+    // read both stdout writes before the stderr one, so only each stream's own order is certain.
+    const lines = output.split('\n');
+    assert.deepEqual([...lines].sort(), ['', 'one', 'three é', 'two']);
+    assert.deepEqual(lines.filter((line) => line !== 'two'), ['one', 'three é', '']);
   });
 
   it('reports a failing exit code with what was printed', async () => {

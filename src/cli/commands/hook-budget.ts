@@ -15,6 +15,7 @@ import { runMeter } from '../../budget/meter.ts';
 import { budgetSplitOf, dailyBudgetOf } from '../../budget/parts.ts';
 import { fundForDay, isPaused, pausableOf } from '../../budget/pause.ts';
 import { keepSessionsWeek, sessionsWeekOf } from '../../budget/session-week-file.ts';
+import { unheldOf } from '../../budget/unheld.ts';
 import { UsageStore, type UsageState } from '../../budget/store.ts';
 import { keepTasksWeek, tasksWeekOf } from '../../budget/task-week-file.ts';
 import { teamWeekOf } from '../../budget/team-week.ts';
@@ -24,9 +25,11 @@ import { WarnStore } from '../../budget/warn-store.ts';
 import { wSince } from '../../budget/week.ts';
 import { cachedWork, WORK_CACHE_FILE } from '../../budget/work.ts';
 import { postLine } from '../../inbox/inbox.ts';
-import { holdBack } from '../../hooks/permission.ts';
+import { heldBack } from '../../hooks/permission.ts';
+import type { HookReply } from '../../ports/host/index.ts';
 import { helperLaunchReminder } from '../../rules/helper-default.ts';
 import { accountWeekOn, otherTeamsOnAccount } from '../account-teams.ts';
+import { transcriptsOf, usageOf } from '../host.ts';
 import { teamZone, type Kit } from '../kit.ts';
 import type { CliRuntime } from '../runtime.ts';
 import { peerStatesOf } from '../stored-week.ts';
@@ -64,7 +67,7 @@ async function subagentsOf(folders: TranscriptFolders, transcript: string): Prom
 async function meterTab(runtime: CliRuntime, store: UsageStore, id: string, transcript: string, budget: BudgetConfig): Promise<void> {
   const transcripts = { main: [transcript], subagents: await subagentsOf(runtime.transcripts, transcript) };
   await runMeter(
-    { bytes: runtime.transcripts, store, clock: runtime.clock },
+    { bytes: runtime.transcripts, reader: transcriptsOf(runtime), usage: usageOf(runtime), store, clock: runtime.clock },
     { session: id, transcripts, subagentWeight: budget.subagentWeight, modelWeights: budget.modelWeights, maxBytes: budget.maxBytesPerHook },
   );
 }
@@ -204,6 +207,7 @@ export async function budgetFactsOf(runtime: CliRuntime, scope: BudgetScope, tra
     pace: week.pace,
     teamDay,
     isLead,
+    unheld: unheldOf(config, kit.paths.team).has(id),
     urgent: work.urgent.get(id) ?? [],
     awaited: work.awaited.get(id) ?? [],
     leader: budgetLeaderOf(config, roster, id),
@@ -276,12 +280,12 @@ async function budgetGateOf(runtime: CliRuntime, scope: BudgetScope, transcript:
 }
 
 /**
- * The PreToolUse output at each helper launch: rule 8's helper default as model context (`helperLaunchReminder`),
- * plus the budget's ask or refusal when it holds the launch back (an ask is a refusal under `prompts.hookAsks: refuse`).
+ * The reply at each helper launch: rule 8's helper default as model context (`helperLaunchReminder`), plus the
+ * budget's refusal when it holds the launch back (what it would have asked a person about is refused too, see
+ * `heldBack`).
  */
-export async function helperGateOutput(runtime: CliRuntime, scope: BudgetScope, transcript: string | undefined): Promise<string> {
+export async function helperGateReply(runtime: CliRuntime, scope: BudgetScope, transcript: string | undefined): Promise<HookReply> {
   const gate = await budgetGateOf(runtime, scope, transcript);
-  const decision = gate.kind === 'allow' ? {} : holdBack(gate.kind, gate.reason);
-  const additionalContext = helperLaunchReminder(scope.config.budget.subagentWeight);
-  return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...decision, additionalContext } });
+  const context = helperLaunchReminder(scope.config.budget.subagentWeight);
+  return gate.kind === 'allow' ? { context } : { ...heldBack(gate.kind, gate.reason), context };
 }

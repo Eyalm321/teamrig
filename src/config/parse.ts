@@ -1,4 +1,5 @@
 import { ADMISSION_MODES, isAdmissionMode } from '../delivery/admission.ts';
+import { CHANGE_SOURCE_IDS, isChangeSourceId } from '../changes/ids.ts';
 import { deployTargetsOf } from '../delivery/targets.ts';
 import { ADDRESS_PATTERN, splitAddress } from '../core/address.ts';
 import { isRecord, type JsonRecord } from '../core/guards.ts';
@@ -30,6 +31,7 @@ import {
   DEFAULT_QUEUE,
   DEFAULT_HIRING,
   DEFAULT_EXEC,
+  DEFAULT_CHANGES,
   DEFAULT_LOCK,
   DEFAULT_LEAD_BOUNDARY,
   DEFAULT_TURN_LOG,
@@ -70,6 +72,7 @@ import {
   APPLY_FLAG_PATTERN,
   BUDGET_ACCOUNT_MAX_LENGTH,
   CLIENT_RECEIVER_PATTERN,
+  CONNECTOR_LIMITS,
   CONFIG_LIMITS,
   DB_PROGRAM_NAME_PATTERN,
   DB_WRITE_ENTRYPOINT_LIMITS,
@@ -145,6 +148,7 @@ import {
   SKIP_HOOKS,
   TERMINALS,
   type AlertsConfig,
+  type ChangesConfig,
   type ContextFilesConfig,
   type ExecConfig,
   type OtherAreaListing,
@@ -205,6 +209,7 @@ import {
   type PriorityConfig,
   type TeamLink,
   type TurnLogConfig,
+  type UiConfig,
   type NeedsYouConfig,
   type MeetingNoticesConfig,
   type WakeConfig,
@@ -565,6 +570,7 @@ export function parseConfig(raw: JsonRecord, above?: AccountBudget): ConfigParse
       waitMs: read.integer(lock, 'waitMs', 'lock', DEFAULT_LOCK.waitMs, { min: 0 }),
     },
     exec: parseExec(read, read.section(raw, 'exec', '')),
+    changes: parseChanges(read, read.section(raw, 'changes', '')),
     pushGuard: {
       protectedBranches: read.stringList(
         pushGuard,
@@ -602,17 +608,20 @@ export function parseConfig(raw: JsonRecord, above?: AccountBudget): ConfigParse
     },
     github: parseGithub(read, read.section(raw, 'github', ''), sessions),
     serviceRoles: parseServiceRoles(read, read.section(raw, 'serviceRoles', ''), sessions),
+    connectors: parseConnectors(read, read.section(raw, 'connectors', '')),
     alerts: parseAlerts(read, read.section(raw, 'alerts', '')),
     decisions: {
       batchTimesUtc: read.stringList(decisions, 'batchTimesUtc', 'decisions', DEFAULT_DECISIONS.batchTimesUtc, isUtcTime, CONFIG_LIMITS.decisionBatchTimes.maxItems),
       batchAt: read.integer(decisions, 'batchAt', 'decisions', DEFAULT_DECISIONS.batchAt, CONFIG_LIMITS.decisionBatchAt),
       dedicatedOwners: read.stringList(decisions, 'dedicatedOwners', 'decisions', DEFAULT_DECISIONS.dedicatedOwners, isSessionName, CONFIG_LIMITS.dedicatedOwners.maxItems),
+      ownMeetingTeams: read.stringList(decisions, 'ownMeetingTeams', 'decisions', DEFAULT_DECISIONS.ownMeetingTeams, isSessionName, CONFIG_LIMITS.ownMeetingTeams.maxItems),
     },
     tabStatus: { enabled: read.boolean(tabStatus, 'enabled', 'tabStatus', false) },
     needsYou: parseNeedsYou(read, read.section(raw, 'needsYou', '')),
     pickerGuard: { enabled: read.boolean(pickerGuard, 'enabled', 'pickerGuard', true) },
     meeting: parseMeeting(read, read.section(raw, 'meeting', '')),
     turnLog: parseTurnLog(read, read.section(raw, 'turnLog', '')),
+    ui: parseUi(read, read.section(raw, 'ui', '')),
     meetingNotices: parseMeetingNotices(read, read.section(raw, 'meetingNotices', '')),
     readonlyShell: parseReadonlyShell(read, read.section(raw, 'readonlyShell', '')),
     permissions: parsePermissions(read, read.section(raw, 'permissions', '')),
@@ -712,16 +721,20 @@ function isInQuietHours(time: string, quiet: QuietHours): boolean {
 }
 
 /**
- * `wake`: a priority as the register numbers them, both waits bounded to a day at most, and a day start outside
- * the budget's quiet hours, where it would wake no one.
+ * `wake`: a priority as the register numbers them, the waits bounded to a day at most, a most gap no less than the
+ * least (else read as it), and a day start outside the budget's quiet hours, where it would wake no one.
  */
 function parseWake(read: ConfigReader, raw: JsonRecord, quietHours: QuietHours | undefined): WakeConfig {
-  const wake: WakeConfig = {
-    enabled: read.boolean(raw, 'enabled', 'wake', DEFAULT_WAKE.enabled),
-    priority: read.integer(raw, 'priority', 'wake', DEFAULT_WAKE.priority, CONFIG_LIMITS.wakePriority),
-    batchSeconds: read.integer(raw, 'batchSeconds', 'wake', DEFAULT_WAKE.batchSeconds, CONFIG_LIMITS.wakeBatchSeconds),
-    minGapMinutes: read.integer(raw, 'minGapMinutes', 'wake', DEFAULT_WAKE.minGapMinutes, CONFIG_LIMITS.wakeMinGapMinutes),
-  };
+  const enabled = read.boolean(raw, 'enabled', 'wake', DEFAULT_WAKE.enabled);
+  const priority = read.integer(raw, 'priority', 'wake', DEFAULT_WAKE.priority, CONFIG_LIMITS.wakePriority);
+  const batchSeconds = read.integer(raw, 'batchSeconds', 'wake', DEFAULT_WAKE.batchSeconds, CONFIG_LIMITS.wakeBatchSeconds);
+  const minGapMinutes = read.integer(raw, 'minGapMinutes', 'wake', DEFAULT_WAKE.minGapMinutes, CONFIG_LIMITS.wakeMinGapMinutes);
+  // A team that raised only the least gap past the default most keeps one fixed gap, as before the most existed.
+  const maxGapMinutes = read.integer(raw, 'maxGapMinutes', 'wake', Math.max(DEFAULT_WAKE.maxGapMinutes, minGapMinutes), CONFIG_LIMITS.wakeMaxGapMinutes);
+  if (maxGapMinutes < minGapMinutes) {
+    read.report('wake.maxGapMinutes', `is less than wake.minGapMinutes (${minGapMinutes}); read as ${minGapMinutes}`);
+  }
+  const wake: WakeConfig = { enabled, priority, batchSeconds, minGapMinutes, maxGapMinutes: Math.max(maxGapMinutes, minGapMinutes) };
   const dayStartUtc = read.optionalString(raw, 'dayStartUtc', 'wake', isUtcTime);
   if (dayStartUtc === undefined) {
     return wake;
@@ -918,6 +931,32 @@ function parseServiceRoles(read: ConfigReader, raw: JsonRecord, sessions: readon
     }
   }
   return roles;
+}
+
+/**
+ * `connectors`: each connector's section under its id, kept as written. Only the shape is checked here (an id an
+ * adapter could declare, an object under it), since the keys are the connector's own and its adapter reports a wrong
+ * one when a command reaches it; a section under a bad id or of another type is an issue and is left out.
+ */
+function parseConnectors(read: ConfigReader, raw: JsonRecord): Record<string, JsonRecord> {
+  const ids = Object.keys(raw);
+  if (ids.length > CONNECTOR_LIMITS.maxConnectors) {
+    read.report('connectors', `names ${ids.length} connectors; at most ${CONNECTOR_LIMITS.maxConnectors}`);
+    return {};
+  }
+  const connectors: Record<string, JsonRecord> = {};
+  for (const id of ids) {
+    const path = `connectors.${id}`;
+    if (!CONNECTOR_LIMITS.idPattern.test(id)) {
+      read.report(path, 'expected a connector id: lower-case words joined by -');
+      continue;
+    }
+    const section = read.objectItem(raw[id], path);
+    if (section !== undefined) {
+      connectors[id] = section;
+    }
+  }
+  return connectors;
 }
 
 /** A role's commands: a non-empty list of names from the table, each once; undefined when any is wrong. */
@@ -1596,6 +1635,7 @@ function parseRegister(read: ConfigReader, raw: JsonRecord): RegisterConfig {
     check: {
       staleAfterHours: read.integer(check, 'staleAfterHours', `${path}.check`, defaults.check.staleAfterHours, { min: 1 }),
       notPickedUpAfterHours: read.integer(check, 'notPickedUpAfterHours', `${path}.check`, defaults.check.notPickedUpAfterHours, { min: 1 }),
+      blockerOpenAfterHours: read.integer(check, 'blockerOpenAfterHours', `${path}.check`, defaults.check.blockerOpenAfterHours, { min: 1 }),
       prioritySkipAfterHours: read.integer(check, 'prioritySkipAfterHours', `${path}.check`, defaults.check.prioritySkipAfterHours, { min: 1 }),
       maxSelfMadePerDay: read.integer(check, 'maxSelfMadePerDay', `${path}.check`, defaults.check.maxSelfMadePerDay, CONFIG_LIMITS.maxSelfMadePerDay),
       goalProgressDays: read.integer(check, 'goalProgressDays', `${path}.check`, defaults.check.goalProgressDays, CONFIG_LIMITS.goalProgressDays),
@@ -1659,6 +1699,12 @@ function parseStatusAmong(read: ConfigReader, value: unknown, path: string, allo
   return undefined;
 }
 
+function parseChanges(read: ConfigReader, raw: JsonRecord): ChangesConfig {
+  const known = `one of ${CHANGE_SOURCE_IDS.join(', ')}`;
+  const sources = read.stringList(raw, 'sources', 'changes', DEFAULT_CHANGES.sources, (id) => (isChangeSourceId(id) ? undefined : known), CHANGE_SOURCE_IDS.length);
+  return { sources: [...new Set(sources.filter(isChangeSourceId))] };
+}
+
 function parseExec(read: ConfigReader, raw: JsonRecord): ExecConfig {
   const path = 'exec';
   const webhookEnv = read.optionalString(raw, 'webhookEnv', path, ENV_VARIABLE);
@@ -1666,6 +1712,12 @@ function parseExec(read: ConfigReader, raw: JsonRecord): ExecConfig {
     path: read.stringList(raw, 'path', path, DEFAULT_EXEC.path, shortLine(CONFIG_LIMITS.execPath.maxLength, EXEC_DIRECTORY), CONFIG_LIMITS.execPath.maxItems),
     ...(webhookEnv === undefined ? {} : { webhookEnv }),
   };
+}
+
+/** `ui`: a bad path is dropped, so `teamrig ui` starts the released UI rather than a file nobody named. */
+function parseUi(read: ConfigReader, raw: JsonRecord): UiConfig {
+  const path = read.optionalString(raw, 'path', 'ui', isAbsoluteFile);
+  return path === undefined ? {} : { path };
 }
 
 function parseAlerts(read: ConfigReader, raw: JsonRecord): AlertsConfig {

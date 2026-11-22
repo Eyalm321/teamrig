@@ -2,8 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
 import { projectTranscriptPath } from '../budget/discover.ts';
+import type { HostSource } from '../composition/host-ports.ts';
 import { isRecord, type JsonRecord } from '../core/guards.ts';
 import { MeetingSchedule, type ScheduledMeeting } from '../meeting/schedule.ts';
+import { bareHost } from '../testing/bare-host.ts';
 import type { RestoreEntry } from '../restore/entry.ts';
 import { RefreshStore } from '../refresh/store.ts';
 import { RestoreRegistry, restoreSessionsDir } from '../restore/registry.ts';
@@ -12,6 +14,7 @@ import { SessionRecordStore } from '../sessions/record.ts';
 import { HOLDING_BUDGET, holdAlpha } from '../testing/budget-hold.ts';
 import { APP, CLAUDE_SESSION, CliHarness, KIT, TEAM, TEAM_HOME, USER_HOME, type CliResult, type RunOptions } from '../testing/cli-harness.ts';
 import { ok } from '../testing/hired-team.ts';
+import { hostRunning } from '../testing/host.ts';
 import { FakeHostMemory } from '../testing/fake-host-memory.ts';
 import { FakePathProbe } from '../testing/fake-processes.ts';
 import { FakeSessionProcesses } from '../testing/fake-session-processes.ts';
@@ -217,6 +220,16 @@ describe('teamrig close', () => {
     assert.deepEqual(alpha.processes.ends, []);
   });
 
+  it("closes a session running in the program its host names, and none whose process no host calls a session's", async () => {
+    const alpha = await runningAlpha();
+    alpha.processes.add({ ...CLAUDE, name: 'agent-desk', commandLine: 'agent-desk' });
+    assertRefused(await close(alpha, ['alpha', '--yes', '--session', 'lead']), /alpha \(session alpha\) is not running: nothing to close/);
+    assert.deepEqual(alpha.processes.ends, []);
+    const told = await close({ ...alpha, options: { ...alpha.options, host: hostRunning('agent-desk') } }, ['alpha', '--session', 'lead']);
+    assert.equal(told.code, 0, told.stdout.join('\n'));
+    assert.match(told.stdout[0] ?? '', /^CLOSE app-alpha \(session alpha\): quiet 75 min/);
+  });
+
   it('keeps open a session with work it can start, one quiet too briefly, and one running background work', async () => {
     const busy = await runningAlpha();
     const added = await busy.kit.run(['add', '--title', 'Ship the release', '--description', 'what and why', '--priority', 'p2', '--owner', 'alpha', '--session', 'lead']);
@@ -227,6 +240,11 @@ describe('teamrig close', () => {
 
     const helping = await runningAlpha(75, `${reply(40_000)}${backgroundAgent(80)}${reply(40_000)}`);
     assertRefused(await close(helping, ['alpha', '--yes', '--session', 'lead']), /still runs background work its transcript shows/);
+
+    // A host with no transcript teamrig can read hides that work: the session stays open, never closed on a guess.
+    const bare: HostSource = bareHost;
+    const unread = { ...helping, options: { ...helping.options, host: bare } };
+    assertRefused(await close(unread, ['alpha', '--yes', '--session', 'lead']), /runs on a host whose transcript teamrig cannot read, so what it still runs is unknown/);
     for (const kept of [busy, helping]) {
       assert.deepEqual(kept.processes.ends, []);
       assert.deepEqual(kept.processes.described, [], 'a session the cheap checks keep costs no look at its process');
@@ -240,6 +258,12 @@ describe('teamrig close', () => {
     assert.equal(preview.code, 0, [...preview.stdout, ...preview.stderr].join('\n'));
     assert.match(preview.stdout[0] ?? '', /^CLOSE app-alpha \(session alpha\): quiet 75 min, /);
     assertRefused(await close(await runningAlpha(2, `${reply(40_000, 30)}${away}`), ['alpha', '--yes', '--session', 'lead']), /quiet 30 min; it closes after 60/);
+  });
+
+  it('reads an entry stamped after the check began, as one written while it reads, as quiet 0 min, never negative (#1737)', async () => {
+    const ahead = await runningAlpha(0, reply(40_000, -3));
+    assertRefused(await close(ahead, ['alpha', '--yes', '--session', 'lead']), /has been quiet 0 min; it closes after 60 \(open\.headroom\.closeIdleMinutes\)/);
+    assert.deepEqual(ahead.processes.ends, []);
   });
 
   it('weighs work as its budget lets it start it: one the budget holds closes with p1 work, and stays open for p0 (T1159)', async () => {

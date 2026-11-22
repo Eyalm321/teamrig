@@ -6,7 +6,7 @@ import { nodeFiles } from '../../src/core/files.ts';
 import { ENV } from '../../src/core/home.ts';
 import { gitSyncIn } from '../lib/git.ts';
 import { realSleep, systemClock } from '../../src/core/lock.ts';
-import { type ClearMerge, type WorkCommit, approvedRebase, clearMergeFrom, teamrigShipWritesOf, workCommitsOf } from './approval.ts';
+import { type ClearMerge, type ClearTaskMerge, type MergeClearance, type WorkCommit, approvedRebase, clearMergeFrom, clearTaskMergeFrom, teamrigShipWritesOf, workCommitsOf } from './approval.ts';
 import { buildScriptOf, buildSteps } from './build-steps.ts';
 import { type CatchUp, type CatchUpRequest, catchUp } from './catch-up.ts';
 import { type CheckOutcome, type Gh, type RequiredChecks, ghWithToken, readChecks, rerunFailedJobs, verdictOf } from './github.ts';
@@ -15,9 +15,14 @@ import { type MergeOutcome, type PullRequest, findOpenPull, openPull, rebaseMerg
 import { type MergedHead, pullsOfHead, sweepAfterMerge } from './leftovers.ts';
 import { type GateDeps, proveTree, realGateDeps } from './local-gate.ts';
 import { type LandingTurn, processLandingTurn } from './landing-turn.ts';
+import { type ReleaseCatchUpRequest, catchUpRelease } from './release-catch-up.ts';
+import { releaseRefusal } from './release-pull.ts';
+import { queueLanding } from './merge-queue.ts';
 import { realRenamedCallersDeps, renamedCallersRefusal } from './renamed-callers.ts';
-import { type LocalChecks, type RepoProfile, profileFor, readProfiles, slugOf } from './repos.ts';
+import { type LocalChecks, type ReleasePull, type RepoProfile, profileFor, readProfiles, slugOf } from './repos.ts';
 import { APPROVED_SHA } from './ship-plan.ts';
+import { type PullTaskRead, labelPull, pullFaceOf, pullTaskFrom } from './pull-task.ts';
+import { type Supersede, pullCommitsOf, supersedeFrom } from './superseded.ts';
 import { describeCredential } from './token-check.ts';
 
 /**
@@ -32,6 +37,12 @@ import { describeCredential } from './token-check.ts';
  * command while a consumer on this machine still calls only the old name (see renamed-callers.ts). Once merged,
  * it deletes on origin the merged head while it is still at the merged sha, the branches an earlier push of the
  * same task left with no work main lacks, and every closed, unmerged pull request's head (leftovers.ts).
+ *
+ * `--release <task>` merges the repo's release pull request instead (T4645): the head its release tool pushed, read
+ * from origin, only while it holds nothing but a release (release-pull.ts), on that task's approval; the merge never
+ * opens that pull request. The release tool rewrites its head when main gains a commit its changelog shows; a main
+ * that gained only hidden ones leaves the head behind, so the merge catches that head up itself and merges it on the
+ * same approval (release-catch-up.ts, T5055), and refuses any other move.
  *
  * A rebase merge replays the branch onto main as it is at merge time, and GitHub merges a stale branch
  * whenever it does not conflict: what lands is then a tree no check ran on, and a commit that repeats one
@@ -140,6 +151,18 @@ export interface MergeRequest {
    * body opens no pull request; one already open merges with a warning line, so no queued merge breaks (T3058).
    */
   lacks: string | null;
+  /**
+   * Whether the merge opens the pull request when none is open; false for the release pull request, which only its
+   * release tool opens, from the head it wrote (T4645).
+   */
+  opens: boolean;
+  /** The labels the pull request gets once it is found or opened at the head (pull-task.ts, T4796). */
+  labels: readonly string[];
+  /**
+   * Why the pull request may not open, as its task links no issue (pull-task.ts, T4796); null when it may. One already
+   * open merges with a warning line, as with `lacks`.
+   */
+  unlinked: string | null;
 }
 
 /** What proves a pull request's head before it merges: the repo's gate. */
@@ -308,43 +331,77 @@ function mergeOrLanded(gh: Gh, main: MainBranch, request: MergeRequest, pull: nu
   return { merged: false, message: `${first.message}; again: ${second.message}; ${request.base} does not hold the checked tree, so check #${pull} on GitHub before shipping again` };
 }
 
-export async function mergeThroughPull(request: MergeRequest, gh: Gh, main: MainBranch, proof: Proof, log: (line: string) => void): Promise<MergeResult> {
+/** How a proven pull request lands on main: GitHub's merge call from here, or GitHub's merge queue (merge-queue.ts). */
+export interface Landing {
+  /** main's move that stops `request` landing as checked, read before its proof; null when none. */
+  behind(request: MergeRequest): MainMove | null;
+  /** Lands the proven pull request at `request.sha`, or says why it did not. */
+  land(pull: PullRequest, request: MergeRequest, log: (line: string) => void): Promise<MergeResult>;
+}
+
+/**
+ * GitHub's merge call from here, pinned to the checked head: main read once more after the proof, as it may have
+ * moved while the checks ran, then the merge, then the tree main holds compared with the checked one.
+ */
+export function directLanding(gh: Gh, main: MainBranch): Landing {
+  return {
+    behind: request => behindMain(main, request),
+    land: async (pull, request, log) => {
+      const checkedTip = main.tip();
+      const moved = behindMain(main, request, checkedTip);
+      if (moved !== null) return { kind: 'moved', pull, ...moved };
+      const merged = mergeOrLanded(gh, main, request, pull.number, checkedTip, log);
+      if (!merged.merged) {
+        // Read main only for this answer: it names main's move, and the head is then simply behind it.
+        const raced = BASE_MODIFIED.test(merged.message) ? behindMain(main, request) : null;
+        if (raced !== null) return { kind: 'moved', pull, ...raced };
+        const rule = REPO_RULE.test(merged.message) ? " (a rule set on the repo, not the change: changing it is the repo owner's call, so report it and stop)" : '';
+        return { kind: 'refused', pull, reason: `GitHub refused the merge: ${merged.message}${rule}` };
+      }
+      const drift = driftAfter(main, request, merged.sha);
+      switch (drift.kind) {
+        case 'same':
+          return { kind: 'merged', pull, sha: merged.sha };
+        case 'drifted':
+          return { kind: 'drifted', pull, sha: merged.sha, reason: drift.reason };
+        case 'unread':
+          return { kind: 'unchecked', pull, sha: merged.sha, reason: drift.reason };
+      }
+    },
+  };
+}
+
+export async function mergeThroughPull(
+  request: MergeRequest,
+  gh: Gh,
+  main: MainBranch,
+  proof: Proof,
+  log: (line: string) => void,
+  supersede: Supersede,
+  landing: Landing = directLanding(gh, main),
+): Promise<MergeResult> {
   const { repo, head, base, sha } = request;
-  const stale = behindMain(main, request);
+  const stale = landing.behind(request);
   if (stale !== null) return { kind: 'moved', pull: null, ...stale };
   const unready = proof.before(sha);
   if (unready !== null) return { kind: 'refused', pull: null, reason: unready };
   const found = findOpenPull(gh, repo, head, base);
+  if (found === null && !request.opens) return { kind: 'refused', pull: null, reason: `no open pull request from ${head} into ${base}: the release tool opens it, never a merge` };
   if (found === null && request.lacks !== null) return { kind: 'refused', pull: null, reason: lackingSections(request.lacks) };
+  if (found === null && request.unlinked !== null) return { kind: 'refused', pull: null, reason: request.unlinked };
   const pull = found ?? openPull(gh, repo, head, base, request.title, request.body);
   log(`${found === null ? 'opened' : 'found'} pull request #${pull.number} ${pull.url}`);
   if (found !== null && request.lacks !== null) log(`warning: pull request #${pull.number} lacks ${request.lacks}, which this repo's template asks for: add it to its text`);
+  if (found !== null && request.unlinked !== null) log(`warning: pull request #${pull.number}: ${request.unlinked}`);
   if (pull.headSha !== sha) return { kind: 'refused', pull, reason: `the pull request head ${pull.headSha.slice(0, 7)} is not ${head} ${sha.slice(0, 7)}: push ${head} first` };
+  labelPull(gh, repo, pull.number, request.labels, log);
+  // Before the checks, which may run long: the earlier pushes' pull requests stop asking for review now (T4780). The
+  // release pull request has no earlier pushes: its tool rewrites one head.
+  if (request.opens) supersede(pull);
 
   const failed = await proof.prove(sha, log);
   if (failed !== null) return { kind: 'refused', pull, reason: failed };
-  // main may have moved while the checks ran.
-  const checkedTip = main.tip();
-  const moved = behindMain(main, request, checkedTip);
-  if (moved !== null) return { kind: 'moved', pull, ...moved };
-
-  const merged = mergeOrLanded(gh, main, request, pull.number, checkedTip, log);
-  if (!merged.merged) {
-    // Read main only for this answer: it names main's move, and the head is then simply behind it.
-    const raced = BASE_MODIFIED.test(merged.message) ? behindMain(main, request) : null;
-    if (raced !== null) return { kind: 'moved', pull, ...raced };
-    const rule = REPO_RULE.test(merged.message) ? " (a rule set on the repo, not the change: changing it is the repo owner's call, so report it and stop)" : '';
-    return { kind: 'refused', pull, reason: `GitHub refused the merge: ${merged.message}${rule}` };
-  }
-  const drift = driftAfter(main, request, merged.sha);
-  switch (drift.kind) {
-    case 'same':
-      return { kind: 'merged', pull, sha: merged.sha };
-    case 'drifted':
-      return { kind: 'drifted', pull, sha: merged.sha, reason: drift.reason };
-    case 'unread':
-      return { kind: 'unchecked', pull, sha: merged.sha, reason: drift.reason };
-  }
+  return landing.land(pull, request, log);
 }
 
 /** git's refusal of a fetch whose remote ref another fetch of the same repo (another worktree) moved under it. */
@@ -381,13 +438,18 @@ export interface MergeArgs {
   noteFile: string | null;
   /** The head sha the caller's approver approved (T2788); a merge of any other head is refused. */
   approved: string | null;
+  /**
+   * The release task (`T<id>`) on whose approval the repo's release pull request merges (`--release`, T4645); null for
+   * a change branch, cleared on the task its name holds.
+   */
+  release: string | null;
 }
 
 export function parseArgs(argv: readonly string[]): MergeArgs {
-  const usage = 'usage: ship.ts merge <repo dir> [--head <branch>] [--approved <sha>] [--timeout-min <n>] [--interval-s <n>] [--note-file <path>]';
+  const usage = 'usage: ship.ts merge <repo dir> [--head <branch> | --release <task>] [--approved <sha>] [--timeout-min <n>] [--interval-s <n>] [--note-file <path>]';
   const [dir, ...rest] = argv;
   if (dir === undefined || dir.startsWith('--')) throw new Error(usage);
-  const parsed: MergeArgs = { dir, head: null, timeoutMin: 45, intervalS: 30, noteFile: null, approved: null };
+  const parsed: MergeArgs = { dir, head: null, timeoutMin: 45, intervalS: 30, noteFile: null, approved: null, release: null };
   for (let i = 0; i < rest.length; i += 2) {
     const [flag, value] = [rest[i], rest[i + 1]];
     if (value === undefined) throw new Error(`${flag ?? ''} needs a value`);
@@ -396,13 +458,13 @@ export function parseArgs(argv: readonly string[]): MergeArgs {
     else if (flag === '--interval-s' && /^\d+$/.test(value) && Number(value) > 0) parsed.intervalS = Number(value);
     else if (flag === '--note-file' && !value.startsWith('--')) parsed.noteFile = value;
     else if (flag === '--approved' && APPROVED_SHA.test(value)) parsed.approved = value;
+    else if (flag === '--release' && /^T\d+$/.test(value)) parsed.release = value;
     else throw new Error(`${usage} (got ${flag} ${value})`);
   }
+  if (parsed.release !== null && parsed.head !== null) throw new Error(`${usage} (--release merges the branch repos.json names for the release pull request, so it takes no --head)`);
+  if (parsed.release !== null && parsed.noteFile !== null) throw new Error(`${usage} (--release opens no pull request, so it takes no --note-file)`);
   return parsed;
 }
-
-/** The title of the pull request a ship opens from `head` into `main` for `commits` work commits. */
-export const pullTitle = (head: string, main: string, commits: number): string => `Merge ${head} into ${main}: ${commits} commit(s)`;
 
 /** Why no pull request opens on a note lacking the template's `lacks` sections (missingSections). */
 export const lackingSections = (lacks: string): string => `the pull request would lack ${lacks}, which this repo's template asks for: write it in a --note-file and ship again`;
@@ -516,10 +578,18 @@ export interface MergeDeps {
   sweep: (merged: MergedHead, profile: RepoProfile, gh: Gh) => void;
   /** Whether the caller may merge the branch at its head on the approval it names (approval.ts, T2788). */
   clearMerge: ClearMerge;
+  /** Whether the caller may merge the release pull request's head on the approval of the release task it names (T4645). */
+  clearTaskMerge: ClearTaskMerge;
+  /** Why the release pull request's head at `sha` holds more than a release, or null when it holds only that (release-pull.ts). */
+  releaseRefusal: (profile: RepoProfile, release: ReleasePull, sha: string) => string | null;
   /** A head main moved past, rebased onto main's tip and pushed as a new branch when its diff stays the same (catch-up.ts). */
   catchUp: (request: CatchUpRequest) => CatchUp;
+  /** The release pull request's head main moved past only by commits its changelog hides, rebased and pushed (release-catch-up.ts, T5055). */
+  releaseCatchUp: (request: ReleaseCatchUpRequest) => CatchUp;
   /** The work commits `rev` carries over origin's main, with their patch ids (approval.ts `workCommitsOf`). */
   workOf: (rev: string) => readonly WorkCommit[];
+  /** The register's task of a head branch, which dresses its pull request (pull-task.ts, T4796). */
+  pullTask: PullTaskRead;
   /** The queued step's host share, set aside while the merge waits on GitHub (T3336). */
   share: StepShare;
   /** This merge's place in the repo's line: once its checks pass, it waits for older merges to land (landing-turn.ts, T4196). */
@@ -574,7 +644,7 @@ function approvalGate(args: MergeArgs, deps: MergeDeps): MergeGate {
     }
     const clearance = await deps.clearMerge(head, rebase === null ? sha : rebase.approved, args.approved);
     if (clearance.kind === 'refused') return clearance.reason;
-    const by = clearance.kind === 'self' ? "the caller's own, a root team's lead" : `approved by ${clearance.by}`;
+    const by = clearedBy(clearance);
     const carried = rebase === null ? '' : `carries the approved ${rebase.approved.slice(0, 9)}'s ${rebase.work} work commit(s), patch for patch, `;
     deps.out(`merge of ${head} ${sha.slice(0, 9)}: ${carried}${by}`);
     cleared = { head, sha, by };
@@ -582,38 +652,102 @@ function approvalGate(args: MergeArgs, deps: MergeDeps): MergeGate {
   };
 }
 
+/** Who cleared a merge, as its out line names them. */
+const clearedBy = (clearance: Exclude<MergeClearance, { kind: 'refused' }>): string =>
+  clearance.kind === 'self' ? "the caller's own, a root team's lead" : `approved by ${clearance.by}`;
+
+/** The gate of `ship.ts merge --release`, with the head it last cleared and the caught-up head it lets through on that. */
+interface ReleaseGate {
+  readonly gate: MergeGate;
+  /** The release head's sha the gate last let through, which a catch-up leases on; null before any. */
+  cleared(): string | null;
+  /** Lets `sha`, the cleared head caught up by release-catch-up.ts, through on the cleared head's approval. */
+  carry(sha: string): void;
+}
+
+/**
+ * The gate of `ship.ts merge --release` (T4645): the caller's clearance of the release pull request's head on the
+ * approval of the release task `task`, since the branch the release tool names names no task. A head runMerge caught
+ * up from the cleared one (release-catch-up.ts: the same diff rebased onto main, T5055) passes on that clearance; any
+ * other head, one the release tool wrote meanwhile among them, is asked again, so it needs its own approval.
+ */
+function releaseGate(task: string, args: MergeArgs, deps: MergeDeps): ReleaseGate {
+  let cleared: { sha: string; by: string } | null = null;
+  let carried: string | null = null;
+  return {
+    gate: async (head, sha) => {
+      if (cleared !== null && sha === carried) {
+        deps.out(`merge of the release pull request ${head} ${sha.slice(0, 9)}: caught up from ${cleared.sha.slice(0, 9)}, ${cleared.by} on ${task}`);
+        cleared = { sha, by: cleared.by };
+        return null;
+      }
+      const clearance = await deps.clearTaskMerge(task, sha, args.approved);
+      if (clearance.kind === 'refused') return clearance.reason;
+      const by = clearedBy(clearance);
+      deps.out(`merge of the release pull request ${head} ${sha.slice(0, 9)}: ${by} on ${task}`);
+      cleared = { sha, by };
+      return null;
+    },
+    cleared: () => cleared?.sha ?? null,
+    carry: sha => {
+      carried = sha;
+    },
+  };
+}
+
+/** Catches up the release head `gate` cleared onto main's tip `move` names (release-catch-up.ts, T5055). */
+function catchUpReleaseHead(deps: MergeDeps, gate: ReleaseGate, move: MainMove): CatchUp {
+  const profile = profileFor(deps.profiles, slugOf(deps.git('remote', 'get-url', 'origin')));
+  const sha = gate.cleared();
+  // mergeRun reads the release head and clears it before it reads any move of main.
+  if (profile.release === null || sha === null) throw new Error('main moved past a release head that was never read and cleared');
+  return deps.releaseCatchUp({ head: profile.release.head, sha, tip: move.tip, main: profile.main });
+}
+
+/** Catches up the change branch `args` merges onto main's tip `move` names (catch-up.ts, T2809). */
+function catchUpChangeHead(args: MergeArgs, deps: MergeDeps, move: MainMove): CatchUp {
+  // The checkout has not changed since the run read it, and a catch-up that main moved past put it back.
+  const head = args.head ?? checkedOutBranch(deps.git);
+  const { main, regenerated } = profileFor(deps.profiles, slugOf(deps.git('remote', 'get-url', 'origin')));
+  return deps.catchUp({ head, tip: move.tip, main, regenerated });
+}
+
 /** How many times main may move past a `ship.ts merge`'s heads before it gives up (T2809, T4131). */
 export const MERGE_ATTEMPTS = 3;
 
 /**
  * `ship.ts merge` as a command. A merge waits in the queue behind other heavy steps, often past another merge, so a
- * head main moved past is caught up (catch-up.ts: rebased onto main as `<head>-N` when clean with the same diff,
- * pushed) and merged in its place; anything else main's move does is refused (T2809). Main may also move while a
+ * head main moved past is caught up (catch-up.ts: rebased onto main in place when clean with the same diff, pushed
+ * to the same branch and pull request with a lease) and merged; anything else main's move does is refused (T2809). Main may also move while a
  * catch-up's push runs its gate, as another merge whose share was set aside for its CI wait lands (T3336): that head
  * is caught up again on the new tip, which raises the plugin version again (T4131). Each move counts, at most
  * MERGE_ATTEMPTS in all. Merges of one repo land oldest first (landing-turn.ts), so the merges started before this one
- * cost it one move, not one each (T4196). A ship's own merge (mergeBranch) gets the move back instead and goes again from its plan (T2696).
+ * cost it one move, not one each (T4196); and a move read right after a wait the older merges ended by landing costs
+ * nothing, since the turn made it wait for exactly that move (T4280). That never loops: only merges started before
+ * this one hold its turn, a set that only shrinks. A ship's own merge (mergeBranch) gets the move back instead and
+ * goes again from its plan (T2696).
  */
 export async function runMerge(args: MergeArgs, deps: MergeDeps): Promise<number> {
-  let stem: string | null = null;
   let current = args;
-  const gate = approvalGate(args, deps);
+  const release = args.release === null ? null : releaseGate(args.release, args, deps);
+  const gate = release === null ? approvalGate(args, deps) : release.gate;
   let move: MainMove | null = null;
-  for (let attempt = 1; ; attempt++) {
+  let moves = 0;
+  let waits = deps.turn.waited();
+  for (;;) {
     if (move === null) {
       const exit = await mergeRun(current, deps, gate);
       if (exit.kind === 'done') return exit.code;
       move = exit;
     }
-    if (attempt === MERGE_ATTEMPTS) {
+    const waitsNow = deps.turn.waited();
+    if (waitsNow === waits) moves += 1;
+    waits = waitsNow;
+    if (moves === MERGE_ATTEMPTS) {
       deps.err(`REFUSED ${move.reason} (main moved ${MERGE_ATTEMPTS} times during this merge)`);
       return 1;
     }
-    // The checkout has not changed since the run read it, and a catch-up that main moved past put it back.
-    const head = current.head ?? checkedOutBranch(deps.git);
-    stem ??= head;
-    const { main, regenerated } = profileFor(deps.profiles, slugOf(deps.git('remote', 'get-url', 'origin')));
-    const caught = deps.catchUp({ head, stem, tip: move.tip, main, regenerated });
+    const caught: CatchUp = release === null ? catchUpChangeHead(current, deps, move) : catchUpReleaseHead(deps, release, move);
     if (caught.kind === 'refused') {
       deps.err(`REFUSED ${caught.reason}`);
       return 1;
@@ -622,9 +756,42 @@ export async function runMerge(args: MergeArgs, deps: MergeDeps): Promise<number
       move = caught;
       continue;
     }
-    current = { ...current, head: caught.head };
+    // A release run reads its head from origin again, where the catch-up pushed it.
+    if (release === null) current = { ...current, head: caught.head };
+    else release.carry(caught.sha);
     move = null;
   }
+}
+
+/** The head a merge run merges: its branch, its sha, whether the run may open its pull request, and why it may not merge. */
+interface MergeHead {
+  readonly head: string;
+  readonly sha: string;
+  readonly opens: boolean;
+  /** Why the head may not merge whatever its approval, or null. */
+  readonly refusal: string | null;
+}
+
+/** A change branch: the one `args` names or the repo dir has checked out, pushed as it is locally. */
+function changeHead(args: MergeArgs, deps: MergeDeps, profile: RepoProfile): MergeHead {
+  const head = args.head ?? checkedOutBranch(deps.git);
+  if (head === profile.main) throw new Error(`${head} is the branch merged into: ship a change branch`);
+  deps.git('fetch', '--quiet', 'origin', head, profile.main);
+  const sha = deps.git('rev-parse', `refs/heads/${head}`);
+  if (deps.git('rev-parse', `refs/remotes/origin/${head}`) !== sha) throw new Error(`${head} ${sha.slice(0, 7)} is not pushed: push it first`);
+  return { head, sha, opens: true, refusal: null };
+}
+
+/**
+ * The release pull request's branch as origin has it (T4645): the release tool pushes it, so no local branch is read,
+ * and the head may merge only while it holds nothing but a release (release-pull.ts).
+ */
+function releaseHead(deps: MergeDeps, profile: RepoProfile, repo: string): MergeHead {
+  const release = profile.release;
+  if (release === null) throw new Error(`${repo} lists no release pull request in repos.json: name its "release" head and changelog`);
+  deps.git('fetch', '--quiet', 'origin', release.head, profile.main);
+  const sha = deps.git('rev-parse', `refs/remotes/origin/${release.head}`);
+  return { head: release.head, sha, opens: false, refusal: deps.releaseRefusal(profile, release, sha) };
 }
 
 /** The merge itself; prints every outcome but a move of main past the head, which it returns to the caller. */
@@ -632,15 +799,15 @@ export async function mergeRun(args: MergeArgs, deps: MergeDeps, gate: MergeGate
   const { git } = deps;
   const repo = slugOf(git('remote', 'get-url', 'origin'));
   const profile = profileFor(deps.profiles, repo);
-  const head = args.head ?? checkedOutBranch(git);
-  if (head === profile.main) throw new Error(`${head} is the branch merged into: ship a change branch`);
-  git('fetch', '--quiet', 'origin', head, profile.main);
-  const sha = git('rev-parse', `refs/heads/${head}`);
-  if (git('rev-parse', `refs/remotes/origin/${head}`) !== sha) throw new Error(`${head} ${sha.slice(0, 7)} is not pushed: push it first`);
+  const { head, sha, opens, refusal } = args.release === null ? changeHead(args, deps, profile) : releaseHead(deps, profile, repo);
   const subjects = git('log', '--reverse', '--format=%s', `refs/remotes/origin/${profile.main}..${sha}`).split('\n').filter(line => line !== '');
   if (subjects.length === 0) throw new Error(`${head} has nothing that ${profile.main} lacks`);
   const note = args.noteFile === null ? null : deps.gate.readText(args.noteFile);
   if (args.noteFile !== null && note === null) throw new Error(`--note-file ${args.noteFile}: no such file`);
+  if (refusal !== null) {
+    deps.err(`REFUSED ${refusal}`);
+    return done(1);
+  }
   const unapproved = await gate(head, sha);
   if (unapproved !== null) {
     deps.err(`REFUSED ${unapproved}`);
@@ -658,16 +825,26 @@ export async function mergeRun(args: MergeArgs, deps: MergeDeps, gate: MergeGate
     return done(1);
   }
   const gh = deps.ghFor(credential.secret);
-  const proof =
-    profile.gate === 'ci'
-      ? awayDuring(inTurn(ciProof(gh, repo, head, { names: profile.checks, summary: profile.summary, flaky: profile.flaky }, deps.waiter, { timeoutMs: args.timeoutMin * 60_000, intervalMs: args.intervalS * 1000 }), deps.turn), deps.share)
+  const polling = { timeoutMs: args.timeoutMin * 60_000, intervalMs: args.intervalS * 1000 };
+  const main = mainBranchOf(git, profile.main);
+  const checks = (): Proof => ciProof(gh, repo, head, { names: profile.checks, summary: profile.summary, flaky: profile.flaky, conditional: profile.conditional }, deps.waiter, polling);
+  // Under the merge queue the queue orders the landings, so the head takes no landing turn: one would hold every
+  // queued head of the repo behind the oldest for nothing (T3386).
+  const proof = profile.queue
+    ? awayDuring(checks(), deps.share)
+    : profile.gate === 'ci'
+      ? awayDuring(inTurn(checks(), deps.turn), deps.share)
       : { proof: localProof(args.dir, profile.local, deps.gate), away: () => false };
+  // The release pull request is never opened here, so nothing dresses it: its tool wrote its title.
+  const face = opens ? pullFaceOf(gh, { repo, head, subjects, note, task: await deps.pullTask(head) }, deps.out) : { title: head, note, labels: [], unlinked: null };
   const result = await mergeThroughPull(
-    { repo, head, base: profile.main, sha, title: pullTitle(head, profile.main, subjects.length), body: pullBody(subjects, note), lacks: missingSections(note, profile.pullSections) },
+    { repo, head, base: profile.main, sha, title: face.title, body: pullBody(subjects, face.note), lacks: missingSections(note, profile.pullSections), opens, labels: face.labels, unlinked: face.unlinked },
     gh,
-    mainBranchOf(git, profile.main),
+    main,
     proof.proof,
     deps.out,
+    supersedeFrom(gh, repo, profile.main, pullCommitsOf(git, profile.main, profile.regenerated), deps.out),
+    profile.queue ? queueLanding(gh, main, deps.waiter, polling) : directLanding(gh, main),
   );
   if (result.kind === 'moved') {
     // A move is caught up or shipped again: local work (rebase, build, specs) that takes the share back first.
@@ -702,6 +879,7 @@ export function realMergeDeps(dir: string): MergeDeps {
   const err = (line: string): void => console.error(line);
   const runGit = gitSyncIn(dir);
   const git = (...gitArgs: string[]): string => runGit(gitArgs).trim();
+  const kitReader = { env: process.env, userHome: homedir(), files: nodeFiles(realSleep), clock: systemClock };
   return {
     git,
     profiles: readProfiles(),
@@ -711,7 +889,10 @@ export function realMergeDeps(dir: string): MergeDeps {
     gate: realGateDeps(dir, out),
     renamedCallers: (base, tip, repo) => renamedCallersRefusal({ base, tip, repo }, { env: process.env, userHome: homedir() }, realRenamedCallersDeps(dir, out)),
     sweep: (merged, profile, gh) => sweepAfterMerge(merged, profile, { git, pullsOf: pullsOfHead(gh, merged.repo), out, err }),
-    clearMerge: clearMergeFrom(process.env, { env: process.env, userHome: homedir(), files: nodeFiles(realSleep), clock: systemClock }),
+    clearMerge: clearMergeFrom(process.env, kitReader),
+    clearTaskMerge: clearTaskMergeFrom(process.env, kitReader),
+    // The untrimmed git: a trim would hide a whitespace edit in the diff the release check reads.
+    releaseRefusal: (profile, release, sha) => releaseRefusal(runGit, `refs/remotes/origin/${profile.main}`, sha, release, teamrigShipWritesOf(profile.regenerated).versionFiles),
     catchUp: request =>
       catchUp(
         {
@@ -727,10 +908,12 @@ export function realMergeDeps(dir: string): MergeDeps {
         },
         request,
       ),
+    releaseCatchUp: request => catchUpRelease({ git, log: out }, request),
     workOf: rev => {
       const profile = profileFor(readProfiles(), slugOf(git('remote', 'get-url', 'origin')));
       return workCommitsOf(runGit, rev, `refs/remotes/origin/${profile.main}`, teamrigShipWritesOf(profile.regenerated));
     },
+    pullTask: pullTaskFrom(process.env, kitReader),
     share: stepShareOf(process.env, runOwnCli),
     turn: processLandingTurn(dir, git),
     out,

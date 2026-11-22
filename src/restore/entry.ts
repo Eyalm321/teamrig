@@ -1,4 +1,5 @@
 import { isNonNegativeInteger, isRecord, stringField, type JsonRecord } from '../core/guards.ts';
+import { hostSessionOf } from '../core/host-session.ts';
 import { ID_PATTERN } from '../core/ids.ts';
 import { parseObject } from '../core/jsonl.ts';
 import { MS_PER_MINUTE } from '../core/time.ts';
@@ -27,9 +28,12 @@ export interface RestoreEntry {
   /** The folder it started in, kept from its first event: a later `cd` does not move it. */
   readonly projectDir: string;
   readonly transcriptPath: string | undefined;
-  /** How it was started (`$CLAUDE_CODE_ENTRYPOINT`): only `cli` is a tab to reopen. */
+  /**
+   * How the host was started, in its own word (`SessionIdentity.startedAs`); with `sessionKind` the host's launcher
+   * reads from it where the session ran, and only a tab is reopened.
+   */
   readonly entrypoint: string | undefined;
-  /** `$CLAUDE_CODE_SESSION_KIND`: `bg` is a background session, never reopened. */
+  /** The session's kind in the host's own word (`SessionIdentity.sessionKind`). */
   readonly sessionKind: string | undefined;
   /** Its Claude Code's process id at its last event. */
   readonly pid: number | undefined;
@@ -245,9 +249,12 @@ export function parseEntry(text: string): RestoreEntry | undefined {
   return record === undefined ? undefined : entryOfRecord(record);
 }
 
-/** The entry an `entryRecord` object holds; undefined when it is of another shape. */
+/**
+ * The entry an `entryRecord` object holds; undefined when it is of another shape. The files carry no format, so a
+ * later teamrig's entry, naming the session `hostSession` (T4762), is told by that field alone.
+ */
 export function entryOfRecord(record: JsonRecord): RestoreEntry | undefined {
-  const claudeSession = stringField(record, 'claudeSession');
+  const claudeSession = hostSessionOf(record, 'claudeSession');
   const projectDir = stringField(record, 'projectDir');
   const state = activityOf(stringField(record, 'state'));
   const createdAt = instantField(record, 'createdAt');

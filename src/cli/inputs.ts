@@ -5,7 +5,7 @@ import type { TimeZone } from '../core/zone.ts';
 import { OPTION_SEPARATOR, optionsSplitText, splitOptions, type DecisionCard } from '../register/card.ts';
 import { isItemType, ITEM_TYPES, MAX_SIZE_PCT, sizeProblem, type ItemType, type TaskFields, type TaskPrep } from '../register/events.ts';
 import { FIRST_SLICE, GOAL_TAG, isSlice } from '../register/goals.ts';
-import { isTaskStatus, LEGACY_WAITING_HINT, LEGACY_WAITING_STATUS, priorityText, TASK_ID, TASK_STATUSES, type TaskStatus } from '../register/model.ts';
+import { BLOCKER_PRIORITY_ID, BLOCKER_PRIORITY_TEXT, isTaskStatus, LEGACY_WAITING_HINT, LEGACY_WAITING_STATUS, priorityText, TASK_ID, TASK_STATUSES, type TaskStatus } from '../register/model.ts';
 import { WAITS_USAGE, type AddInput, type AskInput, type StatusInput } from '../register/policy.ts';
 import { REVIEW_FLAGS, REVIEW_ORDER, type ProblemReview } from '../register/review.ts';
 import { isWaitKind, waitOf, type WaitReason } from '../register/waits.ts';
@@ -96,8 +96,14 @@ const OLD_TIER_TEXT = /^t([1-9]\d?)$/i;
 /** A bare level, such as `2`: what `--tier` took. */
 const BARE_LEVEL_TEXT = /^(0|[1-9]\d?)$/;
 
-/** `--priority p2`: a level in the shape `p<n>`; the old `t2` and a bare `2` are refused with the spelling to use. */
+/**
+ * `--priority p2`: `blocker` (T4329) or a level in the shape `p<n>`; the old `t2` and a bare `2` are refused with the
+ * spelling to use.
+ */
 export function priorityOf(text: string): number {
+  if (text === BLOCKER_PRIORITY_TEXT) {
+    return BLOCKER_PRIORITY_ID;
+  }
   const level = PRIORITY_TEXT.exec(text)?.[1];
   if (level !== undefined) {
     return Number(level);
@@ -109,7 +115,7 @@ export function priorityOf(text: string): number {
   if (BARE_LEVEL_TEXT.test(text)) {
     throw new UsageError(`priority "${text}" is not p<n>: write ${priorityText(Number(text))}`);
   }
-  throw new UsageError(`priority "${text}" is not p<n>`);
+  throw new UsageError(`priority "${text}" is not ${BLOCKER_PRIORITY_TEXT} or p<n>`);
 }
 
 /** A comma list flag, its items trimmed; refused when it names none. */
@@ -164,6 +170,14 @@ export function pinOf(switches: ReadonlySet<string>, by: string): Partial<TaskFi
     throw new UsageError('--pin and --unpin: give one');
   }
   return switches.has('pin') ? { pin: by } : switches.has('unpin') ? { pin: null } : {};
+}
+
+/** `--exempt` (exempted by `by`) or `--not-exempt` on update, as a change; none with neither (T4948). */
+export function exemptOf(switches: ReadonlySet<string>, by: string): Partial<TaskFields> {
+  if (switches.has('exempt') && switches.has('not-exempt')) {
+    throw new UsageError('--exempt and --not-exempt: give one');
+  }
+  return switches.has('exempt') ? { exempt: by } : switches.has('not-exempt') ? { exempt: null } : {};
 }
 
 /** `--type task|bug`: what the item is (T1252); `--type task` also tells the bug hint the task is no bug. */

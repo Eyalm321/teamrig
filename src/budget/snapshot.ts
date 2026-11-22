@@ -1,12 +1,13 @@
-import { basename, isAbsolute, join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import type { BudgetConfig } from '../config/types.ts';
-import { isRecord, recordField, stringField, type JsonRecord } from '../core/guards.ts';
+import { isRecord, stringField, type JsonRecord } from '../core/guards.ts';
 import { parseObject } from '../core/jsonl.ts';
 import { isTemporaryName, type Files } from '../core/files.ts';
 import type { TeamPaths } from '../core/home.ts';
 import { MS_PER_DAY, MS_PER_HOUR } from '../core/time.ts';
 import { CLAUDE_SESSION_ID } from '../inbox/marks.ts';
 import { coloured, meetingLabel, type StatusLineMeeting } from '../meeting/status-line.ts';
+import type { RateLimits, RateWindow, StatusLine, UsageMeter } from '../ports/host/index.ts';
 
 /**
  * Status line snapshots: what Claude Code's status line input says about one session, saved as
@@ -18,6 +19,7 @@ import { coloured, meetingLabel, type StatusLineMeeting } from '../meeting/statu
  * - `session_id`: the Claude Code session id, also the file name;
  * - `cwd`: the session's folder;
  * - `agent_name`, `model`: the agent's name and the model's display name, or null;
+ * - `effort`, `host_version`: the session's effort level and the version of the host's program, or null or absent;
  * - `rate_limits`: null, or `{ five_hour, seven_day }`, each null or absent, or
  *   `{ used_percentage, resets_at }` (percent used, and the reset in epoch seconds);
  * - `rate_limits_since`: when the session's snapshots began to show these rate limits, ISO 8601 UTC, so
@@ -37,16 +39,8 @@ import { coloured, meetingLabel, type StatusLineMeeting } from '../meeting/statu
  * into one, which readers open instead of every snapshot.
  */
 
-/** One rate-limit window: percent used and when it resets, in epoch milliseconds. */
-export interface RateWindow {
-  readonly usedPct: number;
-  readonly resetsAt: number;
-}
-
-export interface RateLimits {
-  readonly fiveHour: RateWindow | null;
-  readonly sevenDay: RateWindow | null;
-}
+/** The plan's windows as the host's usage meter reads them: a snapshot stores that reading unchanged. */
+export type { RateLimits, RateWindow };
 
 export interface StatusSnapshot {
   readonly ts: string;
@@ -54,6 +48,10 @@ export interface StatusSnapshot {
   readonly cwd: string;
   readonly agentName: string | null;
   readonly model: string | null;
+  /** The session's effort level, on a host and a model that take one. */
+  readonly effort: string | null;
+  /** The version of the host's program running the session. */
+  readonly hostVersion: string | null;
   readonly rateLimits: RateLimits | null;
   /** When the session's snapshots began to show `rateLimits`: the reading was taken by then; null: by `ts`. */
   readonly rateLimitsSince: string | null;
@@ -74,7 +72,7 @@ function textOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
-/** A window in the stored or Claude Code shape: `used_percentage` and `resets_at` in epoch seconds. */
+/** A window in the stored shape: `used_percentage` and `resets_at` in epoch seconds. */
 function rateWindowOf(value: unknown): RateWindow | null {
   if (!isRecord(value)) {
     return null;
@@ -93,50 +91,51 @@ function rateLimitsOf(value: unknown): RateLimits | null {
   return fiveHour === null && sevenDay === null ? null : { fiveHour, sevenDay };
 }
 
-/** The Claude Code session id of a status input: `session_id`, else the transcript's file name. */
-function sessionIdOf(status: JsonRecord): string | undefined {
-  const transcript = stringField(status, 'transcript_path');
-  const id = stringField(status, 'session_id') ?? (transcript === undefined ? undefined : basename(transcript, '.jsonl'));
-  return id !== undefined && CLAUDE_SESSION_ID.test(id) ? id : undefined;
+/**
+ * What reads a status input, the text the host hands its status line: the status line itself, and the usage meter
+ * for the plan's windows, undefined on a host whose meter reads none.
+ */
+export interface StatusSource {
+  readonly statusLine: Pick<StatusLine, 'parse'>;
+  readonly usage: Pick<UsageMeter, 'weekReading'> | undefined;
 }
 
 /**
- * The snapshot of Claude Code's status line input (its JSON on stdin), taken at `now`; undefined when
- * the input is not a JSON object or names no valid session id, which also keeps the file name safe.
+ * The snapshot of the host's status input as `source` reads it, taken at `now`; undefined when the status line
+ * reads nothing in it or the session id it reads is not a valid one. The id is tested here, not left to the host,
+ * as it becomes the snapshot's file name.
  */
-export function snapshotOfStatus(input: string, now: number): StatusSnapshot | undefined {
-  const status = parseObject(input.trim());
-  const sessionId = status === undefined ? undefined : sessionIdOf(status);
-  if (status === undefined || sessionId === undefined) {
+export function snapshotOfStatus(source: StatusSource, input: string, now: number): StatusSnapshot | undefined {
+  const reading = source.statusLine.parse(input);
+  const sessionId = reading?.sessionId;
+  if (reading === undefined || sessionId === undefined || !CLAUDE_SESSION_ID.test(sessionId)) {
     return undefined;
   }
-  const workspace = recordField(status, 'workspace');
-  const context = recordField(status, 'context_window');
   const ts = new Date(now).toISOString();
-  const rateLimits = rateLimitsOf(status['rate_limits']);
+  const rateLimits = source.usage?.weekReading(input) ?? null;
   return {
     ts,
     sessionId,
-    cwd: (workspace === undefined ? undefined : stringField(workspace, 'current_dir')) ?? stringField(status, 'cwd') ?? '',
-    agentName: textOrNull(recordField(status, 'agent')?.['name']),
-    model: textOrNull(recordField(status, 'model')?.['display_name']),
+    cwd: reading.cwd,
+    agentName: reading.agentName ?? null,
+    model: reading.model ?? null,
+    effort: reading.effort ?? null,
+    hostVersion: reading.hostVersion ?? null,
     rateLimits,
     rateLimitsSince: rateLimits === null ? null : ts,
     rateLimitsAfter: null,
-    costUsd: finite(recordField(status, 'cost')?.['total_cost_usd']),
-    contextUsedPct: finite(context?.['used_percentage']),
-    contextInputTokens: finite(context?.['total_input_tokens']),
+    costUsd: reading.costUsd ?? null,
+    contextUsedPct: reading.contextUsedPct ?? null,
+    contextInputTokens: reading.contextInputTokens ?? null,
   };
 }
 
 /**
- * The session's effort level in Claude Code's status line input (`effort.level`, which Claude Code sends only
- * for a model that takes one); undefined without it. The status line shows it; the snapshot does not keep it.
+ * The session's effort level as the host's status line reads it in its status input; undefined without one, as for
+ * a model that takes none. The status line shows it, and the snapshot keeps it for the commit stamp.
  */
-export function effortOfStatus(input: string): string | undefined {
-  const status = parseObject(input.trim());
-  const effort = status === undefined ? undefined : recordField(status, 'effort');
-  return textOrNull(effort?.['level']) ?? undefined;
+export function effortOfStatus(statusLine: Pick<StatusLine, 'parse'>, input: string): string | undefined {
+  return statusLine.parse(input)?.effort;
 }
 
 function storedWindow(window: RateWindow | null): JsonRecord | null {
@@ -152,6 +151,8 @@ export function formatSnapshot(snapshot: StatusSnapshot): string {
     cwd: snapshot.cwd,
     agent_name: snapshot.agentName,
     model: snapshot.model,
+    effort: snapshot.effort,
+    host_version: snapshot.hostVersion,
     rate_limits: limits === null ? null : { five_hour: storedWindow(limits.fiveHour), seven_day: storedWindow(limits.sevenDay) },
     rate_limits_since: snapshot.rateLimitsSince,
     rate_limits_after: snapshot.rateLimitsAfter,
@@ -180,6 +181,8 @@ export function parseSnapshot(text: string): StatusSnapshot | undefined {
     cwd: stringField(stored, 'cwd') ?? '',
     agentName: textOrNull(stored['agent_name']),
     model: textOrNull(stored['model']),
+    effort: textOrNull(stored['effort']),
+    hostVersion: textOrNull(stored['host_version']),
     rateLimits,
     rateLimitsSince: since,
     rateLimitsAfter: rateLimits === null ? null : timeUpTo(stored['rate_limits_after'], since ?? ts, false),

@@ -1,12 +1,14 @@
+import type { JsonRecord } from '../core/guards.ts';
 import type { TaskStatus } from '../register/model.ts';
 import type { ItemType } from '../register/events.ts';
 import type { CoreRuleKey } from '../rules/keys.ts';
 import type { AdmissionMode } from '../delivery/admission.ts';
 import type { NeedKind } from '../tabs/need-kind.ts';
 import type { ServiceCommand } from '../permissions/service-commands.ts';
+import type { ChangeSourceId } from '../changes/ids.ts';
 
 /** The config format this code reads and writes. Older files are migrated in memory on load. */
-export const CONFIG_VERSION = 8;
+export const CONFIG_VERSION = 9;
 
 export interface RolesConfig {
   /** Owns priorities, team rules and the owner's decision queue; may re-prioritize and reassign tasks; hands the work itself to others (`leadBoundary`). */
@@ -49,6 +51,8 @@ export interface RegisterCheckConfig {
   readonly staleAfterHours: number;
   /** An open task its owner has not touched this long after assignment is NOT-PICKED-UP. */
   readonly notPickedUpAfterHours: number;
+  /** A blocker still unfixed (open, in progress or waiting) this long after it became one is BLOCKER-OPEN (T4329). */
+  readonly blockerOpenAfterHours: number;
   /** A session's in-progress task outranked this long by its own open task, on band and score, is a PRIORITY-SKIP. */
   readonly prioritySkipAfterHours: number;
   /**
@@ -116,7 +120,7 @@ export interface RegisterConfig {
   readonly requireDecisionCard: boolean;
   /**
    * Whether `set --status verifying` needs `--proof`, what will prove the shipped change works, and `--waits` naming
-   * when it runs: a time, or a task in progress or verifying.
+   * when it runs: a time, or a task in progress or verifying, or an open one of the same owner.
    */
   readonly requireProofOnVerifying: boolean;
   /** What `set --status in-progress` does while a task it needs is still verifying, or, on a first start, while its owner's own verify steps are due. */
@@ -217,6 +221,12 @@ export interface LockConfig {
   readonly ttlMs: number;
   readonly pollMs: number;
   readonly waitMs: number;
+}
+
+/** Where `teamrig changes` reads what changed in the project (src/changes/). */
+export interface ChangesConfig {
+  /** The change sources to read, in the order their entries win; empty: every source that applies to the project. */
+  readonly sources: readonly ChangeSourceId[];
 }
 
 /** Privileged commands a reviewer approved, run by `teamrig exec` (src/exec/). */
@@ -332,8 +342,9 @@ export interface PromptsConfig {
    */
   readonly routeAllow: RouteAllow;
   /**
-   * How many calls one service role lets run with no permission check in 24 hours (T2984, security condition C6), so a
-   * holder steered by outside text closes or comments only so much; past it, the role's next call is refused.
+   * How many calls one service role lets run with no permission check in 24 hours (T2984, security condition C6), a
+   * migrate counting each issue row (T4606), so a holder steered by outside text closes or migrates only so much; past
+   * it, the role's next call is refused.
    */
   readonly serviceRoleDailyCap: number;
 }
@@ -581,6 +592,15 @@ export interface TurnLogConfig {
   readonly keepHours: number;
 }
 
+/** The dedicated UI `teamrig ui` starts (T4761). */
+export interface UiConfig {
+  /**
+   * The absolute path of a UI entry script to start in place of the released UI: a build of one's own, for work on
+   * the UI itself. Absent: the released UI.
+   */
+  readonly path?: string;
+}
+
 /**
  * The needs-you band (T2511): every tab of the team shows which other tab asks the user something (a permission
  * prompt, a question, a decision line), read from the tab files (src/tabs/need.ts), with a button that focuses it.
@@ -655,8 +675,13 @@ export interface WakeConfig {
   readonly priority: number;
   /** How long a wake waits after the first new task it is for, so tasks handed together wake the session once. */
   readonly batchSeconds: number;
-  /** The least time between two wakes of one session; work handed meanwhile waits and wakes it once. */
+  /**
+   * The least time between two wakes of one session, for one task due; work handed meanwhile waits and wakes it once.
+   * A blocker skips it.
+   */
   readonly minGapMinutes: number;
+  /** The gap once five tasks or more are due, stepped evenly from `minGapMinutes`; read as that when it is less. */
+  readonly maxGapMinutes: number;
   /**
    * The day's start (`HH:MM` UTC, outside the budget's quiet hours): from then each session with work it can start,
    * of any priority, that has had no turn since gets one wake that day, and a burst wakes its sessions the same way
@@ -701,7 +726,7 @@ export interface IssueFieldsConfig {
   readonly types: Readonly<Record<IssueKind, readonly string[]>>;
 }
 
-/** The team's GitHub repositories: `teamrig issue sync` reads their issues into the register, never writing to GitHub; `issue migrate` and `issue comment`/`issue close`, run by hand, write only to them. */
+/** The team's GitHub repositories: `teamrig issue sync` reads their issues into the register, never writing to GitHub; `issue migrate` and `issue reply`/`issue close`, run by hand, write only to them. */
 export interface GithubConfig {
   /** The repositories it reads, as `owner/name` in lowercase; empty turns the import off. */
   readonly repos: readonly string[];
@@ -753,7 +778,7 @@ export interface GithubConfig {
   /**
    * The session that hears the pull request news no task owner takes: a pull request from a fork or by an author
    * outside the repository, or from a branch that names no task. Unset, the first holder of a service role holding
-   * `issue comment` (github/watcher.ts), else the lead.
+   * `issue close` (sync/watcher.ts), else the lead.
    */
   readonly watcher?: string;
   /**
@@ -995,7 +1020,8 @@ export interface BudgetConfig {
   /**
    * On a short day (what is left of the week gives less than the pace line plans for the day), fund the team's
    * sessions in the priority order of their top queued task and pause the sessions none of it reaches. The lead, the delivery owner
-   * held in the team and lifted sessions are never paused. Off: no session of the team is paused.
+   * held in the team, the sessions the budget never holds (the security reviewer held in the team and the GitHub
+   * answerer) and lifted sessions are never paused. Off: no session of the team is paused.
    */
   readonly pauseByPriority: boolean;
   /** The live warning shows a line as a session passes each of these % of its daily budget. */
@@ -1168,7 +1194,8 @@ export interface DeliveryRepoConfig {
   readonly updateMainCheckout: boolean;
   /**
    * The folder `teamrig worktree add` makes each new worktree in, one folder per branch named after it with each `/`
-   * as `-`. A relative path is in the main checkout; unset: `.claude/worktrees` there.
+   * as `-`. A relative path is in the main checkout; unset: the folder the run's host makes its own worktrees of that
+   * checkout in (`worktreeFolderOf`), and none on a host that names no such folder.
    */
   readonly worktreeFolder?: string;
   /**
@@ -1332,6 +1359,11 @@ export interface DecisionsConfig {
    * session and its full brief, never from a daily card or a batch (T868).
    */
   readonly dedicatedOwners: readonly string[];
+  /**
+   * Teams under this one whose lead meets the owner itself (#1430): this team's meeting agenda leaves their waits on
+   * the owner, and those of every team under them, out of DECISIONS, with one count line per team in their place.
+   */
+  readonly ownMeetingTeams: readonly string[];
 }
 
 /** `refresh.autoRestart`: on or off for every session, or on for the team's lead only. */
@@ -1689,8 +1721,8 @@ export function isEffortLevel(value: unknown): value is EffortLevel {
 
 /**
  * The Claude Code model and effort a session starts on (`claude --model`, `claude --effort`), and the folder it
- * starts in; an unset key leaves Claude Code's own choice. The lead takes `DEFAULT_LEAD_LAUNCH` for each model
- * and effort key it leaves unset.
+ * starts in; an unset key leaves Claude Code's own choice. The lead takes its host's lead default for each
+ * model and effort key it leaves unset (src/config/launch.ts `launchOf`).
  */
 export interface LaunchConfig {
   /** A Claude Code model alias, such as `best` or `opus`, or a full model id starting `claude-`. */
@@ -1795,6 +1827,7 @@ export interface KitConfig {
   readonly contextFiles: ContextFilesConfig;
   readonly lock: LockConfig;
   readonly exec: ExecConfig;
+  readonly changes: ChangesConfig;
   readonly pushGuard: PushGuardConfig;
   readonly packageGuard: PackageGuardConfig;
   readonly commitGuard: CommitGuardConfig;
@@ -1813,6 +1846,12 @@ export interface KitConfig {
   readonly github: GithubConfig;
   /** Each service role by name: the teamrig commands it holds and the sessions that hold it (T2984). */
   readonly serviceRoles: Readonly<Record<string, ServiceRoleConfig>>;
+  /**
+   * Each connector's own section, by the connector's id, as the file holds it. The load checks only that each is an
+   * object under an id: the keys inside are the connector's, read and checked by its adapter when a command reaches
+   * it (plugin-api/connector.ts), so the core never learns a connector's settings.
+   */
+  readonly connectors: Readonly<Record<string, JsonRecord>>;
   readonly alerts: AlertsConfig;
   readonly decisions: DecisionsConfig;
   /**
@@ -1832,6 +1871,7 @@ export interface KitConfig {
   readonly pickerGuard: { readonly enabled: boolean };
   readonly meeting: MeetingConfig;
   readonly turnLog: TurnLogConfig;
+  readonly ui: UiConfig;
   readonly meetingNotices: MeetingNoticesConfig;
   /** Lets a shell line that only reads run without a permission prompt; off by default. */
   readonly readonlyShell: ReadonlyShellConfig;
@@ -1847,7 +1887,7 @@ export interface KitConfig {
   readonly statusLine: StatusLineConfig;
   /** Goal-first ranking: work classes, the WSJF score, the WIP rule and the class allocation (T2076). */
   readonly focus: FocusConfig;
-  /** Each session's Claude Code model and effort, by id; the lead's unset keys take `DEFAULT_LEAD_LAUNCH`. */
+  /** Each session's Claude Code model and effort, by id; the lead's unset keys take its host's lead default. */
   readonly launch: Readonly<Record<string, LaunchConfig>>;
   readonly paths: PathsConfig;
 }

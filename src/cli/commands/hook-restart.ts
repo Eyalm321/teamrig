@@ -1,40 +1,37 @@
 import { isEffortLevel, type EffortLevel, type KitConfig } from '../../config/types.ts';
-import { stringField, type JsonRecord } from '../../core/guards.ts';
 import { ENV, type TeamPaths } from '../../core/home.ts';
-import { payloadEffortOf } from '../../hooks/model-check.ts';
-import { sessionIdOf } from '../../inbox/inbox.ts';
+import type { HookEvent } from '../../ports/host/index.ts';
 import { noticeOf, type NoticeDecision, type StopContext } from '../../refresh/decide.ts';
-import { claudeProcessOf, restartMayAct } from '../../refresh/restart.ts';
+import { restartMayAct } from '../../refresh/restart.ts';
 import type { ParkedRestart, RestartRequest, RestartTab } from '../../refresh/state.ts';
 import type { RefreshStore } from '../../refresh/store.ts';
 import { parkRulesOf } from '../../register/park.ts';
 import { startableTasks } from '../../wake/day-start.ts';
+import { identityOf } from '../host.ts';
 import { teamZone } from '../kit.ts';
 import type { CliRuntime } from '../runtime.ts';
+import { hostSessionAbove } from '../session-process.ts';
 import { teamRegister } from '../team-register.ts';
 
-/** What the automatic restart needs from the Stop hook's payload and environment. */
+/** What the automatic restart needs from the turn end's hook event and environment. */
 export interface RestartTarget {
   readonly claudeSession: string;
   readonly transcript: string;
   readonly cwd: string | null;
-  /** Where a new tab opens: Claude Code's project folder, else the session's working folder. */
+  /** Where a new tab opens: the folder the host says the session started in, else the session's working folder. */
   readonly project: string;
-  /** The effort level the turn ran at (`payloadEffortOf`); null when the payload names none teamrig knows. */
+  /** The effort level the turn ran at; null when the event names none teamrig knows. */
   readonly effort: EffortLevel | null;
 }
 
-/** The restart's target; undefined when Claude Code did not give its session, its transcript or a folder. */
-export function restartTargetOf(runtime: CliRuntime, payload: JsonRecord): RestartTarget | undefined {
-  const claudeSession = sessionIdOf(payload);
-  const transcript = stringField(payload, 'transcript_path');
-  const cwd = stringField(payload, 'cwd');
-  const project = runtime.env[ENV.claudeProjectDir] ?? cwd;
-  if (claudeSession === null || transcript === undefined || project === undefined) {
+/** The restart's target; undefined when the event names no session, no transcript or no folder. */
+export function restartTargetOf(runtime: CliRuntime, event: Pick<HookEvent, 'session' | 'transcript' | 'cwd' | 'effort'>): RestartTarget | undefined {
+  const { session, transcript, cwd, effort } = event;
+  const project = identityOf(runtime).projectDir ?? cwd;
+  if (session === undefined || transcript === undefined || project === undefined) {
     return undefined;
   }
-  const effort = payloadEffortOf(payload);
-  return { claudeSession, transcript, cwd: cwd ?? null, project, effort: isEffortLevel(effort) ? effort : null };
+  return { claudeSession: session, transcript, cwd: cwd ?? null, project, effort: isEffortLevel(effort) ? effort : null };
 }
 
 /** The session a restart is armed for. */
@@ -43,7 +40,7 @@ export interface RestartScope {
   readonly id: string;
   readonly context: StopContext;
   readonly target: RestartTarget;
-  /** The Claude Code process the hook runs under (`claudeProcessOf`); undefined when it was not found. */
+  /** The session's host process the hook runs under (`hostSessionAbove`); undefined when it was not found. */
   readonly claude: number | undefined;
 }
 
@@ -132,8 +129,8 @@ export interface RearmScope {
 async function armFromTab(runtime: CliRuntime, store: RefreshStore, scope: RearmScope, tab: RestartTab): Promise<boolean> {
   const { team, id, cwd } = scope;
   // Looked up on this rare path only: each look at a process starts a PowerShell on Windows.
-  const claude = await claudeProcessOf(runtime.sessionProcesses, runtime.sessionProcesses.parentPid);
-  const project = runtime.env[ENV.claudeProjectDir] ?? tab.cwd ?? cwd;
+  const claude = await hostSessionAbove(runtime);
+  const project = identityOf(runtime).projectDir ?? tab.cwd ?? cwd;
   if (claude !== undefined && project !== undefined) {
     const at = new Date(runtime.clock.now()).toISOString();
     await store.setRestart(id, { ...tab, phase: 'pending', at, pid: claude });

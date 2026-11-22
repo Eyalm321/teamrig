@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import type { Env } from '../core/home.ts';
 import { TEST_CARD_FLAGS, TEST_GATE, TEST_OWNER_CARD_FLAGS } from '../testing/card.ts';
 import type { CliHarness } from '../testing/cli-harness.ts';
-import { treeHarness } from '../testing/team-tree.ts';
+import { rotateRegister } from '../testing/rotation.ts';
+import { teamEventsOf, treeHarness } from '../testing/team-tree.ts';
 import { EXIT } from './runtime.ts';
+
+const DAY_MS = 86_400_000;
 
 const APP: Env = {};
 const WEB = { TEAMRIG_TEAM: 'web' };
@@ -131,6 +134,23 @@ describe("runCli: a child team's owner decisions go up to the lead at its tree's
     assert.deepEqual(rowIds((await kit.run(['decisions', '--session', 'lead'])).stdout), ['T1', 'ops/T4', 'web/T2', 'ui/T3'], 'nothing was recorded asked, the teams depth first');
   });
 
+  it("prints each card's what and why from its own register's history once a compaction left the descriptions out (T4781)", async () => {
+    const kit = await treeHarness(BATCHED);
+    await ownerWait(kit, APP, 'alpha', 'Pick the pricing tier');
+    await ownerWait(kit, WEB, 'front', 'Pick the landing page');
+    kit.clock.advance(3 * DAY_MS);
+    for (const team of ['app', 'web']) {
+      await rotateRegister(kit.files, teamEventsOf(team), { now: new Date(kit.clock.now()) });
+    }
+    const what = '    what and why: what and why';
+    const root = (await kit.run(['decisions', '--session', 'lead'])).stdout;
+    assert.deepEqual(rowIds(root), ['T1', 'web/T2']);
+    assert.equal(root.filter((line) => line === what).length, 2, root.join('\n'));
+    const web = (await kit.run(['decisions', '--session', 'front'], { env: WEB })).stdout;
+    assert.deepEqual(rowIds(web), ['web/T2']);
+    assert.equal(web.filter((line) => line === what).length, 1, web.join('\n'));
+  });
+
   it("reads the waits of every team under the root lead at its meeting, and tells each decided task's owner in its own team at the end (T1018)", async () => {
     const kit = await treeHarness();
     await ownerWait(kit, APP, 'alpha', 'Pick the pricing tier');
@@ -159,6 +179,44 @@ describe("runCli: a child team's owner decisions go up to the lead at its tree's
     assert.match(told[0] ?? '', /app\/lead: the owner's daily meeting with app-lead ended .*\. Decided on your tasks: T2: human decided: ship it \(its wait on the owner cleared: act on it, set its next status\)\.$/);
     const pixel = (await kit.run(['inbox', 'read', '--session', 'pixel'], { env: UI })).stdout;
     assert.ok(!pixel.some((line) => line.includes('Decided on your tasks:')), "a team's session with nothing decided gets no line");
+  });
+
+  it("leaves a team that meets the owner itself, and the teams under it, out of the root's DECISIONS for one count line, its own meeting listing them (#1430)", async () => {
+    const kit = await treeHarness({ decisions: { ownMeetingTeams: ['web'] } });
+    await ownerWait(kit, APP, 'alpha', 'Pick the pricing tier');
+    await ownerWait(kit, WEB, 'front', 'Pick the landing page');
+    await ownerWait(kit, UI, 'pixel', 'Pick the icon set');
+    await ownerWait(kit, OPS, 'run', 'Pick the host');
+    const root = await kit.run(['meeting', 'agenda', '--session', 'lead']);
+    assert.equal(root.code, EXIT.ok, root.stderr.join('\n'));
+    assert.ok(root.stdout.includes('DECISIONS 2 waiting on owner (decision or approval)'), root.stdout.join('\n'));
+    assert.deepEqual(rowIds(root.stdout), ['T1', 'ops/T4'], "web's and ui's waits leave the root's cards");
+    assert.ok(root.stdout.includes("  Team web: 2 more waiting on owner, asked at its own lead's meeting with owner (decisions.ownMeetingTeams), not here."), root.stdout.join('\n'));
+
+    const web = await kit.run(['meeting', 'agenda', '--session', 'lead'], { env: WEB });
+    assert.equal(web.code, EXIT.ok, web.stderr.join('\n'));
+    assert.deepEqual(rowIds(web.stdout), ['T2', 'ui/T3'], "web's own meeting still lists its waits and its sub-team's");
+    assert.ok(!web.stdout.some((line) => line.includes('ownMeetingTeams')), web.stdout.join('\n'));
+
+    for (const label of ['T1', 'ops/T4']) {
+      const noted = await kit.run(['update', label, '--decided', '--note', 'owner decided: yes', '--session', 'lead']);
+      assert.equal(noted.code, EXIT.ok, noted.stderr.join('\n'));
+    }
+    const emptied = await kit.run(['meeting', 'agenda', '--session', 'lead']);
+    const decisions = emptied.stdout.slice(emptied.stdout.findIndex((line) => line.startsWith('DECISIONS')));
+    assert.deepEqual(decisions.slice(0, 2), ['DECISIONS 0 waiting on owner (decision or approval)', "  Team web: 2 more waiting on owner, asked at its own lead's meeting with owner (decisions.ownMeetingTeams), not here."]);
+  });
+
+  it("keeps a team that meets the owner itself on the root's LATE rows: only its waits on the owner leave (#1430)", async () => {
+    for (const ownMeetingTeams of [[], ['web']]) {
+      const kit = await treeHarness({ decisions: { ownMeetingTeams } });
+      const added = await kit.run(['add', '--title', 'Ship the icons', '--description', 'what and why', '--priority', 'p2', '--due', '2020-01-01', '--session', 'pixel'], { env: UI });
+      assert.equal(added.code, EXIT.ok, added.stderr.join('\n'));
+      const root = await kit.run(['meeting', 'agenda', '--session', 'lead']);
+      assert.equal(root.code, EXIT.ok, root.stderr.join('\n'));
+      assert.ok(root.stdout.includes('LATE 1 past their due date'), `${ownMeetingTeams.join(',')}\n${root.stdout.join('\n')}`);
+      assert.ok(root.stdout.some((line) => line.includes('ui/T1')), `${ownMeetingTeams.join(',')}\n${root.stdout.join('\n')}`);
+    }
   });
 
   it("counts a child team's task on the root's goal row, its wait named by <team>/<id> (T2092)", async () => {

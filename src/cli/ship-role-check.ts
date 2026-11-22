@@ -1,5 +1,4 @@
 import { dirname, isAbsolute, posix, resolve } from 'node:path';
-import { DEFAULT_WORKTREE_FOLDER } from '../config/defaults.ts';
 import type { DeliveryRepoConfig, KitConfig } from '../config/types.ts';
 import { taskFolder } from '../core/home.ts';
 import { isAtOrBelow, samePath } from '../core/paths.ts';
@@ -13,12 +12,15 @@ import { JsonlEventLog } from '../register/store.ts';
 import { moduleSpecifiersOf } from './module-specifiers.ts';
 import type { Kit } from './kit.ts';
 import type { CliRuntime } from './runtime.ts';
+import { worktreeFolderOf } from './worktree-folder.ts';
 
 /**
  * The allow's checks of a service role's ship call (T2984): the line names the tool and the places, and these prove the
  * places may be used. C4: the worktree is a linked worktree of the repository whose `shipTool` the line runs, inside its
  * worktree folder, on a task branch whose task the holder owns, and the plan and note files sit in that task's folder,
- * so a session ships only its own work. C5: the tool is a tracked file of a checkout of the same repository with no
+ * so a session ships only its own work; a release merge (T4672) names the repository's main checkout, where the tool
+ * only fetches, and a release task the holder owns, whose approval the tool's own gate checks at the head it reads from
+ * origin. C5: the tool is a tracked file of a checkout of the same repository with no
  * change at all whose HEAD makes the default branch's tree as of the last fetch, so what runs is main's current code,
  * reviewed, never a past main's (T3223). Paths are the host's, since git and the tool open them there.
  */
@@ -160,6 +162,55 @@ export function shipTaskOfWords(git: MergeGit, kit: Kit, config: KitConfig, word
   return branch === undefined ? undefined : taskBranchOf(branch, config.pushGuard.protectedBranches);
 }
 
+/** Words that point git, gh or a shell at another place than the step's folder. */
+const ELSEWHERE_WORDS: ReadonlySet<string> = new Set(['-C', '-R', '--repo', '--git-dir', '--work-tree', 'cd', 'pushd']);
+
+/** A word the shell reads as a script, not one argument: it holds whitespace, an operator or an expansion. */
+const SHELL_SCRIPT_WORD = /[\s;&|$`]/;
+
+/**
+ * True when `word` may point the step at another repository than `own`, its folder's: an option naming a repository or
+ * folder (`-C <dir>`, `-R <owner/repo>`, `--git-dir=`), an environment setting (`GIT_DIR=...`), a shell script in one
+ * word, or a path whose folder lies in another repository or in none.
+ */
+function pointsElsewhere(git: Pick<MergeGit, 'commonDir'>, word: string, cwd: string, own: string): boolean {
+  if (ELSEWHERE_WORDS.has(word) || /^-[CR]./.test(word) || /^--(repo|git-dir|work-tree)=/.test(word) || /^[A-Za-z_]\w*=/.test(word) || SHELL_SCRIPT_WORD.test(word)) {
+    return true;
+  }
+  if (!/[/\\]/.test(word)) {
+    return false;
+  }
+  const place = placeOfWord(word, cwd);
+  const repo = git.commonDir(place) ?? git.commonDir(dirname(place));
+  return repo === undefined || !samePath(repo, own);
+}
+
+/**
+ * The repository a step that holds the ship slot moves (#1711), as its shared git folder: for a step that runs a
+ * configured ship tool, its target worktree's (the word after the tool, after its `merge` in the merge form); for any
+ * other, the step's folder's, unless a word after the program may point it elsewhere (`pointsElsewhere`), the
+ * program is a path in another repository, or the program word is a whole shell line (a step of one word runs as one,
+ * `commandLine`), whose words are not read. Undefined when that is in doubt, so the step holds the slot of every
+ * repository, as before.
+ */
+export function shipSlotRepoOf(git: Pick<MergeGit, 'commonDir'>, kit: Kit, config: KitConfig, words: readonly string[], cwd: string): string | undefined {
+  const args = shipToolArgsOf(kit, config, words, cwd);
+  if (args !== undefined) {
+    const worktree = args[0] === 'merge' ? args[1] : args[0];
+    return worktree === undefined || worktree.startsWith('-') ? undefined : git.commonDir(placeOfWord(worktree, cwd));
+  }
+  const program = words[0] ?? '';
+  const own = git.commonDir(cwd);
+  if (own === undefined || SHELL_SCRIPT_WORD.test(program) || words.slice(1).some((word) => pointsElsewhere(git, word, cwd, own))) {
+    return undefined;
+  }
+  // The program word by its path: a script of another repository run straight moves that one; a program in no
+  // repository (`/usr/bin/git`) is a tool, which moves the folder's.
+  const place = placeOfWord(program, cwd);
+  const programRepo = /[/\\]/.test(program) ? (git.commonDir(place) ?? git.commonDir(dirname(place))) : undefined;
+  return programRepo === undefined || samePath(programRepo, own) ? own : undefined;
+}
+
 /** The words after the configured ship tool a step's words run; undefined when they run none. */
 function shipToolArgsOf(kit: Kit, config: KitConfig, words: readonly string[], cwd: string): readonly string[] | undefined {
   const at = words.findIndex((word) => shipRepoOf(kit, config, placeOfWord(word, cwd)) !== undefined);
@@ -202,16 +253,40 @@ export function toolRootsPath(tool: string): string {
   return `${extension === '' ? tool : tool.slice(0, -extension.length)}.roots.json`;
 }
 
-/** A roots file's shape: `{ "roots": ["src/cli/main.ts", "package.json"] }`, each path from the checkout's top. */
-function isRootsFile(value: unknown): value is { readonly roots: readonly string[] } {
-  return typeof value === 'object' && value !== null && 'roots' in value && Array.isArray(value.roots) && value.roots.every((root) => typeof root === 'string');
+/**
+ * What a roots file names: the files the tool runs beside its imports, and the modules whose `import('…')` calls are not
+ * followed (#1686): a CLI's command table loads each command's module only when that command runs, so the tool's code
+ * is the table and the commands it runs, which it names as roots, not every command.
+ */
+export interface ToolRoots {
+  readonly roots: readonly string[];
+  readonly staticOnly: readonly string[];
 }
 
+const isPathList = (value: unknown): value is readonly string[] => Array.isArray(value) && value.every((path) => typeof path === 'string');
+
 /**
- * The roots a roots file names, as paths in the checkout; undefined when it is no JSON of that shape, or a root is
- * absolute or leaves the checkout, so the caller cannot tell what the tool runs.
+ * A roots file's shape: `{ "roots": ["src/cli/main.ts", "package.json"], "staticOnly": ["src/cli/run.ts"] }`, each path
+ * from the checkout's top, `staticOnly` optional.
  */
-export function toolRootsOf(text: string): string[] | undefined {
+function isRootsFile(value: unknown): value is { readonly roots: readonly string[]; readonly staticOnly?: readonly string[] } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'roots' in value &&
+    isPathList(value.roots) &&
+    (!('staticOnly' in value) || isPathList(value.staticOnly))
+  );
+}
+
+/** A path from the checkout's top: not the top itself, not absolute, not leaving it. */
+const inCheckout = (path: string): boolean => path !== '.' && !path.startsWith('../') && !posix.isAbsolute(path) && !/^[A-Za-z]:/.test(path);
+
+/**
+ * What a roots file names, as paths in the checkout; undefined when it is no JSON of that shape, or a path is absolute
+ * or leaves the checkout, so the caller cannot tell what the tool runs.
+ */
+export function toolRootsOf(text: string): ToolRoots | undefined {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -222,17 +297,18 @@ export function toolRootsOf(text: string): string[] | undefined {
     return undefined;
   }
   const roots = value.roots.map((root) => posix.normalize(root));
-  return roots.some((root) => root === '.' || root.startsWith('../') || posix.isAbsolute(root) || /^[A-Za-z]:/.test(root)) ? undefined : roots;
+  const staticOnly = (value.staticOnly ?? []).map((path) => posix.normalize(path));
+  return [...roots, ...staticOnly].every(inCheckout) ? { roots, staticOnly } : undefined;
 }
 
 /**
  * The repository paths a module at `path` loads by a relative specifier: an import (`from './x.ts'`, `import('../y.ts')`)
  * or a file it reads beside it (`new URL('./repos.json', import.meta.url)`), so a data file the tool runs on is its code
- * too. Read from the module's code, never its comments or strings (see {@link moduleSpecifiersOf}); undefined when the
- * code cannot be read apart from its text.
+ * too, its `import('…')` calls left out with `dynamic: false`. Read from the module's code, never its comments or
+ * strings (see {@link moduleSpecifiersOf}); undefined when the code cannot be read apart from its text.
  */
-export function relativeImportsOf(text: string, path: string): string[] | undefined {
-  const specifiers = moduleSpecifiersOf(text);
+export function relativeImportsOf(text: string, path: string, dynamic = true): string[] | undefined {
+  const specifiers = moduleSpecifiersOf(text, { dynamic });
   return specifiers
     ?.filter((specifier) => specifier.startsWith('./') || specifier.startsWith('../'))
     .map((specifier) => posix.normalize(posix.join(posix.dirname(path), specifier)));
@@ -248,10 +324,11 @@ export function relativeImportsOf(text: string, path: string): string[] | undefi
 export function toolCodeAt(git: MergeGit, top: string, ref: string, tool: string): readonly string[] | undefined {
   const rootsPath = toolRootsPath(tool);
   const rootsRead = git.filesAt(top, ref, [rootsPath]);
-  const roots = rootsRead === undefined ? undefined : toolRootsOf(rootsRead.get(rootsPath) ?? '{"roots":[]}');
-  if (roots === undefined) {
+  const named = rootsRead === undefined ? undefined : toolRootsOf(rootsRead.get(rootsPath) ?? '{"roots":[]}');
+  if (named === undefined) {
     return undefined;
   }
+  const { roots, staticOnly } = named;
   const seen = new Set<string>([rootsPath]);
   // One git read per level of imports, never one per file (T4035): a tool's code runs to hundreds of files, and the
   // start check of every queued ship reads it twice.
@@ -267,7 +344,7 @@ export function toolCodeAt(git: MergeGit, top: string, ref: string, tool: string
     const next: string[] = [];
     for (const path of fresh) {
       const text = texts.get(path);
-      const imports = text === undefined ? undefined : MODULE_FILE.test(path) ? relativeImportsOf(text, path) : [];
+      const imports = text === undefined ? undefined : MODULE_FILE.test(path) ? relativeImportsOf(text, path, !staticOnly.includes(path)) : [];
       if (imports === undefined) {
         return undefined;
       }
@@ -280,24 +357,28 @@ export function toolCodeAt(git: MergeGit, top: string, ref: string, tool: string
 }
 
 /**
- * The files of the code a pinned tool runs that differ between its pin and `head`, a later commit of main's history its
- * clean checkout moved to while the step waited (T3419): none when the tool runs the same code, so a main that moved on
- * without touching it refuses no waiting ship. The code is what the tool runs at either commit, so a file it stopped
- * loading counts too. Undefined when that cannot be told (`head` off main's history or not after the pin, a read git
- * did not answer), so the step is refused as a changed tool.
+ * The files of the code a tool runs that differ between `from` and `to`, a later commit of the same history (T3419):
+ * none when the tool runs the same code at both, so a main that moved on without touching it refuses no waiting ship.
+ * The code is what the tool runs at either commit, so a file it stopped loading counts too. Undefined when that cannot
+ * be told (`to` not after `from`, a read git did not answer), so the step is refused as a changed tool.
  */
-function toolCodeChangeOf(git: MergeGit, state: ToolState, tool: string, pinned: string, head: string): readonly string[] | undefined {
+function toolCodeChangeOf(git: MergeGit, state: ToolState, tool: string, from: string, to: string): readonly string[] | undefined {
   const path = pathInCheckout(state.top, tool);
-  if (path === undefined || !git.isAncestor(state.top, head, state.mainRef) || !git.isAncestor(state.top, pinned, head)) {
+  if (path === undefined || !git.isAncestor(state.top, from, to)) {
     return undefined;
   }
-  const before = toolCodeAt(git, state.top, pinned, path);
-  const after = toolCodeAt(git, state.top, head, path);
-  const changed = git.changedPaths(state.top, pinned, head);
+  const before = toolCodeAt(git, state.top, from, path);
+  const after = toolCodeAt(git, state.top, to, path);
+  const changed = git.changedPaths(state.top, from, to);
   if (before === undefined || after === undefined || changed === undefined) {
     return undefined;
   }
   return [...new Set([...before, ...after])].sort().filter((file) => changed.includes(file));
+}
+
+/** How the refusals tell a person to move the tool's checkout to the newest main. */
+function moveHint(state: ToolState): string {
+  return `run git -C ${state.top} fetch -q ${ORIGIN} && git -C ${state.top} checkout -q --detach ${state.mainRef}, then queue the step again`;
 }
 
 /** A stale or changed ship tool's refusal: what it is not, and how to move its checkout to the newest main. */
@@ -305,7 +386,29 @@ function staleToolReason(tool: string, state: ToolState, since: string): string 
   if (state.oldGit !== undefined) {
     return `the ship tool check reads ${tool}'s checkout with git rev-parse --path-format=absolute, which needs git ${PATH_FORMAT_GIT.major}.${PATH_FORMAT_GIT.minor} or newer, and this host runs git ${state.oldGit}: upgrade git, then queue the step again`;
   }
-  return `the ship tool ${tool}${since} is not ${state.mainRef}'s current code in a checkout with no change: run git -C ${state.top} fetch -q ${ORIGIN} && git -C ${state.top} checkout -q --detach ${state.mainRef}, then queue the step again`;
+  return `the ship tool ${tool}${since} is not ${state.mainRef}'s current code in a checkout with no change: ${moveHint(state)}`;
+}
+
+/**
+ * The default branch's name on the remote that `state.mainRef` tracks, such as `main`. */
+function branchOf(state: ToolState): string {
+  return state.mainRef.startsWith(`${ORIGIN}/`) ? state.mainRef.slice(ORIGIN.length + 1) : FALLBACK_BRANCH;
+}
+
+/**
+ * The remote's own head of the default branch, asked at a step's start (#1466), so the start check never rests on the
+ * local ref alone; `known` when that head is in the checkout's repository and the local ref is it or an ancestor of it,
+ * so the code between them can be read. Not answered when the remote gives no head.
+ */
+function remoteHeadOf(git: MergeGit, state: ToolState): GitRead<{ readonly head: string; readonly local: string | undefined; readonly known: boolean }> {
+  const branch = branchOf(state);
+  const head = git.remoteHead(state.top, ORIGIN, branch);
+  if (head === undefined) {
+    return { ok: false, reason: `git ls-remote ${ORIGIN} ${branch} in ${state.top} gave no head` };
+  }
+  const local = git.sha(state.top, state.mainRef);
+  const known = git.treeOf(state.top, head) !== undefined && local !== undefined && (local === head || git.isAncestor(state.top, local, head));
+  return { ok: true, value: { head, local, known } };
 }
 
 /**
@@ -325,39 +428,108 @@ export function shipToolPinOf(git: MergeGit, kit: Kit, config: KitConfig, tool: 
  * Why a pinned ship tool may not run when its step starts, after waiting in the host lock's line; undefined when it
  * may. Its checkout must still be clean and at the pinned commit, or at main's current code if it moved on, or at a
  * later commit of main's history where none of the code the tool runs changed (T3419), so a checkout moved to another
- * commit while the step waited never runs other code than the one it was queued with or main's current one. A read git does not answer is
- * read again, {@link SHIP_TOOL_READS} times in all, then refused naming that read, never as a changed tool (T3368).
+ * commit while the step waited never runs other code than the one it was queued with or main's current one. Main's
+ * current code is the remote's own head, asked at the start (#1466): the tool's code at the checkout must be the code
+ * at that head, so a local ref that is only behind decides nothing. Any other clean checkout is moved to main's current
+ * code, fetched from the remote, and runs once it holds it (T4280): a ship that waited hours while main moved the tool's
+ * code runs the newest reviewed tool instead of being refused; a checkout with a change is never moved, so it is
+ * refused, as is one git fails to move, naming that step. A read git or the remote does not answer is read
+ * again, {@link SHIP_TOOL_READS} times in all, then refused naming that read, never as a changed tool (T3368).
  */
 export async function shipToolStartRefusal(git: MergeGit, kit: Kit, config: KitConfig, pin: ShipToolPin, sleep: Sleep): Promise<string | undefined> {
   for (let reads = 1; ; reads += 1) {
-    const state = shipToolStateOf(git, kit, config, pin.tool);
-    if (state.ok) {
-      const { head, landed } = state.value;
-      if (head !== undefined && (head === pin.head || landed)) {
-        return undefined;
-      }
-      const changed = head === undefined || pin.head === undefined ? undefined : toolCodeChangeOf(git, state.value, pin.tool, pin.head, head);
-      if (changed !== undefined && changed.length === 0) {
-        return undefined;
-      }
-      const files = changed === undefined ? '' : ` (${changed.slice(0, 5).join(', ')}${changed.length > 5 ? `, and ${changed.length - 5} more` : ''})`;
-      const since = pin.head === undefined ? '' : ` changed from ${pin.head.slice(0, 9)} while the step waited${files} and`;
-      return staleToolReason(pin.tool, state.value, since);
+    const read = startReadOf(git, kit, config, pin);
+    if (read.ok) {
+      return read.value;
     }
     if (reads >= SHIP_TOOL_READS) {
-      return `could not read the checkout of the ship tool ${pin.tool}, so the step did not run: ${state.reason}, at each of ${reads} reads ${SHIP_TOOL_REREAD_MS / 1000} s apart; git gave no answer, which says nothing of the tool, so queue the step again once git answers on this host`;
+      return `could not read the checkout of the ship tool ${pin.tool}, so the step did not run: ${read.reason}, at each of ${reads} reads ${SHIP_TOOL_REREAD_MS / 1000} s apart; git gave no answer, which says nothing of the tool, so queue the step again once git answers on this host`;
     }
     await sleep(SHIP_TOOL_REREAD_MS);
   }
 }
 
+/** One read of {@link shipToolStartRefusal}: why the step may not run (undefined: it may), or which read did not answer. */
+function startReadOf(git: MergeGit, kit: Kit, config: KitConfig, pin: ShipToolPin): GitRead<string | undefined> {
+  const state = shipToolStateOf(git, kit, config, pin.tool);
+  if (!state.ok) {
+    return state;
+  }
+  const { head, landed } = state.value;
+  if (head === undefined) {
+    return { ok: true, value: staleToolReason(pin.tool, state.value, pin.head === undefined ? '' : ` changed from ${pin.head.slice(0, 9)} while the step waited and`) };
+  }
+  const remote = remoteHeadOf(git, state.value);
+  if (!remote.ok) {
+    return remote;
+  }
+  // The checkout makes the local ref's tree, and that ref is the remote's head: main's current code.
+  if (landed && remote.value.local === remote.value.head) {
+    return { ok: true, value: undefined };
+  }
+  // Moved while it waited: only forward from its pin, the code it runs the same as at its pin (T3419), so it runs
+  // without moving the checkout under another step that may be reading it.
+  if (remote.value.known) {
+    const sincePin = pin.head === undefined ? undefined : head === pin.head ? [] : toolCodeChangeOf(git, state.value, pin.tool, pin.head, head);
+    const sinceRemote = toolCodeChangeOf(git, state.value, pin.tool, head, remote.value.head);
+    if (sincePin !== undefined && sinceRemote !== undefined && sincePin.length === 0 && sinceRemote.length === 0) {
+      return { ok: true, value: undefined };
+    }
+  }
+  return catchUpRead(git, kit, config, pin.tool, state.value, remote.value.head);
+}
+
 /**
- * The branch a ship call runs on, when `holder` may run it (C4, C5 above); undefined otherwise, so the permission check
- * decides. The register is read only after the line's places pass, and git last.
+ * Moves a clean checkout of the ship tool to the default branch as fetched now (T4280), then reads it again: the step
+ * runs only when the moved checkout holds main's current code. A fetch or move that fails is refused naming it, and
+ * leaves the checkout where it was.
+ */
+function catchUpRead(git: MergeGit, kit: Kit, config: KitConfig, tool: string, state: ToolState, remoteHead: string): GitRead<string | undefined> {
+  const fetched = git.fetch(state.top, ORIGIN);
+  const moved = fetched.ok ? git.detachAt(state.top, state.mainRef) : fetched;
+  if (!moved.ok) {
+    return { ok: true, value: `the ship tool ${tool} is behind ${ORIGIN}'s ${branchOf(state)} at ${remoteHead.slice(0, 9)}, and moving its checkout ${state.top} there failed: ${moved.reason}: ${moveHint(state)}` };
+  }
+  const after = shipToolStateOf(git, kit, config, tool);
+  if (!after.ok) {
+    return after;
+  }
+  return { ok: true, value: after.value.landed ? undefined : staleToolReason(tool, after.value, '') };
+}
+
+/** The owner of task `task` in the team's register. */
+async function ownerOf(runtime: CliRuntime, kit: Kit, task: string): Promise<string | undefined> {
+  return (await new JsonlEventLog(runtime.files, kit.paths.events).read()).state.tasks.get(task)?.owner;
+}
+
+/**
+ * What a release merge acts on, `release T<id>`, when `holder` may run it: the line names the repository's main checkout
+ * and a release task the holder owns, matching the queue's `--task` when it names one (C4), and the tool is main's
+ * current code (C5); undefined otherwise.
+ */
+async function releaseTargetOf(runtime: CliRuntime, kit: Kit, repo: ShipRepo, holder: string, run: ShipRun, release: string): Promise<string | undefined> {
+  if (!samePath(run.worktree, repo.mainDir) || (run.task !== undefined && run.task !== release) || run.files.length > 0) {
+    return undefined;
+  }
+  if ((await ownerOf(runtime, kit, release)) !== holder) {
+    return undefined;
+  }
+  return toolIsLanded(runtime.mergeGit, run.tool, repo.mainDir) ? `release ${release}` : undefined;
+}
+
+/**
+ * The branch a ship call runs on, or a release merge's `release T<id>`, when `holder` may run it (C4, C5 above);
+ * undefined otherwise, so the permission check decides. The register is read only after the line's places pass, and
+ * git last.
  */
 export async function shipBranchOf(runtime: CliRuntime, kit: Kit, config: KitConfig, holder: string, run: ShipRun): Promise<string | undefined> {
   const repo = shipRepoOf(kit, config, run.tool);
-  if (repo === undefined || !isInside(run.worktree, resolve(repo.mainDir, repo.config.worktreeFolder ?? DEFAULT_WORKTREE_FOLDER))) {
+  if (repo !== undefined && run.release !== undefined) {
+    return releaseTargetOf(runtime, kit, repo, holder, run, run.release);
+  }
+  // With no folder set the worktree must sit where the host makes its own; where the host names none, nothing proves the place, so the permission check decides.
+  const worktrees = repo === undefined ? undefined : worktreeFolderOf(runtime, repo.mainDir, repo.config.worktreeFolder);
+  if (repo === undefined || worktrees === undefined || !isInside(run.worktree, worktrees)) {
     return undefined;
   }
   const git = runtime.mergeGit;
@@ -367,7 +539,7 @@ export async function shipBranchOf(runtime: CliRuntime, kit: Kit, config: KitCon
   if (checkout === undefined || !checkout.linked || !samePath(checkout.top, run.worktree) || task === undefined || (run.task !== undefined && run.task !== task)) {
     return undefined;
   }
-  const owner = (await new JsonlEventLog(runtime.files, kit.paths.events).read()).state.tasks.get(task)?.owner;
+  const owner = await ownerOf(runtime, kit, task);
   const folder = taskFolder(kit.paths.kitHome, kit.paths.team, task);
   if (owner !== holder || !run.files.every((file) => isInside(file, folder))) {
     return undefined;

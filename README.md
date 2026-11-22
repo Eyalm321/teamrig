@@ -227,14 +227,17 @@ helper it is. Everything runs on your machine, with no account and no cloud bill
 | [Grow the team](docs/guides/grow-the-team.md) | Setting up a team with a tab per session, session names, hires and their retire, child teams under the lead |
 | [Ship from many sessions](docs/guides/ship-from-many-sessions.md) | The host lock for builds and test runs, merging a branch, deploying it, clean measurements beside deploys |
 | [Make it improve itself](docs/guides/improve-itself.md) | Lessons kept as skills and team rules, the skills scorecard, settling local rules that say otherwise, a lean setup |
+| [Build your own terminal host](docs/guides/build-a-terminal-host.md) | Plugging any terminal or editor in by a small program that speaks the terminal protocol, and the rules it keeps |
 | [Everything teamrig does](docs/features.md) | Every feature, and whether it works today |
 | [Every command](docs/commands.md) | Each command with its flags, as `teamrig help` prints it |
 | [Every config key](docs/configuration.md) | Each key of the team config with its type, default and meaning, drawn from the schema |
+| [What runs on which tool](docs/parity.md) | Each feature per AI CLI and per issue or code host: supported, partial or not, and where it is proved, drawn from what each adapter declares |
 | [Every check flag](plugins/teamrig/skills/teamrig-guide/tasks.md#check-flags) | Each flag `teamrig check` raises on a task, a hire or a skill: when, and what to do about it |
 | [Set up a team by hand](docs/setup-by-hand.md) | The two small files a team needs, if you'd rather not ask the lead |
 | [GitHub sync](docs/github-sync.md) | GitHub issues in the task list: repositories, tokens and each failure's fix |
+| [Issues and pull requests](docs/issues-and-pull-requests.md) | Reporting a fault, asking for a feature or sending a fix, for people and their AI tools |
 | [llms.txt](llms.txt) | teamrig explained for language models: point your AI assistant at it |
-| [Contributing](CONTRIBUTING.md) | How teamrig is built: `npm ci` sets the git hooks, every change lands through a reviewed pull request (from a fork for outside contributors), tests, sign-off and the local gate |
+| [Contributing](CONTRIBUTING.md) | How teamrig is built: `npm run setup` sets the git hooks, every change lands through a reviewed pull request (from a fork for outside contributors), tests, sign-off and the local gate |
 
 ## Licence
 

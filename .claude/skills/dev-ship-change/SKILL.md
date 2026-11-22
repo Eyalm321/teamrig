@@ -5,6 +5,10 @@ description: Land a finished teamrig change through small signed commits with Co
 
 # Ship a change
 
+The steps every repository shares (a branch per change, the description, one merge flow, a rebase back to the same
+branch) are the plugin's [ship-change skill](../../../plugins/teamrig/skills/ship-change/SKILL.md); these are teamrig's
+own on top of it.
+
 1. Before you build, settle the change's reach (CONTRIBUTING.md, Where a change lives): all users by default, so a
    team's value is a config key with a default and a how-to is a plugin skill; teamrig development only for this
    repo's own tooling. Write it in the task's description.
@@ -25,9 +29,10 @@ description: Land a finished teamrig change through small signed commits with Co
 7. `git push -u origin <branch>`: the pre-push hook runs the local gate's light checks (`tools/ci/local.ts`, its
    lists in `tools/ci/local-checks.ts`) on the committed tree, about 45 s; GitHub CI runs the rest on the pull request.
    Never `--no-verify`.
-8. Open the pull request and fill in the template (`.github/pull_request_template.md`): its `## Reach` always, its
-   `## Alternatives` when the change settles a design question. A pull request `tools/ship` opens takes its text from
-   `--note-file`: give that file a `## Reach` section. The merge opens no pull request without it (`pullSections` in
+8. Open the pull request and fill in the template (`.github/pull_request_template.md`): its `## Reach` and
+   `## Risks` always ([What a change is held to](../../../CONTRIBUTING.md#what-a-change-is-held-to)). A pull request
+   `tools/ship` opens takes its text from `--note-file`: give that file a `## Reach` and a `## Risks` section. The
+   merge opens no pull request without them (`pullSections` in
    `tools/ship/repos.json`), refusing before it waits on any check; one already open without it merges with a warning
    line. The repository is public: a security fix's branch name, commits, pull request text, comments and test names
    describe the hardening, never how to get past the old code, nor the private report or review by its id
@@ -41,14 +46,21 @@ description: Land a finished teamrig change through small signed commits with Co
 - Main moved while you worked: the merge catches the branch up itself (`tools/ship/merge.ts`), dropping a
   `build: rebuild the plugin dist` commit a branch cut before main stopped tracking the dist still carries. When it
   refuses, rebase onto `origin/main` by hand.
+- A catch-up, a ship's re-run or a hand rebase goes back to the same branch and pull request with
+  `--force-with-lease`, never a new branch. Copies an older ship pushed as `<stem>-N` are closed once a merge or
+  `ship.ts pr` holds the newest one, when the new head carries all their work commits, with a comment linking it
+  (`tools/ship/superseded.ts`). One with work the new head lacks stays open, and the merge's warning line names the
+  commits.
 - `tools/ship` builds the dist only to run the checks and commits none, as main tracks none; a run without
   `--merge`, for an approval, leaves the work alone on the head.
 - The local gate proves a committed tree, so it refuses uncommitted changes: commit or stash them first.
 - The pre-push hook's light checks leave the suite to CI: a failing spec shows on the pull request, not at the push.
   Run `npm run check` yourself first when the change reaches far.
 - With `"mergeChecks": "changed"` on the repository in `tools/ship/repos.json`, the pre-push hook and the `--merge`
-  run take the short checks (scrub, DCO, typecheck, the changed files' specs) and leave the whole suite to required
-  CI; a spec only a changed file's neighbour misses fails there, not here. Run `npm run check` yourself first when
+  run take the short checks (scrub, DCO, size rule, commit subjects, typecheck, the changed files' specs) and
+  leave the whole suite to required CI; a spec only a changed file's neighbour misses fails there, not here. A change
+  to the gate itself (hooks, workflows, `tools/ci`, `tools/ship`, the push guard, the package or a tsconfig) runs
+  every check. Run `npm run check` yourself first when
   the change reaches far.
 - A missing sign-off: `git commit --amend -s` for the last commit; the `commit-msg` hook from `npm run setup` catches
   it before the push.
@@ -56,5 +68,10 @@ description: Land a finished teamrig change through small signed commits with Co
   `node tools/ship/ship.ts pr <repo dir> --head <branch> --approved <sha> --note-file <pr.md>`: it opens the pull
   request of origin's head when that head is the approved sha and clears on that approval as a merge would, takes
   the merge's title and body, runs no gate, merges nothing and prints the URL (an open one is found, not opened again).
+- The pull request is dressed from the branch's task (`tools/ship/pull-task.ts`): titled `T<n>: <issue title>`, a
+  `Closes` line for its issue (none when the note says `Part of #<n>` or `Refs #<n>`, as a slice's must), and the
+  repo's labels for its priority, its type and the issue's area. A task with no ref opens none: link its issue first
+  (`teamrig update T<n> --ref gh:<owner/name>#<n>`). A `local:` ref is titled by its first commit subject and closes
+  nothing.
 
-Last verified: 2026-11-19
+Last verified: 2026-11-20

@@ -264,6 +264,20 @@ describe('evaluatePushes: where a push hides', () => {
     ]);
   });
 
+  it('asks about a push held in any word, but reads a plain argument of another program as data (#1471)', () => {
+    expectRows([
+      ["perl -pe 's/`bash`/x/' f && git push origin feature", 'allow'],
+      ["perl -e 'print `git push origin main`'", 'ask', 'doubt'],
+      ["read 'a[$(git push origin main)]'", 'ask', 'doubt'],
+      ["PS4='$(git push origin main)' bash -xc true", 'ask', 'doubt'],
+      ["echo '$(git push origin main)' > run.sh", 'ask', 'doubt'],
+      ["sed -i 's/x/$(git push origin main)/' run.sh", 'ask', 'doubt'],
+      ["perl -pe 's/`bash`/x/' f > run.sh && git push origin feature", 'ask', 'doubt'],
+    ]);
+    // An alias push held in quoted text asks too, though no word of the line says push.
+    expectRows([["x='a[$(git p)]'; echo $((x))", 'ask', 'doubt']], { config: { 'alias.p': 'push origin main' } });
+  });
+
   it('allows quoted text whose backticks never close, as bash runs nothing there (T2764)', () => {
     expectRows([
       ["printf '%s' 'then `\\`' ; git push origin t1-x", 'allow'],
@@ -565,6 +579,17 @@ describe('evaluatePushes: where a push hides', () => {
       ['H="$G push"; $H origin main', 'ask', 'doubt'],
       ['X="git push"; $X origin $B', 'ask', 'doubt'],
       ['P="export B=main"; B=topic; $P; git push origin $B', 'ask', 'doubt'],
+    ]);
+  });
+
+  it('reads a heredoc written to a file a variable names as stored, like one written to a path spelled out', () => {
+    const run = 'node $S/x.cjs && T=/p/bin/teamrig && $T test -- node --test x; $T test -- tsc';
+    expectRows([
+      [`S=/s; cat > $S/x.cjs <<'EOF'\nedit('the push labels');\nEOF\n${run}`, 'allow'],
+      [`S=/s; cat > /s/x.cjs <<'EOF'\nedit('the push labels');\nEOF\n${run}`, 'allow'],
+      // A device target may lead back to a pipe, so its body still counts; past a failed `node`, $T is what the shell inherited.
+      [`D=/dev/stdout; cat > $D <<'EOF'\nedit('the push labels');\nEOF\n${run}`, 'ask', 'doubt'],
+      [`S=/s; cat > $S/x.cjs <<'EOF'\nconst a = 1;\nEOF\n${run}; $T push`, 'ask', 'doubt'],
     ]);
   });
 

@@ -15,11 +15,11 @@ they all stay silent, but `hook restore-track` and `hook tool-end` still record 
 | `PreToolUse` on `Bash`, `PowerShell`, `Read`, `Grep`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` | `hook secret-guard` | Refuses a call that would print a secret file, a secret variable, the whole environment, a Kubernetes secret's data or a dump command's output into the conversation, or whose command line or written text holds a secret ([the secret guard](#before-a-shell-command-or-a-read-the-secret-guard)) |
 | `PreToolUse` on `Bash` and `PowerShell` | `hook db-write-guard` | Refuses a line that writes to a database by hand (a built-in SQL client, a database program or Node client module the team names, a data script the team names run with its apply flag), naming the counts or preview to show the owner first, unless `dbWriteGuard.writes` is `allow` ([the db-write guard](#before-a-shell-command-the-db-write-guard)) |
 | `PostToolUse` on `Bash`, `PowerShell`, `Read` and `Grep` | `hook secret-redact` | Replaces each secret a call's result holds before Claude and the transcript see it, and tells the session which kinds it held and the task it filed to rotate each ([the secret redactor](#after-a-tool-call-the-secret-redactor)) |
-| `PreToolUse` on `Bash` and `PowerShell` | `hook exec-guard` | Refuses a privileged command's review run as another session or the owner, any `exec` call through a client that is no install of the plugin, or one changed after its build, every `owner note` or `owner next`, which act as the owner, a settings writer's `--yes` write, which changes a permission, every `hook` command, which takes its tab from its stdin, a bound tab's `start` or `inbox read` as another session, a line that changes `$CLAUDECODE`, and a shell fed its commands from a pipe ([the exec guard](#before-a-shell-command-the-exec-guard)) |
+| `PreToolUse` on `Bash` and `PowerShell` | `hook exec-guard` | Refuses a privileged command's review run as another session or the owner, any `exec` call through a client that is no install of the plugin, or one changed after its build, every `owner note` or `owner next`, which act as the owner, a settings writer's `--yes` write, which changes a permission, every `hook` command, which takes its tab from its stdin, a bound tab's `start` or `inbox read` as another session, a line that changes `$CLAUDECODE`, a shell fed its commands from a pipe, and a raw `gh` write on one of the team's GitHub repositories ([the exec guard](#before-a-shell-command-the-exec-guard)) |
 | `PreToolUse` on `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` | `hook pass-record-guard` | Refuses a session's own write of a tree's pass record, the proof that lets a push or a merge skip the checks the tree passed ([the pass-record guard](#before-a-write-or-a-shell-command-the-pass-record-guard)) |
 | `PreToolUse` on `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` | `hook service-role-guard` | Refuses a session's `teamrig roles grant` or `revoke` (the owner runs it from their own terminal), and refuses a session's own write of `serviceRoles` in the team config ([the service-role guard](#before-a-write-or-a-shell-command-the-service-role-guard)) |
 | `PreToolUse` on `Bash` and `PowerShell` | `hook readonly-allow` | With `readonlyShell.enabled`, lets a line whose every command provably only reads run without a permission prompt ([the read-only allow](#before-a-shell-command-the-read-only-allow)) |
-| `PreToolUse` on `Bash` | `hook route-allow` | With `prompts.hookAsks: refuse` (the default) and `prompts.routeAllow` on, lets a line that runs one of the session's own jobs (`teamrig merge`, `deploy`, `exec request`, `worktree remove`, a `git commit` with its hooks) run with no permission check, once every teamrig guard passed it ([No teamrig hook asks a person](#no-teamrig-hook-asks-a-person)); with `prompts.routeAllow` on, whatever asks say, lets a service role's holder run the role's `teamrig issue close` or `issue comment` from its own tab, up to a daily cap, or a queued ship or merge of its own task branch with the team's ship tool ([the service-role allow](#before-a-shell-command-the-service-role-allow)) |
+| `PreToolUse` on `Bash` | `hook route-allow` | With `prompts.hookAsks: refuse` (the default) and `prompts.routeAllow` on, lets a line that runs one of the session's own jobs (`teamrig merge`, `deploy`, `exec request`, `worktree remove`, a `git commit` with its hooks) run with no permission check, once every teamrig guard passed it ([No teamrig hook asks a person](#no-teamrig-hook-asks-a-person)); with `prompts.routeAllow` on, whatever asks say, lets a service role's holder run the role's `teamrig issue close` or `issue migrate --yes` from its own tab, up to a daily cap, or a queued ship or merge of its own task branch with the team's ship tool ([the service-role allow](#before-a-shell-command-the-service-role-allow)) |
 | `PreToolUse` on `AskUserQuestion` and `Bash` | `hook picker-guard` | With `pickerGuard.enabled` (on unless a team sets it false), refuses the question picker to every session and helper, to the lead in and outside the owner's daily meeting, to a sub-team's lead, and to a session in its own meeting with the owner, with the reason to decide it if it is the session's own, else record it on its task and go on, and a session's Bash `cd` compound Claude Code would hold on a permission prompt, quoting its form to rerun, or saying to drop the `cd` when it has none ([the picker guard](#before-a-question-the-picker-guard)) |
 | `PermissionRequest` | `hook prompt-refuse` | With `prompts.hookAsks: refuse` (the default), answers each permission prompt Claude Code is about to raise but the question picker's and plan mode's exit, per case: a line that runs a sanctioned route or provably only reads runs, a line with a rerun form is refused quoting it, anything else is refused with the reason to record the step for the owner and go on ([No teamrig hook asks a person](#no-teamrig-hook-asks-a-person)) |
 | `PreToolUse` on `SendMessage` | `hook cold-send` | Holds once a message that would wake an idle session cold; with `open.idle.mode` on, turns a message to a session teamrig closed into its urgent line; during the daily meeting, holds every message to the lead but a CRITICAL one, and during a booked or on-the-spot meeting every message to the session met |
@@ -328,8 +328,13 @@ the guard cannot read (`--script-shell=node`, or a variable) is refused as a dou
   sessions' commits. Push your own branch, or use --force-with-lease if you truly mean it."
 - **Refuses, in doubt**: when it cannot read part of the line (an unclosed quote, a branch or alias only known when
   the line runs, a push held in quoted text such as `x='$(git push)'`, which bash runs if `${x@P}` or `$((x))`
-  reads it again, though not quoted backticks that never close, which run nothing; a bash variable counts as known when the line set it earlier to text and other known variables,
-  as in `B=feat; git push -u origin $B` or `G="git -C /w"; $G push`, and never set it otherwise; `$HOME` and a
+  reads it again, in any word, though not quoted backticks that never close, which run nothing; other quoted text
+  it cannot read counts only where bash may read it again: an assignment, a builtin's argument, a word a redirection
+  other than to `/dev/null`, a pipe into `tee` or an in-place edit (`sed -i`) writes for a later line, never a plain
+  argument of another program such as a perl or sed pattern; a bash variable counts as known when the line set it earlier to text and other known variables,
+  as in `B=feat; git push -u origin $B` or `G="git -C /w"; $G push`, and never set it otherwise, in a command or a
+  file it writes to (`cat > $S/x`); from a command that may set variables unseen (`read B`, `eval`, a program held
+  in an unknown variable), or from the start of a loop or group that holds one, no variable counts as known; `$HOME` and a
   value's leading `~` count as your home folder in the line's own shell, as in `T=~/bin/teamrig; $T list`): "The guard
   cannot tell whether this command pushes to a protected branch (...): <why>. Write the push out plainly, a branch
   named and no command built at run time." A line whose words depend on the shell's version, its host or how it is started (a NUL or a `` `u{2d} ``
@@ -459,7 +464,10 @@ allow, in a mode that asks, or a check of its own that always asks): `hook promp
   `teamrig worktree remove` (no `--base`), a register or inbox command (`start`, `add`, `set`, `list`, `inbox`...), a
   `git commit` with its hooks running (only `-a -s -q -m -F` and paths), or a `git push [-u] [-q] <remote> <branch>`
   of a task branch you own (`t<id>-...`) to a remote the repository names, never a protected branch, and only while
-  git pushes it to the remote branch of its own name: a `remote.<name>.push` refspec, or a `push.default` of
+  git pushes it to the remote branch of its own name. A rebased branch goes back to that same branch, so its review
+  updates, this way too: `--force-with-lease` (alone, or `=<that branch>[:<object name>]`) and `--force-if-includes` are taken,
+  never `-f`, `--force` or a `+` refspec, nor a lease on another ref. Where git would send it elsewhere,
+  a `remote.<name>.push` refspec, or a `push.default` of a `remote.<name>.push` refspec, or a `push.default` of
   `upstream` or `tracking` (which sends it to its upstream, `origin/main` for a branch cut from it), keeps the
   prompt. One plain
   command: no `;`, `&`, `|`, `<`, `>` but a lone `2>&1`, no substitution, variable, `$'`, `$"` or `#`, inside quotes
@@ -519,8 +527,10 @@ nested shells, `cd`, pipes and substitutions) and refuses a call that would prin
   The defaults: `**/.env`, `**/.env.*`, `~/.npmrc`, `~/.ssh/**`,
   `~/.aws/credentials`, `**/.kube/config`, `~/.docker/config.json`, `**/.git-credentials`, `~/.config/gh/hosts.yml`,
   `~/AppData/Roaming/GitHub CLI/hosts.yml` (gh's hosts file on Windows),
-  `~/.claude/.credentials.json`, `~/.claude/history.jsonl` (the prompt history), `**/.claude/settings.local.json`
-  (its allow rules can hold a credential), `~/.bash_history`, `~/.zsh_history`, `**/PSReadLine/*_history.txt`, the
+  `~/.claude/.credentials.json`, `~/.claude/history.jsonl` (the prompt history), both also in the folder
+  `CLAUDE_CONFIG_DIR` names by an absolute path, `**/.claude/settings.local.json`
+  (its allow rules can hold a credential), `**/.claude*/.credentials.json` (the login in a folder named like
+  the host's own, a second account's `.claude-work`), `~/.bash_history`, `~/.zsh_history`, `**/PSReadLine/*_history.txt`, the
   key stores `**/*.pem`, `**/*.key`, `**/*.p12`, `**/*.pfx`, `**/*.jks` and `**/*.keystore`, the private keys
   `**/id_rsa`, `**/id_ecdsa` and `**/id_ed25519` (their `.pub` halves are not listed), and Terraform's state
   `**/*.tfstate` and `**/*.tfstate.backup` (it holds secrets in plain text); `.env.example`, `.env.sample` and
@@ -571,8 +581,8 @@ commands read theirs themselves). To check a saved key, ask the owner to look in
 [secretGuard.secretReads]"
 
 It also refuses a Bash or PowerShell line that holds a secret as text, a quiet one too, since the line itself stays in
-the transcript: a token by its shape (GitHub, Anthropic, `sk-`, AWS, Slack, Google, Stripe live, a JSON web token, a
-private key block), credentials in a URL (`postgres://app:<the password>@db`), the credentials of an `Authorization`
+the transcript: a token by its shape (GitHub, Anthropic, `sk-`, AWS, Slack, Google, Stripe live, npm, a JSON web
+token, a private key block, a Discord or Slack webhook URL), credentials in a URL (`postgres://app:<the password>@db`), the credentials of an `Authorization`
 header, the key of an API key header (`x-api-key: ...`), a quoted literal of 12 or more characters given to a
 secret-like name (`api_key = "..."`), and the team's own `register.secretPatterns`. A value that only stands in for a
 secret passes: a reference (`${DB_URI}`, `$env:DB_URI`, `<db_password>`, `%TOKEN%`), a placeholder word
@@ -624,8 +634,8 @@ reads only the call, so it cannot see the cases below; what such a call prints g
 The secret guard reads only the call, so a script, a log or a file can still print a secret it could not see. After
 each Bash, PowerShell, Read (of a text file) or Grep call, `hook secret-redact` scans the call's result and replaces
 each secret it holds with `[redacted <kind>]` before Claude and the transcript see it: a token by its shape (the
-guard's shapes: GitHub, Anthropic, `sk-`, AWS, Slack, Google, Stripe live, a JSON web token, a private key block),
-credentials in a URL, the credentials of an `Authorization` or API key header, a quoted literal given to a
+guard's shapes: GitHub, Anthropic, `sk-`, AWS, Slack, Google, Stripe live, npm, a JSON web token, a private key
+block, a Discord or Slack webhook URL), credentials in a URL, the credentials of an `Authorization` or API key header, a quoted literal given to a
 secret-like name, a match of `register.secretPatterns`, and the value of a secret variable as an environment dump, a
 `.env` file or `docker inspect` prints it: `NAME=value`, an upper-case name the guard's names judge secret, with no
 space around `=`. A value found once goes from every part of the result, `stdout` and `stderr` alike. A value that
@@ -795,11 +805,12 @@ them (`echo "exec approve R1"`). A command word only known when it runs counts o
   the owner whoever runs it. The owner runs it in their own terminal, or types `/teamrig owner next T<n>` in a tab,
   which [the mod](#the-mod-the-teamrig-command) runs as a write only when the person types it.
 - **a settings writer's write**: `automode install` or `uninstall`, `permissions trim`, `statusline install`,
-  `setup restore`, `config migrate` or `restore install` with `--yes` (or a word only known when the line runs
-  after the command), whatever client starts it: each changes Claude Code's settings, the team config's format or
-  what runs at login, permissions only the owner changes. The CLI refuses the same `--yes` wherever `$CLAUDECODE`
-  is set. Its preview, without `--yes`, runs; the owner types `/teamrig permissions trim --yes` in a tab, or runs it
-  in their own terminal.
+  `setup restore`, `setup hooks`, `config migrate` or `restore install` with `--yes` (or a word only known when the
+  line runs after the command), whatever client starts it: each changes Claude Code's settings, a host's hooks, the
+  team config's format or what runs at login, permissions only the owner changes. The CLI refuses the same `--yes` wherever `$CLAUDECODE`
+  is set, and on a host whose adapter names no such mark, where an agent's run cannot be told from the owner's (the
+  refusal says what the adapter must name). Its preview, without `--yes`, runs; the owner types
+  `/teamrig permissions trim --yes` in a tab, or runs it in their own terminal.
 - **a hook**: any `hook` command (`hook slash-command`, `hook session-start`, ...), whatever client starts it,
   `$T hook ...` too. A hook takes the tab it runs for, and who typed a `/teamrig` line, from its stdin, which
   its caller writes, so only Claude Code's hooks and the mod run them; prove a hook in a test, or by a script on a
@@ -807,17 +818,36 @@ them (`echo "exec approve R1"`). A command word only known when it runs counts o
 - **another session's tab**: in a tab bound to a session, a [start](commands.md#teamrig-start) or
   [inbox read](commands.md#teamrig-inbox-read), whatever client starts it, that names another session of the team
   with `--session`, names one only known when it runs (`--session "$S"`), or runs on a line that sets
-  `$TEAMRIG_SESSION` or `$CLAUDE_CODE_SESSION_ID`: a tab reads its inbox and starts only as itself. Its own session,
-  by id or by a name it has had, passes, and a tab not bound yet binds to any.
+  `$TEAMRIG_SESSION` or a variable a host tells the tab by (its session id and the folder it
+  started in, as its adapter names them); the refusal names the variable the line changes: a tab reads its inbox and starts only as
+  itself. Its own session, by id or by a name it has had, passes, and a tab not bound yet binds to any.
 - **a changed `$CLAUDECODE`**: a line that sets, removes or empties it, in any shell (`CLAUDECODE= ...`,
   `env -u CLAUDECODE`, `env -i`, `unset`, `export -n`, PowerShell's `$env:CLAUDECODE = ...` or
   `Remove-Item Env:CLAUDECODE`, cmd's `set CLAUDECODE=`). Claude Code sets it so teamrig knows a command runs under
   it, and the owner commands, `hook slash-command` and `inbox read` keep their checks there; leave it as Claude Code
-  set it. A line that only reads it (`echo $CLAUDECODE`) passes.
+  set it. A line that only reads it (`echo $CLAUDECODE`) passes. The guard holds the mark of every host teamrig ships
+  an adapter for, and the running host's own, whichever host the line runs under.
 - **a shell fed from a pipe**: a shell on the line that takes its commands from a pipe (`echo ... | bash`,
   `... | iex`, `x | bash -c bash`), whatever feeds it, as the pipe can carry a review the line never shows. Run the
   commands directly, or hand the shell a heredoc, which the guard reads as written. A shell with no pipe into it
   (`bash --version`, a bare `cmd`) passes.
+- **a raw `gh` write on one of the team's repositories** (`github.repos`). gh writes with whatever login its keyring
+  holds, which may be another project's key that cannot write there, and past teamrig's check of who may, so on
+  those repositories raw `gh` only reads. A read is a command on a short list: `view`, `list`, `status`, `diff`,
+  `checks`, `search`, `browse`, a `pr checkout`, `repo clone`, `release download` or `run download`, a `gh api` GET
+  with no body, and a GraphQL query. Every other command is a write, any command gh adds later too. A write is placed
+  on its `-R` repository, before or after the command, and those its words name, else on `GH_REPO` or the folder's
+  git remotes (gh's `{owner}/{repo}` and `:owner/:repo` in a `gh api` path too). The reason names
+  the teamrig command that writes it with the team's saved key: `teamrig issue reply` for a comment, `issue close`,
+  `issue edit`, `issue label` and `issue assign`, `teamrig add --issue` to open an issue, and `teamrig merge` for a
+  pull request; a write no command does goes to the session's lead. A write it cannot place is refused too: an
+  account or organization write, an alias or extension, a GraphQL mutation, a word only known when it runs (in a
+  `gh api` call or as the group, a read-looking one too, since it may split into a write), a `gh api` path with a
+  `.`, `..` or `%` segment, or a folder's write on a line that may change which repository the folder is (`git remote
+  set-url`, a `GH_REPO` or `GIT_DIR` it sets, a git alias) or whose remote may reach GitHub in a form the guard cannot
+  read (an SSH host alias, a port); name the repository with `-R`. Every write is refused while the team config does
+  not load. A repository outside `github.repos` keeps plain `gh`, so a contributor's own fork works, and a team with
+  no `github.repos` is not checked.
 
 It always refuses and never asks; no config key turns it off. The guard reads only the call, so it cannot see:
 
@@ -873,8 +903,8 @@ tab. The route allow never lets one through, as it answers only once every guard
 
 It also refuses a session's own write of an owner-gated key of the team config, each a permission or an owner gate:
 `serviceRoles`, `roles`, `ownerGates`, `securityGates`, `register.ownerSource`, `prompts`, `readonlyShell`, `exec`,
-`alerts`, `github.owners`, `delivery.repos` (each repository's merge, deploy and check commands), `delivery.passEnv`, `permissions` and the
-guards (`pushGuard`, `secretGuard`, `packageGuard`, `dbWriteGuard`, `commitGuard`). It refuses a Write, Edit or
+`alerts`, `github.owners`, `delivery.repos` (each repository's merge, deploy and check commands), `delivery.passEnv`, `permissions`, `ui` (the
+script `teamrig ui` runs) and the guards (`pushGuard`, `secretGuard`, `packageGuard`, `dbWriteGuard`, `commitGuard`). It refuses a Write, Edit or
 MultiEdit of any team's config (a path ending in `teams/<team>/config.json`, the session's own and every other
 team's, in any spelling: a Git Bash `/c/` drive is read as `C:`, and its 8.3 short name `CONFIG~1.JSO` or a link to it counts too) whose result changes one (the guard applies the edit to that file as it is now and compares
 each key, a key the file lacks reading as unset), or that it cannot work out (text not found, a notebook edit), and a shell line naming the team config file (`teams/<team>/config.json`, or
@@ -896,14 +926,20 @@ With `prompts.routeAllow` on (its default), whatever `prompts.hookAsks` says, `h
 with no permission check when all of these hold:
 
 - **it is one role call, as written**: `teamrig issue close <owner/name#n> [--comment "<text>"]` or `teamrig issue
-  comment <owner/name#n> --body "<text>"`, through this install's own launcher, with `--session <you>`, required, the
+  comment <owner/name#n> --body "<text>"` or `teamrig issue migrate <rows file> --yes`, through this install's own launcher, with `--session <you>`, required, the
   only other flag, as one plain command (an output redirect such as `2>&1` aside). The issue's repository is on
   `github.repos`. A text is double-quoted with no `"`, `\`, `$`, backtick or line break inside, and the line has no
   single quote or backslash outside one, so bash runs the text as written. Every text the Bash tool's shell may run
   reads as the same call. A ship is `teamrig queue --kind test --session <you> --what "<text>" [--task
   T<id>] [--detach] [--max-minutes <n>] -- node <shipTool> <worktree> <plan.json>`, and a merge the same under
   `--kind ship|merge` with `--merge [--approved <sha>] [--note-file <file>]` after it, or `... -- node <shipTool>
-  merge <worktree> [--approved <sha>] [--note-file <file>]`, every path absolute, `--session` required here too;
+  merge <worktree> [--approved <sha>] [--note-file <file>]`, or the release merge `... -- node <shipTool> merge
+  <main checkout> --release T<id> --approved <sha>`, every path absolute, `--session` required here too;
+- **a migrate reads the team's task files**: its rows file is named by an absolute path inside one task folder of
+  the team (`<team>/tasks/T<id>/...`, what `teamrig files T<id>` gives), never `--out`, so every row it opens an
+  issue for was written where the team keeps its task files; the register lets the holder of `issue migrate` point
+  any session's task of the team holding no issue at its new issue, the ref alone, never one kept local (`local:
+  <why>`);
 - **the text posts as it reads**: no format or bidi character (a right-to-left override, a zero-width space), no line
   or paragraph separator, and no @-mention (`@bob`, `@acme/team`; an @ inside a word, as in an e-mail address, is fine),
   so a role never pings someone or posts text that reads other than it is without the owner seeing it;
@@ -913,7 +949,10 @@ with no permission check when all of these hold:
   checks it again as the step is queued and at its start, when a later main with the same tool code runs too); the
   worktree is a linked worktree of
   the same repository inside its worktree folder, on a task branch (`t<id>-...`, never a protected branch) whose task
-  the session owns, `--task` names that task when given, and the plan and note sit in that task's files folder;
+  the session owns, `--task` names that task when given, and the plan and note sit in that task's files folder; a
+  release merge names instead the repository's main checkout and a release task the session owns (`--task` the same
+  one when given), and the ship tool's own gate checks the lead's approval of that task at the head it reads from
+  origin and that the head holds only the release;
 - **the tab is the holder's**: every inbox mark this Claude Code session ever wrote names one session, it is on the
   roster, and it is the session the call's `--session` names (the hook never falls back on `$TEAMRIG_SESSION`, which
   the shell may set otherwise). A tab that ever read or bound as two sessions holds no role, so `inbox read --session
@@ -921,14 +960,16 @@ with no permission check when all of these hold:
 - **a role gives it**: one of `serviceRoles` names the session among its holders and the command among its commands;
 - **every guard passed it**: the same push, package, secret, db-write, exec, pass-record and service-role guards as
   the route allow; a guard that refuses answers instead;
-- **the role is under its cap**, for a close or comment: fewer than `prompts.serviceRoleDailyCap` (10 by default, 0
-  to 200) closes and comments the role allowed in the last 24 hours. Past it the call is refused, with the reason
+- **the role is under its cap**, for a close or migrate: fewer than `prompts.serviceRoleDailyCap` (10 by
+  default, 0 to 200) closes and migrated issues the role allowed in the last 24 hours; a migrate counts each
+  issue row of its rows file and is refused when they do not fit the room left, and a rows file it cannot read or
+  parse gets no role. Past it the call is refused, with the reason
   "teamrig: the service role github ran its 10 calls of the last 24 hours (prompts.serviceRoleDailyCap), so this
   one is refused. ...". A ship or merge counts toward no cap: it acts only
   on the session's own task branch, through the ship tool's own checks.
 
-Each allow writes a line to `state/prompt-answers.jsonl` naming the session, the role, the command and the issue or
-the ship's branch (`"answer": "role"`), never the text; the cap counts those lines, so a log it cannot write lets
+Each allow writes a line to `state/prompt-answers.jsonl` naming the session, the role, the command and the issue,
+the migrate's rows file and its issue rows' `count` or the ship's branch (`"answer": "role"`), never the text; the cap counts those lines, so a log it cannot write lets
 nothing past. A config with any issue, or one a newer teamrig wrote, gives no role, and `prompts.routeAllow: off`
 takes the allow away without a release. A permission rule or another hook that denies the call still wins: Claude
 Code applies a deny over any hook's allow. Anything else, a role call it does not allow included, goes on to the
@@ -1696,7 +1737,8 @@ With `budget.pauseByPriority` on, a short day (what is left of the week gives th
 funds the queued work in priority order, and a session none of it reaches has a daily budget of 0: its line reads
 `its daily budget is 0.0% (paused)`. Room or not, only p0 work wakes it, keeps its idle tab open or sends it back to
 work at a turn end, and once the team has no room it is held like any session past its part. The
-lead, the delivery owner and lifted sessions are never paused, and a burst's floor still holds a paused session up.
+lead, the delivery owner, the security reviewer, the tracker answerer and lifted sessions are never paused, and a
+burst's floor still holds a paused session up.
 Past its part while the team has room, a session is not held, and its line says so: `The team has room today: 2.0%
 of the week used, below its in-day pace of 4.0%, so nothing more happens.` Past its part once the team has no room,
 it is held: only p0 work wakes it or keeps its idle tab open, and it is escalated when `budget.escalate` is `session`, or, with
@@ -1717,6 +1759,17 @@ end of the budget day). New helpers are refused. More: teamrig budget`. Its lead
 gave the cut, and the model reads `you are past today's budget and the lead cut you to it until 03:00 IDT (the end of
 the budget day)`. A stop (`--stop`) holds the session whatever its use: the wake check and the idle pass wake and
 reopen it for p0 work only from the day's start, and past its part the model reads `the lead stopped you until ...`.
+
+A session held by the daily cap or a plain cut, never a stop, quiet hours or a short day's pause, still wakes for
+two kinds of task up to its configured wake priority, since a waited-on answer is never budget-held: a task another
+session's active task waits on (`--waits task:T<id>`, in this register or another of the team tree), and a task a
+leader above its owner marked with [teamrig update](commands.md#teamrig-update) `--exempt`.
+
+The budget never holds two sessions, as other work waits on them: the security reviewer (`roles.securityReviewer`,
+when the team holds it itself) and the tracker answerer, who answers outside people on the team's issue tracker (its
+connector's watcher key, else the holder of a service role with `issue close`; a team that names neither has none,
+and the lead is not one by default). Past their part, under a cut or on a short day they wake, work and launch
+helpers as if within it; only a leader's stop (`--stop`) holds them.
 
 While escalated, the model is told with the next prompt, once per level: `teamrig budget: you are past today's
 budget and the team has no room left today, and it is ahead of its pace line. Finish the step in hand and start
@@ -1911,7 +1964,7 @@ guard entry is no second way into the CLI's commands.
 The model then reads `teamrig blocked this call: its <hook> guard <what went wrong>, and a guard that cannot answer
 must not let a call through. Fix: ...` ([errors](errors.md#a-blocked-tool-call)). So a broken install blocks every
 call those guards see (shell lines, reads, searches, edits, sends, helper launches and the question picker) until
-`claude plugin update teamrig@teamrig` and a restart of the session. `hook readonly-allow`, `hook route-allow` and
+an update of the teamrig plugin and a restart of the session. `hook readonly-allow`, `hook route-allow` and
 `hook tab-status` run through the plain CLI: when an allow fails, the call gets Claude Code's own check, and tab
 status never answers for a call.
 
@@ -1950,7 +2003,7 @@ read-only allow lets a call skip the prompt, and only a shell line it proves onl
 - **The db-write guard** refuses a line that writes to a database by hand on its own, whatever the mode, unless
   `dbWriteGuard.writes` is `allow`.
 - **The exec guard** refuses a privileged command's review run as another session or the owner, any
-  `exec` call through a client that is no install of the plugin or was changed, every `owner` and `hook` command, and a shell fed its commands from a pipe, on its own, whatever the mode, so `Bash(teamrig:*)` stays safe for
+  `exec` call through a client that is no install of the plugin or was changed, every `owner` and `hook` command, a shell fed its commands from a pipe, and a raw `gh` write on the team's repositories, on its own, whatever the mode, so `Bash(teamrig:*)` stays safe for
   `exec` too. A team that wants each review asked as well allows the rest by name (`Bash(teamrig exec request:*)`,
   `dry-run`, `status`, `run`) instead of the one rule.
 - **The read-only allow** (`readonlyShell.enabled`) lets a shell line that only reads run with no prompt in default

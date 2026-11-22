@@ -65,6 +65,8 @@ export class FakeMergeGit implements MergeGit {
   readonly fileReads: number[] = [];
   /** Commits whose blobs and files git cannot read, such as one it collected. */
   readonly unreadable = new Set<string>();
+  /** Commits the repository does not hold, such as one a remote has that was not fetched yet: no ref names them. */
+  readonly absent = new Set<string>();
   defaultName = 'main';
   mergeBaseIs: string | undefined = 'base';
   paths: readonly string[] | undefined = ['src/app.ts'];
@@ -81,6 +83,7 @@ export class FakeMergeGit implements MergeGit {
   checkoutFails: string | undefined;
   fastForwardFails: string | undefined;
   resetFails: string | undefined;
+  detachAtFails: string | undefined;
   /** The `core.sshCommand` git's config sets; none by default. */
   sshCommandIs: string | undefined;
   /** The version `git version` names, a git new enough for every read by default; undefined when git could not tell. */
@@ -116,7 +119,7 @@ export class FakeMergeGit implements MergeGit {
     if (ref.startsWith(BRANCH_REF)) {
       return this.branches.get(ref.slice(BRANCH_REF.length));
     }
-    return ref;
+    return this.absent.has(ref) ? undefined : ref;
   }
 
   checkoutOf(dir: string): Checkout | undefined {
@@ -338,5 +341,13 @@ export class FakeMergeGit implements MergeGit {
       this.heads.set(dir, to);
     }
     return failed(this.resetFails);
+  }
+
+  detachAt(dir: string, ref: string): GitOutcome {
+    this.log.push(`detachAt ${dir} ${ref}`);
+    if (this.detachAtFails === undefined) {
+      this.heads.set(dir, this.commitOf(dir, ref) ?? ref);
+    }
+    return failed(this.detachAtFails);
   }
 }

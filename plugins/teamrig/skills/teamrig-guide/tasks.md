@@ -11,7 +11,7 @@ A task is `open` when added. Only its owner sets its status, with `teamrig set <
 | --- | --- | --- |
 | `open` | waiting to start | nothing |
 | `in-progress` | the owner is on it now | nothing |
-| `verifying` | shipped, waiting for what proves it (a test run, a night's flow, a number) | `--note`, `--proof` naming what will prove it, `--waits` naming when it runs (a time, or a task in progress or verifying whose end runs it), and `--followups` naming the tasks the work leaves or `none` [register.requireNoteOn, register.requireProofOnVerifying, register.requireFollowupsOn]; `--due <date>`: the date to verify it by; a bug's review, `--cause` to `--missed-log` [register.review] |
+| `verifying` | shipped, waiting for what proves it (a test run, a night's flow, a number) | `--note`, `--proof` naming what will prove it, `--waits` naming when it runs (a time, or a task in progress or verifying, or an open one of your own, whose end runs it), and `--followups` naming the tasks the work leaves or `none` [register.requireNoteOn, register.requireProofOnVerifying, register.requireFollowupsOn]; `--due <date>`: the date to verify it by; a bug's review, `--cause` to `--missed-log` [register.review] |
 | `waiting` | started, and cannot go on until something else happens | `--waits` naming every reason (a decision, an approval, a task, a time) and `--note` [register.requireNoteOn]; on the owner's decision or approval, a card (`--question`, `--options`, `--recommend`, `--default`) [register.requireDecisionCard] |
 | `done` | finished and verified | `--note`, `--evidence` (unless the task already has some), `--skill <name>` or `--skill none`, and `--followups T<id>,...` or `--followups none` [register.requireEvidenceOnDone, register.requireSkillOnDone, register.requireFollowupsOn]; a bug's review, `--cause` to `--missed-log` [register.review]; `--watch "<what a sighting shows>"` (with evidence) when tests or a dry run proved it and a live sighting is still to come |
 | `dropped` | will not be done | `--note` saying why and who decided; `--followups` may name the tasks the work moved to |
@@ -115,12 +115,15 @@ A shipped change is proven by the session that shipped it, oldest first, before 
   starts it (name the tasks the work leaves in place of `none`).
   Without `--proof`, or without `--waits` naming when the proof runs, it is refused
   [register.requireProofOnVerifying]; with that key `false`, the note names the proof. A proof runs at a time
-  (`time:<date>`, for an event that comes on a date) or when a task in progress or verifying ends (`task:T<id>`);
-  one with neither would be put off without end. `approval:owner` (with a card) may stand beside one, for a proof
+  (`time:<date>`, for an event that comes on a date) or when a task ends (`task:T<id>`): one in progress or
+  verifying, or an open one of the same owner that can start now (every task it is planned after with `--after` is
+  finished), who starts it next, so the new work that runs the proof can start at once while the verifying task waits
+  on it; one with neither would be put off without end. `approval:owner` (with a card) may stand beside one, for a proof
   only the owner can try, which then reaches the meeting's DECISIONS.
 - A proof another party makes is that party's task: ask it with `teamrig set <id> --status waiting --ask <session>
   --text "<the run or check>"`, which adds it and makes the task wait on it. Once that task has started, set yours
-  verifying with `--waits task:T<id>`: a proof waits only on a task in progress or verifying.
+  verifying with `--waits task:T<id>`: a proof waits only on a task in progress or verifying, or an open one of its
+  own owner's.
 - Set verifying again without `--waits` and the waits stay while none cleared; once one cleared the proof is due
   now, and keeping it is refused. `check` flags the task `READY` once all cleared.
 - A change tests or a dry run proved, whose proof left is a live sighting (a night's run, a page a user opens),
@@ -231,10 +234,19 @@ Three shapes, split by the list:
   owner decisions, `p5` if budget allows. `p1` is the most urgent the config names. Above them every team has
   teamrig's own `p0`, for urgent work done right now: `check` flags an open one `URGENT`, so its owner parks the task
   in hand and starts it; a session held by its budget still wakes for it, and it goes on past the daily stop, helpers
-  too. A priority does not place a task by itself: a `p0` goes ahead of every score, and the priority of a task the
-  owner asked for adds to its score.
-- **Plan order**: by the first of these on which two tasks differ: pinned (the one task per owner that a leader above
-  it pinned with `update --pin`, above every other key); band; can move (a task with a wait not cleared, on a person,
+  too. Above `p0` sits `blocker` (`--priority blocker`): something blocks the team, or does damage that cannot be
+  undone, so its owner drops everything and fixes it now. It goes wherever a `p0` goes, and more: `add` and `update`
+  refuse one with no description (what leaving it unfixed costs) or one that waits on, or comes after, another task
+  (that is a plain wait at `p0` or lower); making a task a blocker posts its owner's leader and the lead a line with
+  a wake ask; while its owner holds one it can take up (open or in progress, nothing it waits on), `start` and `set
+  --status in-progress` refuse any other task, `--one-commit` too; its host-line step goes ahead of every `p0` step;
+  `check` flags it `BLOCKER-OPEN` once it is unfixed past [register.check.blockerOpenAfterHours] (4 h), so its leader
+  takes it over or lowers it to `p0` when it blocks no one. On disk it is `p0` marked blocker, so an older teamrig
+  reads a `p0`. A priority does not place a task by itself: a `p0` goes ahead of every score, and the priority of a
+  task the owner asked for adds to its score.
+- **Plan order**: by the first of these on which two tasks differ: a blocker its owner can take up (ahead of every
+  other key, a pin too, as `start` refuses all else); pinned (the one task per owner that a leader above it pinned
+  with `update --pin`, above every later key); band; can move (a task with a wait not cleared, on a person,
   a time or a task, or an `after` not finished goes after every task of its band that can move, whatever its score;
   an answered approval counts as cleared, and a `waiting` task with no reason and no decision as held);
   score (the highest first); in progress (a started
@@ -246,9 +258,9 @@ Three shapes, split by the list:
   `· ahead: expedite`, `· ahead: can move`, `· ahead: score 21.3 (A1 #1)` (with the ranked goal it serves),
   `· ahead: in progress`,
   `· ahead: due`, `· ahead: unblocks T9 p1 +2` (the best task that needs it, its priority, how many more),
-  `· ahead: in week 10-19` or `· ahead: size 0.5%`; no reason means the pin, a band the row's class shows, or the id
-  decided.
-- **Band**: three, ahead of any score. Expedite first: a `p0`, a Maintenance task marked critical and a `p1` the
+  `· ahead: in week 10-19` or `· ahead: size 0.5%`; no reason means a blocker, the pin, a band the row's class
+  shows, or the id decided.
+- **Band**: three, ahead of any score. Expedite first: a `blocker` or a `p0`, a Maintenance task marked critical and a `p1` the
   owner asked for (the last two by [focus.expedite]). Then Roadmap and Maintenance. Then the rest: Improvements, a
   task with no class and any other class.
 - **Score**: what a delay costs over the share of the week the task takes, so the most value per unit of work comes
@@ -316,7 +328,8 @@ checkpoint; a session may run it for itself.
 
 | Flag | Raised when | What to do |
 | --- | --- | --- |
-| `URGENT` | an open `p0` task (teamrig's own level for urgent work, above every configured one) free to start (every task it comes after finished); with a due, the detail names the lead's deadline burst (`burst start deadline --task <id> --by <its due> ...`) | The owner parks the task in hand and starts it now; the lead may run the burst to pay for finishing it by its due. |
+| `URGENT` | an open `blocker` or `p0` task (teamrig's own levels for urgent work, above every configured one) free to start (every task it comes after finished); with a due, the detail names the lead's deadline burst (`burst start deadline --task <id> --by <its due> ...`) | The owner parks the task in hand and starts it now; the lead may run the burst to pay for finishing it by its due. |
+| `BLOCKER-OPEN` | a `blocker` not yet shipped (open, in progress or waiting) over 4 h after it became one [register.check.blockerOpenAfterHours] | The owner fixes it now; else its leader takes it over, or lowers it to `p0` when it blocks no one. |
 | `OVERDUE` | the effective due time has passed: its own, or the earlier due of an active task that needs it (the detail names it: `due 10-14, from T9`) | The owner finishes it or says what blocks it; the lead re-dates it (`update --due`) or tells the human. |
 | `VERIFY-OVERDUE` | a `verifying` task's due time, the date to verify it by, has passed | The owner checks the proof: `done` with it as evidence, `in-progress` when it failed, or a new due date and why. |
 | `SLICE-LATE` | a slice of one of the team's goals (`goal slice`) is past its ship day with no proof recorded; raised on its first active task in plan order, else its first task the register holds | The slice's owner records the proof once it shows (`goal slice <tag> <n> --proven "<evidence>"`), or the lead moves its ship day (`--ship`, a slip kept with its note). |

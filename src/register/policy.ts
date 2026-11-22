@@ -3,26 +3,31 @@ import { LeadTree } from '../config/lead-tree.ts';
 import { priorityLevels } from '../config/priorities.ts';
 import type { KitConfig } from '../config/types.ts';
 import { ADDRESS_PATTERN, type SessionAddress } from '../core/address.ts';
+import { clipEnd } from '../core/clip.ts';
 import { SecretScanner } from '../core/secrets.ts';
-import { parseDeadline, parseUtcDay, parseUtcDeadline, showStored } from '../core/time.ts';
+import { parseDeadline, parseUtcDay, parseUtcDeadline, showStored, storedText } from '../core/time.ts';
 import type { TimeZone } from '../core/zone.ts';
 import { waitAnswerersOf } from './approval.ts';
+import { blockerHold } from './blocker-hold.ts';
 import type { SlicedGoal } from './focus.ts';
 import { NO_GOAL_TAGS } from './goals.ts';
 import { AFFECTS_FLAG, AFFECTS_USAGE, CARD_FLAGS, cardProblem, cardTexts, GATE_FLAG, gateOf, gateUsage, keptCard, OPTION_SEPARATOR, proofWordOf, RUN_FLAG, sameCard, SECURITY_FLAG, typedHandStep, WHY_ASK_FLAG, whyAskUsage, type DecisionCard } from './card.ts';
+import { holdsDescription } from './description-cut.ts';
 import { auditOf, HAND_STEP_KINDS, handStepFileProblem, shortSha256, type AuditPin } from './hand-step.ts';
 import { verdictIsCurrent, verdictReadOf, type SecurityVerdictPin } from './security-verdict.ts';
 import { ITEM_TYPES, sizeProblem, type ApprovalVerdict, type ItemType, type TaskFieldName, type TaskFields, type TaskPrep } from './events.ts';
 import { droppedApproval, isRepark, taskNumber, type RegisterState, type Task } from './fold.ts';
 import { commitsNamed } from './head-sha.ts';
-import { ACTIVE_STATUSES, FOLLOWUP_STATUSES, GITHUB_SOURCE, ISSUE_REF_PREFIX, isTopPriority, priorityText, SESSION_NAME, WAIT_STATUSES, type TaskStatus } from './model.ts';
+import { ACTIVE_STATUSES, BLOCKER_PRIORITY_ID, FOLLOWUP_STATUSES, GITHUB_SOURCE, hasIssueOrReason, IMPORT_SOURCES, isImportSource, isIssueRef, isTopPriority, priorityText, SESSION_NAME, WAIT_STATUSES, type ImportSource, type TaskStatus } from './model.ts';
 import { ITEM_TYPE_TRAITS, traitsOf } from './item-types.ts';
 import { waitsOnOwner } from './owner-waits.ts';
 import { asksReview, missedTaskIds, reviewGap, reviewGapText, reviewProblem, reviewTexts, type ProblemReview } from './review.ts';
 import { loopFix, needPath, NO_TASKS_ELSEWHERE, pathText, type TasksElsewhere } from './tree.ts';
 import { dueStartHolds, dueVerifyHold, heldStart, startHolds, WATCH_USAGE } from './verify.ts';
-import { isPeerWait, isReady, sameWait, sameWaits, waitContext, waitSpelling, type PersonWait, type PersonWaitKind, type WaitReason } from './waits.ts';
+import { isPeerWait, isReady, sameWait, sameWaits, unfinishedAfter, waitContext, waitSpelling, type PersonWait, type PersonWaitKind, type WaitReason } from './waits.ts';
 import { wipHold } from './wip.ts';
+import { MIGRATE_COMMAND } from '../permissions/service-commands.ts';
+import { roleHolding } from '../permissions/service-roles.ts';
 
 /** Team policy, applied on WRITE only: the parser accepts any well-formed history. */
 export type Verdict<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
@@ -30,18 +35,22 @@ export type Verdict<T> = { readonly ok: true; readonly value: T } | { readonly o
 /** The skill name that closes a task which produced no reusable procedure. */
 export const NO_SKILL = 'none';
 
-/** Who the GitHub import's events are written by; its tasks carry GITHUB_SOURCE (model.ts). */
-export const GITHUB_ACTOR = 'github';
+/**
+ * Who the GitHub import's events and lines are written by. Each import writes as its source (model.ts
+ * IMPORT_SOURCES), so this is GitHub's: the inbox lines issue sync posts are still GitHub's alone.
+ */
+export const GITHUB_ACTOR: ImportSource = GITHUB_SOURCE;
 
-/** The statuses the import sets on its own tasks: an issue's open state, or how it was closed. */
-export const GITHUB_STATUSES: readonly TaskStatus[] = ['open', 'done', 'dropped'];
+/** The statuses an import sets on its own tasks: an issue's open state, or how it was closed. */
+export const IMPORT_STATUSES: readonly TaskStatus[] = ['open', 'done', 'dropped'];
 
 /**
  * Fields the lead may change on a task someone else owns: who does it, how urgent, when, in what order and its size
  * (the lead plans the week), its type and critical mark, so the lead can mark another session's fix a bug, its
- * work class, as leaders triage the class of their sessions' tasks (T2076), and the goal slice it prepares (T2453).
+ * work class, as leaders triage the class of their sessions' tasks (T2076), the goal slice it prepares (T2453) and
+ * its exemption from its owner's rest (T4948).
  */
-export const LEAD_FIELDS: readonly TaskFieldName[] = ['owner', 'priority', 'due', 'week', 'after', 'size', 'type', 'critical', 'pin', 'workClass', 'prepares'];
+export const LEAD_FIELDS: readonly TaskFieldName[] = ['owner', 'priority', 'due', 'week', 'after', 'size', 'type', 'critical', 'pin', 'exempt', 'workClass', 'prepares'];
 
 /**
  * Fields the lead may change on a task whose owner is no session of the team any more (a retired hire, a session that
@@ -74,7 +83,7 @@ export interface AddInput {
   readonly workClass?: string;
 }
 
-/** A task for a GitHub issue: its source is GITHUB_SOURCE and its ref the issue's (github/map.ts). */
+/** A task for a GitHub issue: its source is GITHUB_SOURCE and its ref the issue's (sync/map.ts). */
 export interface ImportInput {
   readonly title: string;
   /** The issue's body, cleaned and cut to MAX_DESCRIPTION; null for an empty body. */
@@ -184,6 +193,34 @@ export interface StatusChange {
   readonly review?: ProblemReview;
 }
 
+/**
+ * The refusal of a blocker (T4329) with no description: the level means drop everything now, so the task says what
+ * leaving it unfixed costs, whatever `register.requireDescription` says.
+ */
+export const BLOCKER_WHY = 'a blocker needs --description saying what it costs left unfixed: a terrible bottleneck, irreversible damage or an important operation blocked';
+
+/** The refusal of a blocker that waits on another task: that is a plain dependency, which stays a wait at p0 or lower. */
+function blockerWaitText(id: string, other: string): string {
+  return `a blocker is fixed now, never after another task: ${id} waiting on ${other} is a plain wait, so give it p0 or lower, or make ${other} the blocker`;
+}
+
+/** Why `fields` cannot be a blocker: no description, or a plan after another task, or a task wait it already holds. */
+function blockerProblem(task: Task | null, fields: Pick<TaskFields, 'priority' | 'description' | 'after'>): string | undefined {
+  if (fields.priority !== BLOCKER_PRIORITY_ID) {
+    return undefined;
+  }
+  if (fields.description === null) {
+    return BLOCKER_WHY;
+  }
+  const id = task?.id ?? 'the task';
+  const planned = fields.after[0];
+  if (planned !== undefined) {
+    return blockerWaitText(id, planned);
+  }
+  const waited = task?.status === 'waiting' ? task.waits.find((wait): wait is Extract<WaitReason, { readonly kind: 'task' }> => wait.kind === 'task') : undefined;
+  return waited === undefined ? undefined : blockerWaitText(id, waited.id);
+}
+
 /** The refusal of an `add` with no description while `register.requireDescription` is on. */
 export const DESCRIPTION_NEEDED = 'add needs --description "<what and why, in plain words>"';
 
@@ -194,7 +231,7 @@ export const CARD_USAGE = `--question "<what is decided>" --options "<one choice
 export const WAITS_USAGE = 'decision:<who>, approval:<who>, task:T<id> or time:<YYYY-MM-DD HH:MM>, comma-separated';
 
 /** How a verifying task names when its proof runs (T1306), for the refusals that ask for it. */
-export const PROOF_WAITS_USAGE = 'time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying whose end runs it';
+export const PROOF_WAITS_USAGE = 'time:<YYYY-MM-DD HH:MM> when it runs, or task:T<id> for a task in progress or verifying, or an open one of your own, whose end runs it';
 
 /** The statuses of a task a proof may wait on: one under way, whose end runs the proof. */
 const PROOF_TASK_STATUSES: readonly TaskStatus[] = ['in-progress', 'verifying'];
@@ -227,6 +264,9 @@ export interface OwnerChange extends UpdateChange {
   readonly by: string;
 }
 
+/** The owner's answer to a card from the pane (T4078): one of its options by its number (from 1), or yes or no to an approval. */
+export type OwnerAnswer = { readonly kind: 'option'; readonly option: number } | { readonly kind: 'approve' } | { readonly kind: 'decline' };
+
 /**
  * An audit: an update that changes no field and pins either a hand step file for the task at its sha256 (T2312) or
  * the security reviewer's verdict on the task's card, with the card parts it read (T2761).
@@ -253,8 +293,10 @@ function refuse<T>(error: string): Verdict<T> {
 /** Why a task's source is refused, or undefined when it is fine. */
 type SourceRule = (source: string) => string | undefined;
 
-/** The import's source rule: its tasks carry GITHUB_SOURCE, which it sets itself. */
-const importSource: SourceRule = (source) => (source === GITHUB_SOURCE ? undefined : `source ${source} is not ${GITHUB_SOURCE}`);
+/** An import's source rule: its tasks carry its own source, which it sets itself. */
+function importSource(expected: ImportSource): SourceRule {
+  return (source) => (source === expected ? undefined : `source ${source} is not ${expected}`);
+}
 
 export class RegisterPolicy {
   private readonly config: KitConfig;
@@ -349,6 +391,8 @@ export class RegisterPolicy {
       type: input.type ?? null,
       critical: input.critical ?? false,
       pin: null,
+      // A leader exempts a task with `update` once it exists, as it marks what one prepares.
+      exempt: null,
       workClass: this.classSpelling(input.workClass ?? null),
       // A lead marks what a task prepares with `update` once it exists, where the policy knows who marks it.
       prepares: null,
@@ -356,7 +400,7 @@ export class RegisterPolicy {
     if (fields.description === null && this.config.register.requireDescription) {
       return refuse(DESCRIPTION_NEEDED);
     }
-    const problem = this.checkFields(fields, sourceRule) ?? afterProblem(null, fields.after, state, elsewhere) ?? this.goalProblem(fields.goals, goalTags);
+    const problem = this.checkFields(fields, sourceRule) ?? blockerProblem(null, fields) ?? afterProblem(null, fields.after, state, elsewhere) ?? this.goalProblem(fields.goals, goalTags);
     if (problem !== undefined) {
       return refuse(problem);
     }
@@ -433,9 +477,15 @@ export class RegisterPolicy {
     }
     // Ranked work goes first and work in progress stays few (T2076); `warn` lets the start through and the CLI warns.
     const { focus } = this.config;
-    const wip = wipHold({ ...input, task, goals: context.goals }, context.state.tasks.values(), waitContext(context.state.tasks, context.now, context.zone, context.elsewhere), focus, register.ownerSource);
+    const moves = waitContext(context.state.tasks, context.now, context.zone, context.elsewhere);
+    const wip = wipHold({ ...input, task, goals: context.goals }, context.state.tasks.values(), moves, focus, register.ownerSource);
     if (wip !== undefined && focus.wip.mode === 'refuse') {
       return refuse(wip);
+    }
+    // A blocker is fixed before anything else its owner starts (T4329): no mode and no --one-commit way past.
+    const blocker = blockerHold(task, input.status, context.state.tasks.values(), moves);
+    if (blocker !== undefined) {
+      return refuse(blocker);
     }
     const note = blankToNull(input.note);
     const evidence = blankToNull(input.evidence);
@@ -847,6 +897,9 @@ export class RegisterPolicy {
       case 'approval':
         return this.personWaitProblem(task, reason);
       case 'task':
+        if (status === 'waiting' && task.priority === BLOCKER_PRIORITY_ID) {
+          return blockerWaitText(task.id, reason.id);
+        }
         return taskWaitProblem(task, reason.id, context.state, context.elsewhere) ?? (status === 'verifying' ? unstartedProofTask(task, reason.id, context) : undefined);
       case 'time':
         return timeProblem(reason.at, context);
@@ -970,6 +1023,55 @@ export class RegisterPolicy {
       return task.status !== 'waiting' || reason.kind !== 'time';
     });
     return ok({ changes: {}, note: text, waits, decided: true });
+  }
+
+  /**
+   * The owner's answer to a card from the pane (T4078), written as the owner (register.ownerSource): a Decided whose
+   * note says which option of the card the owner chose, or that the owner approved or declined, judged as
+   * {@link decideFrom} judges one. An option answers a wait on the owner's decision whose card has that option; yes
+   * or no answers a wait on the owner's approval.
+   */
+  ownerDecide(task: Task, answer: OwnerAnswer): Verdict<OwnerChange & DecideChange> {
+    const by = this.config.register.ownerSource;
+    const note = this.ownerAnswerNote(task, answer);
+    if (!note.ok) {
+      return note;
+    }
+    const decided = this.decideFrom(task, note.value);
+    return decided.ok ? ok({ ...decided.value, by }) : decided;
+  }
+
+  /** What the history keeps of the owner's answer: the option chosen by its number and words, or yes or no. */
+  private ownerAnswerNote(task: Task, answer: OwnerAnswer): Verdict<string> {
+    const by = this.config.register.ownerSource;
+    if (!waitsOnOwner(task, by)) {
+      return refuse(`${task.id} waits on no decision or approval of ${by}: only such a card is answered`);
+    }
+    const waitsOn = (kind: PersonWaitKind): boolean => task.waits.some((reason) => reason.kind === kind && reason.who === by);
+    if (answer.kind !== 'option') {
+      if (!waitsOn('approval')) {
+        return refuse(`${task.id} waits on ${by}'s decision, not an approval: answer it with --option <n>`);
+      }
+      return ok(answer.kind === 'approve' ? 'approved' : 'declined');
+    }
+    if (!waitsOn('decision')) {
+      return refuse(`${task.id} waits on ${by}'s approval, not a decision: answer it with --approve or --decline`);
+    }
+    const options = task.card?.options ?? [];
+    const chosen = options[answer.option - 1];
+    if (chosen === undefined) {
+      return refuse(options.length === 0 ? `${task.id}'s card has no options to choose from` : `${task.id}'s card has options 1 to ${options.length}, not ${answer.option}`);
+    }
+    return ok(clipEnd(`chose option ${answer.option} of ${options.length}: ${chosen}`, this.config.register.maxText));
+  }
+
+  /**
+   * The owner's Later from the pane (T4078), written as the owner: the card put off to `until` (stored form), with a
+   * note naming the time on the team's clock, judged as {@link deferFrom} judges one.
+   */
+  ownerLater(task: Task, until: string, context: Pick<StatusContext, 'now' | 'zone'>): Verdict<OwnerChange & DeferChange> {
+    const deferred = this.deferFrom(task, until, `put off until ${storedText(until, context.zone)}`, context);
+    return deferred.ok ? ok({ ...deferred.value, by: this.config.register.ownerSource }) : deferred;
   }
 
   /**
@@ -1126,7 +1228,8 @@ export class RegisterPolicy {
     }
     const pinned = changes.pin === undefined ? undefined : this.pinProblem(task.id, changes.owner ?? task.owner, caller, changes.pin);
     const prepared = changes.prepares === undefined ? undefined : this.prepProblem(task.id, changes.owner ?? task.owner, caller, changes.prepares, goalTags);
-    const marked = pinned ?? prepared;
+    const exempted = changes.exempt === undefined ? undefined : this.exemptProblem(task.id, changes.owner ?? task.owner, caller, changes.exempt);
+    const marked = pinned ?? prepared ?? exempted;
     if (marked !== undefined) {
       return refuse(marked);
     }
@@ -1150,7 +1253,9 @@ export class RegisterPolicy {
     const sourceRule: SourceRule = (source) => (source === task.source ? undefined : this.teamSourceProblem(source));
     const after = changes.after === undefined ? undefined : afterChangeProblem(task, changes.after, state, elsewhere);
     const goals = changes.goals === undefined ? undefined : this.goalProblem(changes.goals, goalTags);
-    const problem = after ?? this.checkFields(merged, sourceRule, task) ?? goals ?? this.checkText('note', text);
+    // Only a change to what a blocker rests on is judged, so a blocker added before these rules still takes other edits.
+    const blocker = changes.priority === undefined && changes.after === undefined && changes.description === undefined ? undefined : blockerProblem(task, merged);
+    const problem = after ?? this.checkFields(merged, sourceRule, task) ?? blocker ?? goals ?? this.checkText('note', text);
     return problem === undefined ? ok({ changes, note: text }) : refuse(problem);
   }
 
@@ -1216,6 +1321,19 @@ export class RegisterPolicy {
   }
 
   /**
+   * Why `caller` may not set or clear the rest exemption of task `id` (T4948), or undefined when it may: the mark wakes
+   * the task's `owner` past the daily cap and a plain budget cut, so only a leader sets it (the lead, or a sub-lead over
+   * that owner), never the owner itself unless it is the lead, so a session cannot spend past its own hold; the mark
+   * names the leader who set it.
+   */
+  private exemptProblem(id: string, owner: string, caller: string, exempt: string | null): string | undefined {
+    if (caller !== this.tree.lead && !this.tree.leads(caller, owner)) {
+      return `only ${this.approversText(owner)} exempts ${id} from its owner's rest: the mark wakes ${owner} past its budget hold`;
+    }
+    return exempt === null || exempt === caller ? undefined : `an exemption names the session that sets it (${caller}), not ${exempt}`;
+  }
+
+  /**
    * Why `caller` may not set or clear the prep marker of task `id` (T2453), or undefined when it may: the marker lets a
    * design for a ranked goal's near slice past the slice cap, so only a lead sets it (the lead, or a sub-lead over the
    * task's `owner`), never the owner itself unless it is the lead, so a build cannot ride it. A marker names one of
@@ -1234,15 +1352,21 @@ export class RegisterPolicy {
    * on any task, a sub-lead on the tasks of its group; only the LEAD_FIELDS (the lead the LEFT_OWNER_LEAD_FIELDS on a
    * task whose owner left the team, or when it points a task holding no issue ref at an issue: issue migrate opens an
    * issue for each task of the team and links it, replacing a note ref, while a task's issue stays its issue), and a
-   * sub-lead hands a task only
-   * to itself or a session it leads, so work never leaves its group by a sub-lead's hand.
+   * sub-lead hands a task only to itself or a session it leads, so work never leaves its group by a sub-lead's hand. A
+   * holder of a service role giving `issue migrate` (T4606) may make that one change, the ref alone, on any task but one
+   * kept local (`local: <why>`, a security hole among them): lifting that mark stays its owner's or a leader's call.
    */
   private leaderUpdateProblem(task: Task, caller: string, names: readonly TaskFieldName[], changes: Partial<TaskFields>): string | undefined {
     const isLead = caller === this.tree.lead;
+    const linksIssue = linksAnIssue(task, changes);
+    // The migrate role's holder links every team task to the issue its run opened for it (T4606), and nothing else; a
+    // task kept local is never one, so a holder's --yes run skips its row (migrate.ts skipReason asks this judge).
+    if (linksIssue && names.length === 1 && !hasIssueOrReason(task.ref) && roleHolding(this.config.serviceRoles, MIGRATE_COMMAND, caller) !== undefined) {
+      return undefined;
+    }
     if (!isLead && !this.tree.leads(caller, task.owner)) {
       return `only the owner (${task.owner}) or ${this.approversText(task.owner)} changes ${task.id}`;
     }
-    const linksIssue = task.ref?.startsWith(ISSUE_REF_PREFIX) !== true && changes.ref !== undefined && changes.ref !== null && changes.ref.startsWith(ISSUE_REF_PREFIX);
     const allowed = isLead && (linksIssue || !this.config.sessions.includes(task.owner)) ? LEFT_OWNER_LEAD_FIELDS : LEAD_FIELDS;
     const notLead = names.filter((name) => !allowed.includes(name));
     if (notLead.length > 0) {
@@ -1257,54 +1381,60 @@ export class RegisterPolicy {
   }
 
   /**
-   * A task for a GitHub issue. The import keys its tasks on their ref, so a second one for the same issue is
+   * A task for a tracker's issue, sourced by its tracker, whose ref starts with that tracker's prefix (a Jira sync
+   * never writes a `gh:` task). The import keys its tasks on their ref, so a second one for the same issue is
    * refused, and so is one for an issue a team task already links to in its ref (an issue the team opened for
    * its own task, issue migrate): that task tracks it. Two issues may share a title, so the duplicate-title rule
    * does not apply.
    */
-  importAdd(input: ImportInput, state: RegisterState): Verdict<TaskFields> {
-    const fields: TaskFields = { ...input, source: GITHUB_SOURCE, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, workClass: null, prepares: null };
+  importAdd(source: ImportSource, input: ImportInput, state: RegisterState): Verdict<TaskFields> {
+    const prefix = IMPORT_SOURCES[source];
+    if (!input.ref.startsWith(prefix)) {
+      return refuse(`ref ${input.ref} is not a ${source} ref: it starts with ${prefix}`);
+    }
+    const fields: TaskFields = { ...input, source, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, exempt: null, workClass: null, prepares: null };
     const holder = [...state.tasks.values()].find((task) => task.ref === input.ref);
     if (holder !== undefined) {
       return refuse(`${holder.id} already has ref ${input.ref}`);
     }
-    const problem = this.checkFields(fields, importSource);
+    const problem = this.checkFields(fields, importSource(source));
     return problem === undefined ? ok(fields) : refuse(problem);
   }
 
   /**
-   * A title, description or priority GitHub changed, on the import's own task only. A field the task already has
-   * is left out, judged under the lock, so a sync that raced another changes nothing twice.
+   * A title, description or priority the tracker changed, on the import's own task only. A field the task already has
+   * is left out, judged under the lock, so a sync that raced another changes nothing twice. A task whose line left
+   * its description out is judged by its mark (description-cut.ts), or every sync would write the body again.
    */
-  importUpdate(task: Task, changes: ImportChanges, note: string): Verdict<UpdateChange> {
-    const notImported = this.notImported(task);
+  importUpdate(source: ImportSource, task: Task, changes: ImportChanges, note: string): Verdict<UpdateChange> {
+    const notImported = this.notImported(source, task);
     if (notImported !== undefined) {
       return refuse(notImported);
     }
     const changed: ImportChanges = {
       ...(changes.title !== undefined && changes.title !== task.title ? { title: changes.title } : {}),
-      ...(changes.description !== undefined && changes.description !== task.description ? { description: changes.description } : {}),
+      ...(changes.description !== undefined && !holdsDescription(task, changes.description) ? { description: changes.description } : {}),
       ...(changes.priority !== undefined && changes.priority !== task.priority ? { priority: changes.priority } : {}),
     };
     if (Object.keys(changed).length === 0) {
       return refuse('nothing to change');
     }
-    const problem = this.checkFields({ ...pickFields(task), ...changed }, importSource, { workClass: task.workClass }) ?? this.checkText('note', note);
+    const problem = this.checkFields({ ...pickFields(task), ...changed }, importSource(source), { workClass: task.workClass }) ?? this.checkText('note', note);
     return problem === undefined ? ok({ changes: changed, note }) : refuse(problem);
   }
 
   /**
-   * The one exception to "only the owner sets the status": the import opens, finishes or drops its own
-   * tasks as their issues open and close on GitHub. Any other task, and any other status, is refused.
-   * No skill comes from GitHub, so a done needs none; its evidence is the issue's url.
+   * The one exception to "only the owner sets the status": an import opens, finishes or drops its own
+   * tasks as their issues open and close on its tracker. Any other task, and any other status, is refused.
+   * No skill comes from a tracker, so a done needs none; its evidence is the issue's url.
    */
-  importStatus(task: Task, input: StatusInput): Verdict<StatusChange> {
-    const notImported = this.notImported(task);
+  importStatus(source: ImportSource, task: Task, input: StatusInput): Verdict<StatusChange> {
+    const notImported = this.notImported(source, task);
     if (notImported !== undefined) {
       return refuse(notImported);
     }
-    if (!GITHUB_STATUSES.includes(input.status)) {
-      return refuse(`the GitHub import sets only ${GITHUB_STATUSES.join(', ')}, not ${input.status}`);
+    if (!IMPORT_STATUSES.includes(input.status)) {
+      return refuse(`the ${source} import sets only ${IMPORT_STATUSES.join(', ')}, not ${input.status}`);
     }
     if (input.status === task.status) {
       return refuse(`${task.id} is already ${task.status}`);
@@ -1318,16 +1448,16 @@ export class RegisterPolicy {
     return problem === undefined ? ok({ status: input.status, note, evidence, skill: null }) : refuse(problem);
   }
 
-  /** Why the import may not change the task: it is not one the import added. */
-  private notImported(task: Task): string | undefined {
-    return task.source === GITHUB_SOURCE ? undefined : `${task.id} is not a GitHub task (source ${task.source}): the import changes only its own`;
+  /** Why this import may not change the task: it is not one this import added (another tracker's is not either). */
+  private notImported(source: ImportSource, task: Task): string | undefined {
+    return task.source === source ? undefined : `${task.id} is not a ${source} task (source ${task.source}): the ${source} import changes only its own`;
   }
 
-  /** A source added on this team: a session id, or the owner's marker; never the import's. */
+  /** A source added on this team: a session id, or the owner's marker; never an import's. */
   private teamSourceProblem(source: string): string | undefined {
     const { ownerSource } = this.config.register;
-    if (source === GITHUB_SOURCE) {
-      return `source ${GITHUB_SOURCE} is kept for the tasks teamrig issue sync imports`;
+    if (isImportSource(source)) {
+      return `source ${source} is kept for the tasks teamrig issue sync imports`;
     }
     return source === ownerSource || SESSION_NAME.test(source) ? undefined : `source ${source} is neither a session id nor ${ownerSource}`;
   }
@@ -1403,8 +1533,8 @@ export class RegisterPolicy {
 const OWN_LIMITS: readonly string[] = ['title', 'description'];
 
 function pickFields(task: Task): TaskFields {
-  const { title, description, owner, source, ref, priority, due, goals, noGoal, week, after, size, type, critical, pin, workClass, prepares } = task;
-  return { title, description, owner, source, ref, priority, due, goals, noGoal, week, after, size, type, critical, pin, workClass, prepares };
+  const { title, description, owner, source, ref, priority, due, goals, noGoal, week, after, size, type, critical, pin, exempt, workClass, prepares } = task;
+  return { title, description, owner, source, ref, priority, due, goals, noGoal, week, after, size, type, critical, pin, exempt, workClass, prepares };
 }
 
 /** An update naming goals for a task said to serve none also clears that mark, which a task with goals cannot hold. */
@@ -1518,15 +1648,26 @@ function runsProof(reason: WaitReason): boolean {
 }
 
 /**
- * A proof runs when the task it waits on ends, so it waits only on one in progress or verifying (T1306): one not
- * started has no end in sight, and the task stays waiting on it until it starts.
+ * A proof runs when the task it waits on ends, so it waits only on one in progress or verifying (T1306), or on an
+ * open one of the same owner (#1544), who can start it now, so its end is in sight and the verifying task stops being
+ * due meanwhile; another's open task, or one waiting, has no end in sight, and the task stays waiting on it until it
+ * starts. An open one planned after a task not finished yet (`--after`) cannot start now either, so its end is not in
+ * sight: that refusal names the unfinished tasks.
  */
 function unstartedProofTask(task: Task, id: string, context: StatusContext): string | undefined {
   const target = context.state.tasks.get(id) ?? context.elsewhere.get(id)?.task;
   if (target === undefined || PROOF_TASK_STATUSES.includes(target.status)) {
     return undefined;
   }
-  return `${id} is ${target.status}: a proof waits only on a task in progress or verifying; until it starts, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
+  if (target.status === 'open' && target.owner === task.owner) {
+    const unfinished = unfinishedAfter(target.after, waitContext(context.state.tasks, context.now, context.zone, context.elsewhere));
+    if (unfinished.length === 0) {
+      return undefined;
+    }
+    return `${id} is planned after ${unfinished.join(', ')}, not finished yet, so it cannot start now: a proof waits on an open task of its own owner's only once it can start; until then, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
+  }
+  const whose = target.status === 'open' ? ` and ${target.owner}'s` : '';
+  return `${id} is ${target.status}${whose}: a proof waits only on a task in progress or verifying, or an open one of its own owner's; until it starts, set ${task.id} waiting on it (--status waiting --waits task:${id})`;
 }
 
 /**
@@ -1634,6 +1775,11 @@ function loopProblem(id: string, other: string, tasks: ReadonlyMap<string, Task>
 /** Why a time to wait until (stored form) is refused, or undefined: it must be still to come. */
 function timeProblem(at: string, { now, zone }: Pick<StatusContext, 'now' | 'zone'>): string | undefined {
   return (parseDeadline(at, zone)?.getTime() ?? 0) > now.getTime() ? undefined : `time ${showStored(at, zone)} has passed: name a time to come`;
+}
+
+/** True when `changes` point a task holding no issue ref at an issue: what issue migrate writes for each task it opens one for. */
+function linksAnIssue(task: Task, changes: Partial<TaskFields>): boolean {
+  return !isIssueRef(task.ref) && isIssueRef(changes.ref);
 }
 
 function blankToNull(text: string | undefined): string | null {

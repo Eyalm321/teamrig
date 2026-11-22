@@ -4,7 +4,8 @@ import type { Env } from '../core/home.ts';
 import { typedEffortsOf } from '../effort/typed-effort.ts';
 import { CLAIM_END, CLAIM_HELD, CLAIM_TAKEN, isClaudeSessionId, type ClaimOutcome, type ClearMode, type PersonHold } from '../mod/clear-hand.ts';
 import { endAndWait, tabProcessOf, workCutOffBy, type TabEnder } from '../open/end-tab.ts';
-import { isClaudeProcess, type FeedOutcome, type ProcessInfo, type SessionProcesses } from '../open/session-processes.ts';
+import type { FeedOutcome, ProcessInfo, SessionProcessCheck, SessionProcesses } from '../open/session-processes.ts';
+import type { TranscriptReader } from '../ports/host/index.ts';
 import type { RestoreRegistry } from '../restore/registry.ts';
 import type { ClearAsks } from './clear-asks.ts';
 import { readRunningWork } from './running.ts';
@@ -18,10 +19,17 @@ export type TabOpening = { readonly kind: 'opened' } | { readonly kind: 'none'; 
 export interface RestartDeps extends TabEnder {
   readonly store: RefreshStore;
   readonly files: Files;
+  /** Reads the lines of the session's transcript. */
+  readonly reader: TranscriptReader;
   /** The asks a tab's mod claims to run /clear itself, or holds while a helper runs (`mod/clear-hand.ts`). */
   readonly asks: ClearAsks;
   /** The registry of the restore after a reboot, which the ended session leaves as its SessionEnd hook would have it. */
   readonly restore: RestoreRegistry;
+  /**
+   * Whether a process is a session's host program, as the hosts tell it: the restart ends the recorded process only
+   * while it still is one, never a program that took its id since.
+   */
+  readonly isSessionProcess: SessionProcessCheck;
   /** Opens a new tab that starts the session fresh (`teamrig launch`). */
   openTab(): Promise<TabOpening>;
   /**
@@ -86,17 +94,6 @@ const CANCELLED: RestartResult = { kind: 'cancelled', why: 'the restart was canc
 /** How long the tab's mod has to claim the ask before the session is ended instead: it looks every second. */
 export const CLAIM_WAIT_MS = 10_000;
 
-/** How far up from a hook Claude Code may be: a hook run through a shell has the shell between. */
-const CLAUDE_HOPS = 3;
-
-/**
- * The Claude Code that runs `pid`: `pid` itself or one of its first parents, from one listing of every process (each
- * look starts a PowerShell on Windows, and a slow hook is killed at Claude Code's timeout); undefined when none is.
- */
-export async function claudeProcessOf(processes: SessionProcesses, pid: number): Promise<number | undefined> {
-  return (await processes.lineage(pid))?.slice(0, CLAUDE_HOPS).find(isClaudeProcess)?.pid;
-}
-
 /** The pending request this restart was started for; undefined once it was cancelled, taken or replaced. */
 async function pendingOf(deps: RestartDeps, plan: RestartPlan): Promise<RestartRequest | undefined> {
   const request = await deps.store.restart(plan.id);
@@ -133,7 +130,7 @@ async function endHooks(deps: RestartDeps, plan: RestartPlan, request: RestartRe
 /** Whether the session's last turn has ended and none of the work it started still runs. */
 async function idleAt(deps: RestartDeps, transcript: string): Promise<boolean> {
   const tail = await deps.files.readTail(transcript, TURN_TAIL_BYTES);
-  return !turnRunning(tail ?? '') && (await readRunningWork(deps.files, transcript, deps.clock.now())) === 0;
+  return !turnRunning(deps.reader, tail ?? '') && (await readRunningWork(deps.reader, deps.files, transcript, deps.clock.now())) === 0;
 }
 
 /** What a held answer's give-up says when the tab's mod gave no reason: one older than the reason. */
@@ -221,9 +218,9 @@ async function tabAnswerOf(deps: RestartDeps, claudeSession: string, outcome: Cl
  * The level the session runs at: the newest /effort typed in it after its request (a typed command is no prompt,
  * so it leaves the request pending), else the level its last turn ran at; null when neither is known.
  */
-function runningEffortOf(request: RestartRequest, tail: string): EffortLevel | null {
+function runningEffortOf(reader: TranscriptReader, request: RestartRequest, tail: string): EffortLevel | null {
   const asked = Date.parse(request.at);
-  return typedEffortsOf(tail, request.claudeSession).findLast((typed) => typed.at > asked)?.level ?? request.effort;
+  return typedEffortsOf(reader, tail, request.claudeSession).findLast((typed) => typed.at > asked)?.level ?? request.effort;
 }
 
 /**
@@ -236,7 +233,7 @@ async function modeOf(deps: RestartDeps, request: RestartRequest, claude: Proces
   if (wanted === undefined) {
     return 'clear';
   }
-  const running = runningEffortOf(request, (await deps.files.readTail(transcript, TURN_TAIL_BYTES)) ?? '');
+  const running = runningEffortOf(deps.reader, request, (await deps.files.readTail(transcript, TURN_TAIL_BYTES)) ?? '');
   if (running === null || running === wanted) {
     return 'clear';
   }
@@ -370,7 +367,7 @@ export async function runRestart(deps: RestartDeps, plan: RestartPlan): Promise<
       }
       continue;
     }
-    if (!isClaudeProcess(claude)) {
+    if (!deps.isSessionProcess(claude)) {
       await deps.store.clearRestart(plan.id);
       return { kind: 'failed', why: `process ${claude.pid} is ${claude.name}, not Claude Code` };
     }

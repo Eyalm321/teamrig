@@ -33,7 +33,8 @@ import {
   type DetailExtras,
 } from './views.ts';
 import type { Task } from './fold.ts';
-import { NO_TASKS_ELSEWHERE, TaskTree } from './tree.ts';
+import { BLOCKER_PRIORITY_ID } from './model.ts';
+import { decidingKey, NO_TASKS_ELSEWHERE, TaskTree } from './tree.ts';
 import { TEST_OWNER_SOURCE, testRanking, type TestRankingFacts } from '../testing/ranking.ts';
 import type { WatchedTask } from './verify.ts';
 import type { WaitReason } from './waits.ts';
@@ -366,6 +367,14 @@ describe('aheadReason and aheadText: why a row sorts ahead of the next', () => {
     assert.equal(aheadReason(placed(roadmap, tree), placed(rest, tree)), undefined);
   });
 
+  it('leaves a held blocker to the priority the row shows, even ahead of a p0 (T4329)', () => {
+    const blocker = testTask({ id: 'T13', priority: BLOCKER_PRIORITY_ID });
+    const urgent = testTask({ id: 'T12', priority: 0 });
+    const tree = rankedTree({}, blocker, urgent);
+    assert.equal(decidingKey(tree.placeOf(blocker), tree.placeOf(urgent)), 'holding');
+    assert.equal(aheadReason(placed(blocker, tree), placed(urgent, tree)), undefined);
+  });
+
   it('says a row can move when the next row, for all its score, cannot', () => {
     const work = testTask({ id: 'T12', size: 5 });
     const blocked = testTask({ id: 'T13', size: 0.1, after: ['T12'] });
@@ -478,9 +487,9 @@ describe('formatEvent and formatTaskDetail', () => {
       id: 'T1',
       at: AT,
       by: 'lead',
-      task: { title: 'x', description: 'Why x.', owner: 'alpha', source: 'owner', ref: 'inbox:3', priority: 1, due: '2030-01-08', goals: ['G1'], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, workClass: null, prepares: null },
+      task: { title: 'x', description: 'Why x.', owner: 'alpha', source: 'owner', ref: 'inbox:3', priority: 1, due: '2030-01-08', goals: ['G1'], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, exempt: null, workClass: null, prepares: null },
     },
-    { v: 1, type: 'create', id: 'T2', at: AT, by: 'lead', task: { title: 'y', description: null, owner: 'bravo', source: 'lead', ref: null, priority: 2, due: null, goals: [], noGoal: false, week: null, after: ['T1'], size: null, type: null, critical: false, pin: null, workClass: null, prepares: null } },
+    { v: 1, type: 'create', id: 'T2', at: AT, by: 'lead', task: { title: 'y', description: null, owner: 'bravo', source: 'lead', ref: null, priority: 2, due: null, goals: [], noGoal: false, week: null, after: ['T1'], size: null, type: null, critical: false, pin: null, exempt: null, workClass: null, prepares: null } },
     { v: 1, type: 'update', id: 'T1', at: '2030-01-07T10:00:00.000Z', by: 'lead', changes: { due: '2030-01-09', goals: ['G1', 'G2'] }, note: 'later' },
     { v: 1, type: 'status', id: 'T1', at: '2030-01-07T11:00:00.000Z', by: 'alpha', status: 'done', note: 'ok', evidence: 'abc1234', skill: 'none' },
     {

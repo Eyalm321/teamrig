@@ -6,7 +6,7 @@ becomes a task (source `github`, ref `gh:<owner>/<name>#<number>`), and its titl
 priority and open or closed state follow GitHub on every run. The sync never goes the other way: it never creates,
 edits, comments on or closes anything on GitHub, and a task added with `teamrig add` stays on your machine. The
 writes are all run by hand: `teamrig issue migrate` moves tasks you choose to new issues, once
-([Moving your tasks to issues](#moving-your-tasks-to-issues)), `teamrig issue comment`, `teamrig issue label`,
+([Moving your tasks to issues](#moving-your-tasks-to-issues)), `teamrig issue reply`, `teamrig issue label`,
 `teamrig issue edit`, `teamrig issue assign` and `teamrig issue close` answer, label, rewrite the description of,
 assign or close one issue or pull request ([Commenting on, labelling and closing](#commenting-on-labelling-and-closing)), and `teamrig issue links` puts the
 task tree on the issues ([Linking issues as the task tree](#linking-issues-as-the-task-tree)). GitHub is the
@@ -39,7 +39,7 @@ Add a `github` block to the team config (`~/.teamrig/teams/<team>/config.json`):
 | `repos` | The repositories to read, as `owner/name` (at most 20). Empty turns the sync off. |
 | `sessions` | Optional. The session that owns each repository's issues, so each session sees the issues of its own repositories. One session can own several. |
 | `owners` | Optional. A GitHub login to a session: an issue assigned to that login goes to that session, whatever its repository. |
-| `areaOwners` | Optional. A label to a session, such as `"area:cli": "cli"`: an issue with that label goes to the session of its area, whatever its repository. Matched without case; when an issue carries several, the first listed here wins. |
+| `areaOwners` | Optional. A label to a session, such as `"area:cli": "cli"`: an issue with that label goes to the session of its area, whatever its repository. Matched without case; when an issue carries several, the first listed here wins. `teamrig issue label` makes a label listed here that a repository lacks, in one area colour and description. |
 | `closedDays` | How many days back closed issues are read, to finish their tasks. Default 14. |
 | `probeSeconds` | How often it asks GitHub whether a repository changed, in seconds: 0, or 30 to 3600. Default 60; 0 leaves the sync to `teamrig issue sync --yes`. |
 | `acceptLabel` | Optional. The label that lets an issue by someone outside the repository become a task ([below](#whose-issues-become-tasks)). Default `teamrig`. |
@@ -65,7 +65,10 @@ Anyone can open an issue on a public repository, so teamrig takes only the issue
   the issue is not accepted any more. Once you have read the new text, remove the label and add it again.
 
 An issue that counts neither way writes nothing. A task the sync already added for one keeps its text: its priority
-and open or closed state still follow GitHub, its title and description stay as they are.
+and open or closed state still follow GitHub, its title and description stay as they are. The priority is the issue's
+most urgent `p<n>` label your levels list. No label makes a task p0 or a blocker: both wake their owner past the
+budget, so only a session of the team sets them, with `teamrig update --priority`. teamrig itself labels an issue
+only `p1`, `p2` or `p3` (a blocker or a p0 as `p1`), as it creates no label but its own.
 
 ## 2. Give teamrig read access
 
@@ -83,7 +86,7 @@ Give the token only what the commands you run need:
 | --- | --- |
 | `teamrig issue sync` | **Issues: Read-only** and **Pull requests: Read-only** |
 | `teamrig issue migrate` | **Issues: Read and write** |
-| `teamrig issue comment`, `teamrig issue label`, `teamrig issue edit`, `teamrig issue assign`, `teamrig issue close` | **Issues: Read and write** and **Pull requests: Read and write** (a pull request's comments, labels, description, assignees and state are written through its issue) |
+| `teamrig issue reply`, `teamrig issue label`, `teamrig issue edit`, `teamrig issue assign`, `teamrig issue close` | **Issues: Read and write** and **Pull requests: Read and write** (a pull request's comments, labels, description, assignees and state are written through its issue) |
 | `teamrig issue links` | **Issues: Read-only** for the preview, **Issues: Read and write** with `--yes` |
 
 ### Why one token per owner
@@ -147,6 +150,11 @@ repositories are read on. A `LEFT OUT` line names, by number only, the open issu
 that no one accepted yet (at most 20, then how many more); their text is never printed. `teamrig issue sync --repo
 acme/web` reads one repository only.
 
+The same run first imports any other tracker your team config has a `connectors` section for: today Jira's projects
+(`connectors.jira`), each with its own `ACCESS`, `REPO` and `PREVIEW` lines and tasks of source `jira`. Until Jira's
+trust rule ships, every Jira issue is left out, so it adds no task yet. A Jira section that is wrong or cannot be read
+gets its own `REFUSED` or `FAILED` line, and GitHub is read on; `--repo` reads GitHub alone.
+
 ## Then it runs on its own
 
 Once the repositories are listed, nobody needs to run it. When a session of the team starts or ends a turn, its hook
@@ -185,7 +193,7 @@ while it lasts; the first run on a repository only notes what is there.
   own authors pushed that branch to the repository itself: the repository's owner, or a login in `owners`. A
   collaborator or member the team never listed counts as an outsider, since write access lets anyone push a
   `t<id>-` branch. A fork's or an outsider's pull request, or a branch that names no task, goes to
-  `github.watcher` in the team config; unset, the session holding a service role with `issue comment`, the one that
+  `github.watcher` in the team config; unset, the session holding a service role with `issue close`, the one that
   answers on GitHub; else the lead. Who watches is staffing, not a permission: the lead sets it with
   `teamrig config set github.watcher <session>`, which refuses a name that is not one of the sessions.
 - With `github.activity` on, the same news also goes to the owner of the task holding the pull request or an issue
@@ -339,16 +347,24 @@ teamrig issue migrate rows.jsonl --yes               # opens the issues
 - **Safe to rerun.** The first failure stops the run (`FAILED` or `REFUSED`, then `STOPPED`); fix the cause and run it
   again: a task that holds its issue already is skipped, and so is a finished task or a repository not in
   `github.repos`.
+- **A service role may run it.** The owner may give a session `issue migrate` in a service role (`teamrig roles
+  grant github --holder <id> --commands "issue migrate" --yes`): its tab then runs `teamrig issue migrate
+  <rows file> --yes --session <id>` past the permission check when the rows file sits in one task folder
+  (`teamrig files T<id>`). Each issue row counts toward the role's daily cap, and a file with more rows than the
+  room left is refused. The register lets it link any session's task of the team holding no issue to its new issue,
+  the ref alone, never a task kept local (`local: <why>` stays its owner's or a leader's call).
 - **Write access, for this run only.** The token of each owner needs **Issues: Read and write**. Set it back to
   Read-only once the issues are open, unless you comment on, label or close issues with it; the sync needs nothing
   more.
 
 ## Commenting on, labelling and closing
 
-`teamrig issue comment` posts one comment on an issue or pull request, `teamrig issue label` adds and takes off its
-labels (where the repository lacks it, it makes first, with a `MADE` line, the `design` label or a label the
-repository's `.github/labels.json` defines, with that file's colour and description; any other label must already
-be there), and `teamrig issue close` closes one, first posting its `--comment` when given; a pull request closes
+`teamrig issue reply` posts a maintainer's reply with the state it names (see [Replying](#replying)), `teamrig issue
+assign` adds assignees, `teamrig issue label` adds and takes off its labels (where the repository lacks it, it makes
+first, with a `MADE` line, the `design` label, a label the repository's `.github/labels.json` defines, with that
+file's colour and description, or a label `areaOwners` names, in teamrig's one area colour and description when that
+file does not define it; any other label must already be there), and `teamrig issue close` closes one, first posting
+its `--comment` when given; a pull request closes
 unmerged. `--reason completed`, `not-planned` or `duplicate` says why it closed (GitHub keeps it on an issue only);
 `--duplicate-of` closes it as a duplicate of another issue of the same repository, which GitHub links as the
 original. `teamrig issue edit` replaces the body (the description) with the text of a file, so a spec of many lines
@@ -365,7 +381,8 @@ footer, keeps one footer at the current version. A text the footer would push pa
 is posted without it. A team that wants no footer sets `github.stamp` to false.
 
 ```sh
-teamrig issue comment acme/web#7 --body "Fixed in #9, thank you."
+teamrig issue reply acme/web#7 --body-file reply.md --status 'in review' --followups none --pr 9
+teamrig issue assign acme/web#7 --login octocat
 teamrig issue label acme/web#7 --add "type: bug,p1" --remove "needs triage"
 teamrig issue edit acme/web#7 --body-file spec.md
 teamrig issue assign acme/web#7 --add octocat
@@ -393,6 +410,18 @@ CLOSED acme/web#12
 - **Access.** The same token or `gh` login as the sync, which needs the [write permissions](#what-each-command-needs);
   a `FAILED` line names the permission a token lacks. `TEAMRIG_GITHUB=off` writes nothing.
 
+### Replying
+
+A reply must never say more than the thread shows: "Picking this up" on an issue still labelled `status:open`, with
+no one assigned and its pull request unlinked, tells a contributor the issue is free when it is not. So
+`teamrig issue reply` is the only way a session comments, and it takes the state with the words. It reads the issue,
+the `--pr` and each `--assign` login first, and a refusal writes nothing. Then `--status` sets the task holding the
+issue (through `teamrig set` and its gates), and the reply sends, in turn: the issue's status label and assignee as
+the register holds them, the `--assign` logins, a `Closes #<n>` line in the pull request's body when it has none and
+the issue's labels on it, the `--followup` issue (named in the comment), and the comment last. The first failure
+stops it, saying what it already did, and the comment is not posted. An issue no task holds is refused; a pull
+request takes no `--status` or `--pr`, and needs labels before a reply.
+
 ## A pull request in conflict
 
 When GitHub marks a pull request as conflicting, `teamrig pr conflicts` names the files to resolve. Run it in a
@@ -411,10 +440,34 @@ CONFLICTS acme/web#7 (head d00d5ee) against origin/main (b4e2a91): 2 files
 To land it: rebase its branch onto origin/main and resolve these files.
 ```
 
-For an outside pull request, post those files and the rebase in a comment (`teamrig issue comment`). A team pull
-request is re-shipped by its owner on the newest base under a new branch name, never force-pushed. `--base` names
-the branch the pull request targets when it is not `origin`'s default; the fetch uses git's own access to `origin`,
-not a token.
+For an outside pull request, post those files and the rebase in a comment (`teamrig issue reply`). A team pull
+request is rebased by its owner onto the newest base and pushed back to the same branch and pull request with a lease
+(`--force-with-lease`), never under a new branch name. `--base` names the branch the pull request targets when it is
+not `origin`'s default; the fetch uses git's own access to `origin`, not a token.
+
+## Landing an outside pull request
+
+The session holding an outside pull request's task reviews and lands it itself, with the token saved for the
+repository's owner, once its leader approved the exact head: `teamrig pr approve` posts the approving review and
+`teamrig pr merge` lands it, into the repository's merge queue where it has one, else merged by rebase. Both read
+every gate before writing anything: one task holds the pull request, the caller owns it, the leader's approval note
+names the full 40-hex head (a root team's lead needs no one's), and the pull request is open, no draft, on its
+default branch and still at `--head`; a merge also needs it free of conflicts, not queued already and every check on
+its head passed, which teamrig reads itself, since an admin token may bypass the branch's own rules. Each write is pinned to the
+head read, so a push after the approval makes GitHub refuse it, and a newer head needs its own approval.
+
+```sh
+teamrig pr approve acme/web#12 --head d00d5eed1234567890abcdef1234567890abcdef --check   # every gate, nothing written
+teamrig pr approve acme/web#12 --head d00d5eed1234567890abcdef1234567890abcdef
+teamrig pr merge acme/web#12 --head d00d5eed1234567890abcdef1234567890abcdef
+```
+
+```text
+APPROVED acme/web#12 at d00d5ee
+ENQUEUED acme/web#12 at d00d5ee: it lands once the merge queue's checks pass
+```
+
+GitHub's own required checks and reviews still gate the landing; these commands only take a person's hand out of it.
 
 ## Showing each task's status on its issue
 
@@ -454,15 +507,20 @@ PREVIEW nothing was written; a push would send 7 write(s) now, at most 40 a run,
 - **A pull request is left as it is.** A task whose ref is an open pull request gets a `PULL` line and is counted on the
   `PUSH` line: the push writes only issues. A task on a closed pull request stays `UNLISTED`.
 - **A taker's issue stays theirs.** A done or dropped task closes its issue only when the issue is unassigned or
-  assigned to the team: the logins `github.owners` maps and the account that owns the repository. An issue assigned
+  assigned to the team: the logins `github.owners` maps, the login the sync runs as and the account that owns the
+  repository. An issue assigned
   only to people outside the team is their work, and a task that only took part in it (a comment, an answer) ends
   without closing it: an `OPEN` line names it, for its taker's pull request or a person to close. A session's second
   login in `github.owners` reads as outside the team here; map each session to the one login it assigns by.
 - **Someone answers for it.** An open issue of a scheduled task (started, or with a due date), not a design issue,
-  no one is assigned to gets an assignee: the login `github.owners` maps to the task's owning session, else the account that owns the
-  repository (sessions are not GitHub users). An issue a person assigned keeps its assignees; the push takes none off. Each login is read first: one the repository may
-  not assign (not a person with access to it) gets an `UNASSIGNED` line and its issues keep their label changes, as
-  GitHub would drop it silently and every run would send it again.
+  no one is assigned to gets an assignee: the login `github.owners` maps to the task's owning session, else the login
+  the sync runs as (the one its token belongs to, read once a run), else none (sessions are not GitHub users). It is
+  never the account that owns the repository, which for an organization's repository no one can be assigned as. An
+  issue a person assigned keeps its assignees; the push takes none off. Each login is read before the run's plan is
+  kept: one the repository may not assign (not a person with access to it) gets an `UNASSIGNED` line and its issues
+  go to the next login in line, or stay unassigned, so it takes none of the run's writes and the label changes behind
+  it go out, where GitHub would drop it silently and every run would send it again. When the login the sync runs as
+  cannot be read (a `NOTE` line), only mapped sessions are assigned.
 - **Fields and type too.** On a repository with issue fields or types, the push then sets each held open issue's
   fields, one way from the task list: the priority as an option of a single-select `Priority` field (`P<n>`, else
   GitHub's own: p0 and p1 Urgent, p2 High, p3 Medium, p4 and p5 Low; `priorityOptions` renames them), the
@@ -476,9 +534,13 @@ PREVIEW nothing was written; a push would send 7 write(s) now, at most 40 a run,
   `github.repos` order; the rest waits for the next run.
 - **On its own, once you turn it on.** With `"statusPush": true` in the team config's `github` block, the
   [automatic sync](#then-it-runs-on-its-own) sends the push after each import, so no session runs it. Each run then
-  sends fewer writes when the sync can run often, so an hour of runs sends at most 250, half GitHub's 500 an hour
-  (probing every 60 seconds: 4 a run; every 300: 20). Its own label writes read as a change, so a longer list drains
-  a run per probe. It sends labels, assignees, fields and types only: a close is the one write a person reads as a decision,
+  counts its writes over the rolling hour in `state/github-push-hour.json`, so a backlog drains 40 a run until the
+  hour has sent 250, half GitHub's 500 an hour, and each run past that sends only what the hour has left, with a
+  `NOTE` saying so. A run reserves its limit in the count before it sends and settles it to the writes it sent, so
+  two runs never both spend the same writes and a run that stops half way counts high, never low. A count that
+  cannot be read or written gives the run the even share of the hour instead (probing every 60 seconds: 4 a run;
+  every 300: 20), with a `NOTE`; one that cannot be read is rewritten from that run on. Its own label writes read as
+  a change, so a longer list drains a run per probe. It sends labels, assignees, fields and types only: a close is the one write a person reads as a decision,
   so the automatic push prints it as a `HELD` line and leaves it to a session's `teamrig issue sync --push --yes`.
   A failed write is told to the lead's inbox like a repository that cannot be read. It is off by default: read `teamrig issue sync --push` first, and give the token **Issues: Read and write**.
 
@@ -506,8 +568,8 @@ commenter, swaps `status:open` for `status:claimed`, and replies once with the r
   at most ten issues whose new comments could claim, oldest first; the rest are printed `HELD` and read on the next
   run, as is an issue whose read failed. A claim past an issue's first 30 new comments waits for a person to assign.
 - **Within the run's writes.** A claim's writes (assign, labels, reply) count in the same writes per run as the
-  status push, and come first; a claim past them is printed `HELD` and made on the next run. A run whose share of
-  the hour is less than one claim's 5 writes (4 at the default `probeSeconds` of 60) may still send one whole claim:
+  status push, and come first; a claim past them is printed `HELD` and made on the next run. A run whose writes
+  left in the hour are fewer than one claim's 5 may still send one whole claim, counted in the hour like the rest:
   at most five claims a day per repository keep that small.
 
 ## Linking issues as the task tree
@@ -572,7 +634,7 @@ again.
   The push also reads each open issue's type and field values, with the repository's fields and types, never its text.
   Any other `gh` command or query is refused in code, except
   the writes, each run by hand on a repository in `github.repos`: `teamrig issue migrate`'s create of one issue
-  (`gh api repos/<owner>/<name>/issues -X POST` with its title, body and labels only), `teamrig issue comment`'s
+  (`gh api repos/<owner>/<name>/issues -X POST` with its title, body and labels only), `teamrig issue reply`'s
   one comment (`.../issues/<number>/comments -X POST` with its body only), `teamrig issue label`'s read of one label
   (`repos/<owner>/<name>/labels/<label>`), add (`.../issues/<number>/labels -X POST` with its labels only) and take
   off (`.../issues/<number>/labels/<label> -X DELETE`), `teamrig issue close`'s close
@@ -587,7 +649,9 @@ again.
   -X DELETE` with that login only), the read of the repository's label file
   (`repos/<owner>/<name>/contents/.github/labels.json` with the raw media type, nothing else), the create of a label
   teamrig makes (`repos/<owner>/<name>/labels -X POST` with the name, colour and description of one of the five
-  status labels or `design`, word for word) or of one that file named when the same run read it, word for word, and
+  status labels or `design`, word for word), of an area label (any name GitHub takes, in the one area colour and
+  description, word for word; `teamrig issue label` makes only one `areaOwners` names) or of one that file named
+  when the same run read it, word for word, and
   `teamrig issue links`'s one link (`.../issues/<number>/sub_issues` or `.../dependencies/blocked_by`, `-X POST`
   with one issue id only). No link is ever removed.
 - **Never on disk in the clear.** The token lives in the system's credential store, encrypted under your login. It
@@ -595,9 +659,16 @@ again.
   that one run.
 - **Same trust as the `gh` login.** Any program running as you can read your credential store, just as it can use
   your `gh` login. Keep each token to the repositories the team syncs.
+- **Sessions write through teamrig, not raw `gh`.** On a repository in `github.repos`, a session's raw `gh` call only
+  reads: [the exec guard](../plugins/teamrig/skills/teamrig-guide/hooks.md#before-a-shell-command-the-exec-guard)
+  refuses every write (a comment, a close, a label, a pull request, a release, a `gh api` call that changes
+  anything), and every one it cannot place on a repository, since `gh` would write with whatever login it holds,
+  past teamrig's check of who may. Sessions write with `teamrig issue reply`, `close`, `label`, `edit` and `assign`,
+  and land branches with `teamrig merge`, with the key saved above. Other repositories keep plain `gh`.
 - **Issue text is outside input.** Anyone who can open an issue writes its title and body, so an outsider's issue
   becomes a task only once accepted ([Whose issues become tasks](#whose-issues-become-tasks)); teamrig prints titles
   quoted, as data, never as instructions. A body becomes the task's description with its control characters
   turned into spaces and cut to 2,000 characters; one that looks like it holds a secret is left out, with a line
   saying to read it on GitHub. Sessions read descriptions as data, never as instructions.
-- **Off switch.** `TEAMRIG_GITHUB=off` turns the sync off on one machine.
+- **Off switch.** `TEAMRIG_GITHUB=off` turns the sync off on one machine. So does `TEAMRIG_CONNECTOR_GITHUB=off`, the
+  switch every connector has: `TEAMRIG_CONNECTOR_<ID>=off`, the connector's id in upper case with `_` for each `-`.

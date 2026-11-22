@@ -9,6 +9,8 @@ project skills in `.claude/skills/` hold the steps of each repeated job.
   team stays in its team rules or session skills. The test is in CONTRIBUTING.md, [Where a change
   lives](CONTRIBUTING.md#where-a-change-lives); the task and the pull request say which reach it has.
 - **A branch per change**, cut from the newest `origin/main`; it lands through a pull request, never a push to `main`.
+  A rebase or conflict fix goes back to the same branch with `git push --force-with-lease`: one branch, one pull
+  request, never a new branch for the same change.
 - **Tests with the change**: a new behaviour gets a test that fails without it, a bug fix a regression test that fails
   on the old code. `node:test` files sit beside the code as `<name>.test.ts`, using the fakes in `src/testing/`. No
   skipped or todo tests, and never lower a floor in `tools/ci/coverage.json`.
@@ -38,5 +40,6 @@ project skills in `.claude/skills/` hold the steps of each repeated job.
 | `dev-add-config-key` | a new key in the team config |
 | `dev-update-docs` | the docs a change must update, and the checks that hold them to the code |
 | `dev-ship-change` | from the last commit to the merge: checks, push, pull request |
+| `dev-ship-release` | merging the release pull request: the lead's approval of its head, then `ship.ts merge --release` |
 | `dev-design-issue` | joining a design issue: a reasoned comment, nothing taken until it is agreed, no sensitive data |
 | `dev-github-intake` | a maintainer taking in issues and pull requests: labels, best fix first, landing with credit, design issues |

@@ -1,4 +1,5 @@
 import type { TranscriptSource } from '../budget/discover.ts';
+import type { HostSource } from '../composition/host-ports.ts';
 import type { ConfigFormat } from '../config/migrate.ts';
 import type { HostCpu } from '../delivery/cpu.ts';
 import type { HostMemory } from '../delivery/memory.ts';
@@ -8,14 +9,15 @@ import type { StepRunner } from '../delivery/steps.ts';
 import type { FileBytes } from '../core/file-bytes.ts';
 import type { Files } from '../core/files.ts';
 import type { Env } from '../core/home.ts';
+import type { HttpClient } from '../core/http.ts';
 import type { ChatWebhook } from '../core/webhook.ts';
 import type { ExecPorts } from '../exec/ports.ts';
 import type { Clock, Sleep } from '../core/lock.ts';
 import type { PathProbe } from '../core/path-probe.ts';
-import type { StoreFolders } from '../core/plugin-store.ts';
-import type { CredentialStore } from '../github/credentials.ts';
-import type { GhRunner } from '../github/gh.ts';
-import type { PullGit } from '../github/pull-conflicts.ts';
+import type { StoreFolders } from '../plugin-store/store.ts';
+import type { CredentialStore } from '../core/credentials.ts';
+import type { ProgramRunner } from '../core/program-runner.ts';
+import type { PullGit } from '../sync/pull-conflicts.ts';
 import type { MergeGit } from '../merge/git.ts';
 import type { RequirementsCheck } from '../requirements/requirements.ts';
 import type { HookRunner } from '../deploy/hooks.ts';
@@ -25,6 +27,7 @@ import type { RestorePorts } from '../restore/ports.ts';
 import type { Processes } from '../open/processes.ts';
 import type { SessionProcesses } from '../open/session-processes.ts';
 import type { CommitLog } from '../push-guard/commit-size.ts';
+import type { ChangeGit } from '../changes/source.ts';
 import type { RepoState } from '../push-guard/push.ts';
 import type { SecretsGit } from '../secret-guard/secrets-git.ts';
 import type { PointerGit } from '../setup/pointer-ignore.ts';
@@ -33,6 +36,12 @@ import type { ShellRunner } from '../test-run/shell.ts';
 export interface Output {
   stdout(line: string): void;
   stderr(line: string): void;
+  /**
+   * Aborts once stdout's reader is gone (`teamrig events --json | head -1`). A write after that is dropped without an
+   * error, so a command that prints until it is stopped has only this to end on. Absent on an output that keeps its
+   * lines and so cannot close: a guard's answer, a queued step's log.
+   */
+  readonly closed?: AbortSignal;
 }
 
 /** Where this CLI runs from, so `teamrig open` can start it again in a new tab, where the plugin's bin folder is not on PATH. */
@@ -67,6 +76,13 @@ export interface CliRuntime {
   readonly secretsGit: SecretsGit;
   readonly out: Output;
   readonly platform: NodeJS.Platform;
+  /** The ports of the AI CLI this run works in, built for an environment and platform: read them with `hostOf` (host.ts). */
+  readonly host: HostSource;
+  /**
+   * Every host adapter teamrig ships with, the one the run works in among them: for what holds on a machine whatever
+   * host runs the session, the hosts' own secret files (`secretFilesOf`, host.ts).
+   */
+  readonly shippedHosts: readonly HostSource[];
   /** Terminal launchers and Claude Code, for `teamrig open` and `teamrig launch`. */
   readonly processes: Processes;
   /** The running session's Claude Code process and its tab, which the automatic context refresh ends. */
@@ -81,10 +97,12 @@ export interface CliRuntime {
   readonly cpu: HostCpu;
   /** The processes that started this one, so a queued step whose launching shell was ended stops too. */
   readonly starters: StarterWatch;
-  /** The GitHub CLI, for `teamrig issue sync`; it runs reads only (github/gh.ts). */
-  readonly gh: GhRunner;
+  /** Runs the command-line tool of a connector adapter, such as `gh`, each run held to the two connector limits of time and output (plugin-api/connector.ts). */
+  readonly run: ProgramRunner;
   /** The system's saved secrets, where `teamrig issue sync` finds each owner's read-only GitHub token; only ever read. */
   readonly credentials: CredentialStore;
+  /** The API of an outside tool a connector adapter reaches with no command line (plugin-api/connector.ts): https only. */
+  readonly http: HttpClient;
   /** Whether a folder or a program is there. */
   readonly probe: PathProbe;
   /** The plugin store's file and folder times, which the idle pass reads before it reopens a session. */
@@ -102,6 +120,8 @@ export interface CliRuntime {
   readonly trees: TreeState;
   /** The git steps `teamrig merge` takes. */
   readonly mergeGit: MergeGit;
+  /** The project history `teamrig changes` reads: commits in a range and the release index, read-only. */
+  readonly changeGit: ChangeGit;
   /** The git steps `teamrig pr conflicts` takes: a pull request's head fetched and merged in the object store alone. */
   readonly pulls: PullGit;
   /** The programs `teamrig deploy` runs, its checks, afterPull hooks and deploy command: no shell, each with a time limit. */

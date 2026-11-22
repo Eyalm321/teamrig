@@ -1,8 +1,8 @@
-import { join, resolve } from 'node:path';
-import { launchOf } from '../../config/launch.ts';
+import { resolve } from 'node:path';
+import { ownLaunchOf } from '../../config/launch.ts';
 import { SHIPPED_CONFIG_FORMAT } from '../../config/migrate.ts';
 import type { KitConfig } from '../../config/types.ts';
-import { claudeConfigDir, ENV, KIT_NAME, resolveKitHome, teamPaths } from '../../core/home.ts';
+import { KIT_NAME, resolveKitHome, teamConfigFile } from '../../core/home.ts';
 import { describeRequirement } from '../../requirements/requirements.ts';
 import { applyIgnore, ignoreLines, ignoreStep, type IgnoreStep } from '../../setup/pointer-ignore.ts';
 import { applySetupTask, setupTaskDryLines, setupTaskLines, setupTaskStep } from '../../setup/setup-task.ts';
@@ -10,18 +10,19 @@ import { tabStatusLine } from '../../setup/tab-status-note.ts';
 import { applyTeamSetup, planTeamSetup, teamSpecOf, type FileStep, type SetupPlan, type TeamSpec } from '../../setup/team-create.ts';
 import { onePositional, requiredFlag, UsageError, type ParsedArgs } from '../args.ts';
 import { pointerTeam, resolveTeam } from '../../core/team.ts';
+import { identityOf, pathsIfKnown } from '../host.ts';
 import { openKit, requireConfig, teamFolders, teamProjectOf, type Kit } from '../kit.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { teamRegister } from '../team-register.ts';
 import { loadTree } from '../tree.ts';
-import { titleLeftToHooks } from './hook-tab-status.ts';
+import { titleHoldOf } from './hook-tab-status.ts';
 
 /** The session that leads a team created without `--lead`. */
 export const DEFAULT_LEAD = 'lead';
 
-/** The project a command sets up: `--project`, else the folder Claude Code started in, else the current folder. */
+/** The project a command sets up: `--project`, else the folder the host says the session started in, else the current folder. */
 export async function projectOf(runtime: CliRuntime, flag: string | undefined): Promise<string> {
-  const given = flag ?? runtime.env[ENV.claudeProjectDir]?.trim();
+  const given = flag ?? identityOf(runtime).projectDir;
   const project = resolve(runtime.cwd, given === undefined || given === '' ? '.' : given);
   if ((await runtime.probe.kind(project)) !== 'folder') {
     throw new RefusedError(`the project folder ${project} does not exist`);
@@ -34,7 +35,7 @@ export async function projectOf(runtime: CliRuntime, flag: string | undefined): 
  * ({@link teamProjectOf}), else as {@link projectOf}.
  */
 export function sessionProjectOf(runtime: CliRuntime, config: KitConfig, id: string, flag: string | undefined, from: string): Promise<string> {
-  return projectOf(runtime, flag ?? launchOf(config, id).project ?? teamProjectOf(config, from));
+  return projectOf(runtime, flag ?? ownLaunchOf(config, id).project ?? teamProjectOf(config, from));
 }
 
 /** {@link sessionProjectOf} for each session a pass over the team reads. */
@@ -56,7 +57,7 @@ export interface SetupTeam {
  * the caller's team, not that project's. Without --project, the caller's team. Undefined before one exists.
  */
 export async function setupTeamOf(runtime: CliRuntime, asked: string | undefined): Promise<SetupTeam | undefined> {
-  const found = asked === undefined ? await resolveTeam(runtime.files, runtime.env, teamFolders(runtime.env, [runtime.cwd])) : await pointerTeam(runtime.files, [asked]);
+  const found = asked === undefined ? await resolveTeam(runtime.files, runtime.env, teamFolders(runtime, [runtime.cwd])) : await pointerTeam(runtime.files, [asked]);
   switch (found.kind) {
     case 'none':
       return undefined;
@@ -140,7 +141,7 @@ export async function teamCreate(args: ParsedArgs, runtime: CliRuntime): Promise
   }
   (await runtime.requirements.problems()).forEach((problem) => runtime.out.stdout(`WARN ${describeRequirement(problem, KIT_NAME)}`));
   const project = await projectOf(runtime, args.flags.get('project'));
-  const configPath = teamPaths(resolveKitHome(runtime.env, runtime.userHome), team, claudeConfigDir(runtime.env, runtime.userHome)).config;
+  const configPath = teamConfigFile(resolveKitHome(runtime.env, runtime.userHome), team);
   const format = runtime.configFormat ?? SHIPPED_CONFIG_FORMAT;
   const { tree } = await loadTree(runtime);
   const planned = await planTeamSetup(runtime.files, format, spec.value, configPath, project, tree);
@@ -160,8 +161,9 @@ export async function teamCreate(args: ParsedArgs, runtime: CliRuntime): Promise
     team,
     configOn: done.value.tabStatus,
     configPath,
-    titleLeft: titleLeftToHooks(runtime.env),
-    settingsPath: join(claudeConfigDir(runtime.env, runtime.userHome), 'settings.json'),
+    title: titleHoldOf(runtime),
+    // Creating a team needs no file of the host, so a host whose folders are not known still gets its team: the note then names no file.
+    settingsPath: pathsIfKnown(runtime)?.userSettings(runtime.userHome),
   });
   const setupTask = await setupTaskOf(runtime, spec.value, dryRun);
   summaryLines(done.value, ignore, tabStatus, setupTask, dryRun).forEach((line) => runtime.out.stdout(line));

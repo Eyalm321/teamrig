@@ -23,22 +23,31 @@ describe('every workflow', () => {
     }
   });
 
-  it('gives the token read-only contents by default, and never runs a fork pull request with secrets', () => {
+  it('gives the token read-only contents by default, none in release-merge.yml, and never runs a fork pull request with secrets', () => {
     for (const [name, text] of workflows) {
-      assert.match(text, /^permissions:\n {2}contents: read\n/m, name);
-      assert.doesNotMatch(text, /pull_request_target/, name);
+      assert.match(text, name === 'release-merge.yml' ? /^permissions: \{\}\n/m : /^permissions:\n {2}contents: read\n/m, name);
+      // auto-merge.yml alone runs on pull_request_target, with no secret and no checkout (auto-merge-workflow.test.ts).
+      assert.equal(/pull_request_target/.test(text), name === 'auto-merge.yml', name);
+      if (name === 'auto-merge.yml') assert.doesNotMatch(text, /secrets\.|actions\/checkout/, name);
     }
   });
 
-  it('never merges a pull request, so no dependency update lands without a person checking it', () => {
+  it('switches auto-merge on only from auto-merge.yml, which leaves the review to a person, and never merges a dependency update by itself', () => {
     for (const [name, text] of workflows) {
-      assert.doesNotMatch(text, /gh pr merge|--auto\b|enablePullRequestAutoMerge|dependabot\/fetch-metadata/, name);
+      assert.equal(/gh pr merge|--auto\b|enablePullRequestAutoMerge/.test(text), name === 'auto-merge.yml', name);
+      assert.doesNotMatch(text, /dependabot\/fetch-metadata|gh pr review|--approve\b|addPullRequestReview/, name);
     }
   });
 
-  it('writes pull requests only from release.yml, once, to open the release pull request a person merges', () => {
+  it('merges only from release-merge.yml, whose gate passes nothing but a release pull request', () => {
     for (const [name, text] of workflows) {
-      assert.equal(text.match(/pull-requests: write/g)?.length ?? 0, name === 'release.yml' ? 1 : 0, name);
+      assert.equal(text.includes('release-merge-cli.ts merge'), name === 'release-merge.yml', name);
+    }
+  });
+
+  it('writes pull requests only from release.yml, to open the release pull request, and auto-merge.yml, to switch auto-merge on, once each', () => {
+    for (const [name, text] of workflows) {
+      assert.equal(text.match(/pull-requests: write/g)?.length ?? 0, name === 'release.yml' || name === 'auto-merge.yml' ? 1 : 0, name);
     }
   });
 });
@@ -46,8 +55,15 @@ describe('every workflow', () => {
 describe('codeql.yml', () => {
   const codeql = workflows.get('codeql.yml') ?? '';
 
-  it('scans each pull request, each push to main, weekly and by hand', () => {
-    assert.match(codeql, /^on:\n {2}push:\n {4}branches: \[main\]\n {2}pull_request:\n {2}schedule:\n {4}- cron: '[\d* ]+'\n {2}workflow_dispatch:\n/m);
+  it('scans each pull request that changes code, each push to main, weekly and by hand', () => {
+    const trigger = /^on:\n {2}push:\n {4}branches: \[main\]\n(?: {2}#.*\n)* {2}pull_request:\n {4}paths-ignore:\n {6}- '\*\*\/\*\.md'\n {6}- 'docs\/\*\*'\n {2}schedule:\n {4}- cron: '[\d* ]+'\n {2}workflow_dispatch:\n/m;
+    assert.match(codeql, trigger);
+  });
+
+  it('filters only the pull request trigger, so every push to main is still scanned', () => {
+    const push = /^ {2}push:\n((?: {4}.*\n)+)/m.exec(codeql)?.[1] ?? '';
+    assert.doesNotMatch(push, /paths/);
+    assert.equal(codeql.match(/paths-ignore:/g)?.length, 2, 'one for the pull request trigger, one for the dist');
   });
 
   it('scans the TypeScript with the security-extended queries and uploads with a job-scoped write token', () => {

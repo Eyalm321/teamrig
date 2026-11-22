@@ -3,9 +3,9 @@ import type { KitReader } from '../../src/cli/kit.ts';
 import { RefusedError } from '../../src/cli/runtime.ts';
 import { mergeStandingOf, tabCallerOf, type MergeStanding } from '../../src/cli/ship-approval.ts';
 import { ENV, type Env } from '../../src/core/home.ts';
-import { approvedTaskOf } from '../../src/register/approval.ts';
+import { answerNamesHead, approvedTaskOf, isCommitSha } from '../../src/register/approval.ts';
 import { branchTaskOf } from '../../src/worktree/owner.ts';
-import { shipsInVersions, TEAMRIG_RELEASE_STAMPS, TEAMRIG_SHIP_VERSION_FILES, versionIn, type ReleaseStamp, type Version, type VersionFile } from './version-bump.ts';
+import { shipsInVersions, shipVersionFileOf, TEAMRIG_RELEASE_STAMPS, versionIn, type ReleaseStamp, type Version, type VersionFile } from './version-bump.ts';
 
 /**
  * Whether a merge may go ahead (T2788, security verdict on T2763): refused with why; the caller's own say (a root
@@ -16,8 +16,11 @@ export type MergeClearance =
   | { readonly kind: 'self' }
   | { readonly kind: 'approved'; readonly by: string };
 
-const SHA = /^[0-9a-f]{7,40}$/;
-const SHA_RUN = /\b[0-9a-f]{7,40}\b/g;
+/**
+ * The variable Claude Code names a tab's session by. The ship tool is this repo's own and runs only from a Claude
+ * Code tab, so it holds the name itself; the plugin's code asks its host adapter and names no host's variable.
+ */
+const TAB_VARIABLE = 'CLAUDE_CODE_SESSION_ID';
 
 /**
  * The task a branch is cut for, read as the plugin reads it (`branchTaskOf`), so a branch `teamrig worktree add --task`
@@ -52,15 +55,14 @@ export function mergeClearance(standing: MergeStanding, taskId: string, head: st
   if (approved === null) {
     return refused(`name the approved head with --approved <sha>: ${caller}'s merge needs the approval of ${approvers.join(' or ')}`);
   }
-  if (!SHA.test(approved) || !head.startsWith(approved)) {
+  if (!isCommitSha(approved) || !head.startsWith(approved)) {
     return refused(`--approved ${approved} is not the branch head ${head}`);
   }
   const answered = approvedTaskOf([task], caller, approvers);
   if (answered === undefined) {
     return refused(`${taskId} (${task.status}) holds no approval of ${approvers.join(' or ')}: set it waiting approval:${approvers[0]} and ask for it naming ${head}`);
   }
-  const named = task.answer?.note?.match(SHA_RUN) ?? [];
-  if (!named.some((sha) => head.startsWith(sha))) {
+  if (!answerNamesHead(task, head)) {
     return refused(`${answered.by}'s approval of ${taskId} names no sha of the head ${head}: ask ${answered.by} to approve naming it`);
   }
   return { kind: 'approved', by: answered.by };
@@ -95,11 +97,21 @@ export async function clearMerge(caller: MergeCaller, reads: MergeReads, branch:
   if (taskId === null) {
     return refused(`branch ${branch} names no task: a merged branch is t<id>-<name>, after any type folder (fix/t<id>-<name>)`);
   }
+  return clearTaskMerge(caller, reads, taskId, head, approved);
+}
+
+/**
+ * The clearance of a merge at `head` on the approval of task `taskId`, named by the caller rather than read from a
+ * branch: the release pull request's branch, which its release tool names, names no task (T4645). Refused when the
+ * caller, team or tab is not set, the tab is not bound to the caller alone, or the register cannot be read; else
+ * `mergeClearance`.
+ */
+export async function clearTaskMerge(caller: MergeCaller, reads: MergeReads, taskId: string, head: string, approved: string | null): Promise<MergeClearance> {
   if (caller.session === undefined || caller.session === '' || caller.team === undefined || caller.team === '') {
     return refused('TEAMRIG_SESSION and TEAMRIG_TEAM must name the merging session and its team');
   }
   if (caller.claudeSession === undefined || caller.claudeSession === '') {
-    return refused("CLAUDE_CODE_SESSION_ID must name the merging Claude Code tab: a merge runs from the merging session's own tab");
+    return refused(`${TAB_VARIABLE} must name the merging Claude Code tab: a merge runs from the merging session's own tab`);
   }
   let standing: MergeStanding;
   try {
@@ -124,12 +136,27 @@ export type ClearMerge = (branch: string, head: string, approved: string | null)
  * (stopgap T791), so the guards stay the trust boundary.
  */
 export function clearMergeFrom(env: Env, reader: KitReader): ClearMerge {
-  const caller = { session: env[ENV.session]?.trim(), team: env[ENV.team]?.trim(), claudeSession: env[ENV.claudeSession]?.trim() };
-  const reads: MergeReads = {
-    tabCallerOf: (team, claudeSession, session) => tabCallerOf(reader, team, claudeSession, session),
-    standingOf: (team, session, taskId) => mergeStandingOf(reader, team, session, taskId),
-  };
+  const { caller, reads } = mergeContextOf(env, reader);
   return (branch, head, approved) => clearMerge(caller, reads, branch, head, approved);
+}
+
+/** The clearance of a merge at `head` on the approval of the task the caller names, on the approved sha it names or null. */
+export type ClearTaskMerge = (taskId: string, head: string, approved: string | null) => Promise<MergeClearance>;
+
+/** `clearTaskMerge` for the session, team and tab `env` names, read as `clearMergeFrom` reads them. */
+export function clearTaskMergeFrom(env: Env, reader: KitReader): ClearTaskMerge {
+  const { caller, reads } = mergeContextOf(env, reader);
+  return (taskId, head, approved) => clearTaskMerge(caller, reads, taskId, head, approved);
+}
+
+function mergeContextOf(env: Env, reader: KitReader): { readonly caller: MergeCaller; readonly reads: MergeReads } {
+  return {
+    caller: { session: env[ENV.session]?.trim(), team: env[ENV.team]?.trim(), claudeSession: env[TAB_VARIABLE]?.trim() },
+    reads: {
+      tabCallerOf: (team, claudeSession, session) => tabCallerOf(reader, team, claudeSession, session),
+      standingOf: (team, session, taskId) => mergeStandingOf(reader, team, session, taskId),
+    },
+  };
 }
 
 /** Runs git in the repo and returns its stdout; throws when git fails. */
@@ -156,9 +183,12 @@ export interface ShipWrites {
  * teamrig's `ShipWrites` for a repo profile's regenerated paths: every version file a ship or catch-up sets again,
  * the release manifest too, with teamrig's release stamps. The ship and `ship.ts merge` both read work through it,
  * so a path repos.json adds is known to each (a merge given the shorter list refused every approved head, T4298).
+ * Another repo's plugin manifest is known by its shape (`shipVersionFileOf`): teamrig-pane's release merges through
+ * the same tool (T4821), which threw on its plugin.json before.
  */
 export function teamrigShipWritesOf(regenerated: readonly string[]): ShipWrites {
-  return shipWritesOf(regenerated, TEAMRIG_SHIP_VERSION_FILES, TEAMRIG_RELEASE_STAMPS);
+  const known = regenerated.flatMap((path) => shipVersionFileOf(path) ?? []);
+  return shipWritesOf(regenerated, known, TEAMRIG_RELEASE_STAMPS);
 }
 
 /**

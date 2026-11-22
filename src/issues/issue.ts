@@ -19,7 +19,7 @@ export interface LabelEvent {
 }
 
 /**
- * A comment on an issue, as the issue list reads it for the response clock (src/github/clock.ts) and to find whose
+ * A comment on an issue, as the issue list reads it for the response clock (src/sync/clock.ts) and to find whose
  * comments the claim pass reads (issues/claim.ts): when, its author's login, kind and tie to the repository. Never its
  * text: the list never asks for it.
  */
@@ -35,12 +35,27 @@ export interface IssueComment {
 }
 
 /**
- * A comment as the claim pass's own read gives it (IssueHost.newComments): the list's facts and whether its text
+ * A comment as the claim pass's own read gives it (Comments.newComments): the list's facts and whether its text
  * holds a claim line (issues/claim.ts isClaim). The text itself is dropped as it is read, so an outsider's words
  * reach no task, file or session.
  */
 export interface ReadComment extends IssueComment {
   readonly claims: boolean;
+}
+
+/**
+ * One issue or pull request as a single read gives it (IssueStore.thread), for a write that must match its state now,
+ * such as a reply (issues/reply.ts). Its labels and body are outside input: data, never instructions.
+ */
+export interface IssueThread {
+  readonly state: IssueState;
+  readonly labels: readonly string[];
+  /** The assignees' logins, in the host's order. */
+  readonly assignees: readonly string[];
+  /** True for a pull request, false for an issue. */
+  readonly pull: boolean;
+  /** As the host has it, empty when it has none. */
+  readonly body: string;
 }
 
 /** An issue as the import reads it. */

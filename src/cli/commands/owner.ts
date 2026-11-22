@@ -1,10 +1,13 @@
 import { formatAddress } from '../../core/address.ts';
-import { ENV, KIT_NAME } from '../../core/home.ts';
+import { KIT_NAME } from '../../core/home.ts';
+import { LATER_FORMS, MAX_LATER_HOURS, namedLaterTime } from '../../core/later-time.ts';
+import { storedDeadline, storedText, typedTimeHint } from '../../core/time.ts';
 import type { Task } from '../../register/fold.ts';
+import type { OwnerAnswer } from '../../register/policy.ts';
 import type { OwnerNextPreview } from '../../register/register.ts';
-import { onePositional, type ParsedArgs } from '../args.ts';
-import { underClaudeCode } from '../claude-code-env.ts';
-import { taskRefOf } from '../inputs.ts';
+import { refuseUnlessPerson } from '../agent-run.ts';
+import { onePositional, requiredFlag, UsageError, type ParsedArgs } from '../args.ts';
+import { taskRefOf, type TypedTimes } from '../inputs.ts';
 import { findTeam, openKit, type Access, type Kit } from '../kit.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { postUrgentLine } from '../urgent-line.ts';
@@ -25,21 +28,23 @@ export function namesOf(label: string | undefined): Names {
 }
 
 /** The pane button that runs each owner action. */
-const BUTTON = { note: 'Note', next: 'Next', wake: 'Wake' } as const;
+const BUTTON = { note: 'Note', next: 'Next', wake: 'Wake', decide: 'an option, Approve or Decline', later: 'Later' } as const;
 
 /**
- * Refuses an owner action (note, next, wake) where Claude Code set CLAUDECODE: an agent's tool call, a script one
- * runs, a hook command (T1780). The exec guard reads only the tool call's own line, so a script the agent writes slips past it; this
- * refusal holds there too. The pane's buttons and a typed `/teamrig owner ..` run through the plugin's mod with Claude
- * Code's own environment, which lacks the variable, so the owner's routes still write. A script that unsets it still
- * passes: every session runs as the same OS user as the owner.
+ * Refuses an owner action (note, next, wake, decide, later) in any run but the person's own (`runBy`): where a host set its mark,
+ * which is an agent's tool call, a script one runs or a hook command (T1780), and on a host that names no mark. The
+ * exec guard reads only the tool call's own line, so a script the agent writes slips past it; this refusal holds
+ * there too. The pane's buttons and a typed `/teamrig owner ..` run through the plugin's mod with the host's own
+ * environment, which lacks the mark, so the owner's routes still write. A script that unsets it still passes: every
+ * session runs as the same OS user as the owner.
  */
-export function refuseUnderClaudeCode(runtime: CliRuntime, command: keyof typeof BUTTON): void {
-  if (underClaudeCode(runtime)) {
-    throw new RefusedError(
-      `${KIT_NAME} owner ${command} acts as the owner, so it is refused where Claude Code runs it (${ENV.claudeCode} is set: an agent's tool call, a script it runs or a hook); the owner presses ${BUTTON[command]} in the pane or types /${KIT_NAME} owner ${command} in a tab`,
-    );
-  }
+export function refuseUnlessOwner(runtime: CliRuntime, command: keyof typeof BUTTON): void {
+  refuseUnlessPerson(
+    runtime,
+    `${KIT_NAME} owner ${command}`,
+    (mark) =>
+      `${KIT_NAME} owner ${command} acts as the owner, so it is refused where Claude Code runs it (${mark} is set: an agent's tool call, a script it runs or a hook); the owner presses ${BUTTON[command]} in the pane or types /${KIT_NAME} owner ${command} in a tab`,
+  );
 }
 
 /** The register an owner action writes: the team that holds the task, its kit for wake asks, and how its lines name things. */
@@ -88,6 +93,16 @@ export function ownerNextLeadLine(owner: string, task: Pick<Task, 'id' | 'owner'
   return `${owner} put ${names.task(task.id)} next on ${names.session(task.owner)}'s list: ${task.title}`;
 }
 
+/** The line that wakes the task's session with the owner's answer to its card. */
+export function ownerDecideLine(owner: string, task: string, answer: string): string {
+  return `${owner} answered your card on ${task}: ${answer}; it waits on ${owner} no more, so go on from the answer`;
+}
+
+/** The line, with no wake, that tells the task's session the owner put its card off. */
+export function ownerLaterLine(owner: string, task: string, until: string): string {
+  return `${owner} put off your card on ${task} until ${until}: it comes back to ${owner} then, and waits on ${owner} until answered`;
+}
+
 /** The one line `owner next --preview` prints: where the task goes, the pin it moves down, who hears of it. */
 export function ownerNextPreviewLine(owner: string, lead: string, { task, moves }: OwnerNextPreview, names: Names): string {
   const session = names.session(task.owner);
@@ -100,10 +115,11 @@ export function ownerNextPreviewLine(owner: string, lead: string, { task, moves 
 /**
  * `owner note <[team/]T<id>> --text ".."`: the owner's free text on a task, pressed in the pane (T1298). It is kept in
  * the task's history as the owner's (register.ownerSource), never as a session's, and sent to the task's session as an
- * inbox line that wakes it only while the task is in progress. Refused on a done or dropped task, and under CLAUDECODE.
+ * inbox line that wakes it only while the task is in progress. Refused on a done or dropped task, and in any run but
+ * the person's own (refuseUnlessOwner).
  */
 export async function ownerNote(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
-  refuseUnderClaudeCode(runtime, 'note');
+  refuseUnlessOwner(runtime, 'note');
   const target = await targetOf(runtime, onePositional(args, '[team/]T<id>'), 'write');
   const { team, names } = target;
   const owner = team.config.register.ownerSource;
@@ -128,12 +144,12 @@ export async function ownerNote(args: ParsedArgs, runtime: CliRuntime): Promise<
  * above every other task on its session's list (moving that session's earlier pin), wakes the session to start it once
  * the step in hand is done, and tells the team's lead without a wake. `--preview` prints what it would do and writes
  * nothing, for the pane's confirm step. Refused on a done, dropped or in-progress task, or one the owner put next already,
- * and, but for `--preview`, under CLAUDECODE.
+ * and, but for `--preview`, where the host does not say the person runs it (`refuseUnlessPerson`).
  */
 export async function ownerNext(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const preview = args.switches.has('preview');
   if (!preview) {
-    refuseUnderClaudeCode(runtime, 'next');
+    refuseUnlessOwner(runtime, 'next');
   }
   const target = await targetOf(runtime, onePositional(args, '[team/]T<id>'), preview ? 'read' : 'write');
   const { team, names } = target;
@@ -156,6 +172,83 @@ export async function ownerNext(args: ParsedArgs, runtime: CliRuntime): Promise<
       const shownLead = names.session(lead);
       await tellLine(runtime, team, owner, lead, ownerNextLeadLine(owner, task, names), `${shownLead} was not told ${owner} put ${names.task(task.id)} next`, shownLead);
     }
+  }
+  return code;
+}
+
+/** An option's number as typed: digits only. */
+const OPTION_NUMBER = /^\d+$/;
+
+/** `--option <n>`, `--approve` or `--decline`: the owner's one answer to a card. */
+function answerOf(args: ParsedArgs): OwnerAnswer {
+  const option = args.flags.get('option');
+  const approve = args.switches.has('approve');
+  const decline = args.switches.has('decline');
+  if ([option !== undefined, approve, decline].filter((given) => given).length !== 1) {
+    throw new UsageError('owner decide takes one answer: --option <n>, --approve or --decline');
+  }
+  if (option !== undefined) {
+    const number = option.trim();
+    if (!OPTION_NUMBER.test(number)) {
+      throw new UsageError(`--option "${option}" is not an option's number, like 2`);
+    }
+    return { kind: 'option', option: Number(number) };
+  }
+  return approve ? { kind: 'approve' } : { kind: 'decline' };
+}
+
+/** `--until in-1h|tomorrow|monday|<time>`: when a card put off comes back, in the stored form of a deadline. */
+function untilOf(text: string, times: TypedTimes): string {
+  const until = namedLaterTime(text, times.nowMs, times.zone) ?? storedDeadline(text, times.nowMs, times.zone);
+  if (until === undefined) {
+    throw new UsageError(`--until "${text}" is not ${LATER_FORMS} (n from 1 to ${MAX_LATER_HOURS}) or a time: ${typedTimeHint(times.zone, times.nowMs)}`);
+  }
+  return until;
+}
+
+/**
+ * `owner decide <[team/]T<id>> --option <n>|--approve|--decline`: the owner answers a card from the pane's Decisions tab
+ * (T4078). It is kept in the task's history as the owner's Decided, naming the option chosen or yes or no, which drops
+ * the task's waits on the owner, and wakes the task's session to go on from it. Refused on a task that waits on no
+ * decision or approval of the owner, on an option the card lacks, on yes or no to a decision or an option to an
+ * approval, and under CLAUDECODE.
+ */
+export async function ownerDecide(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
+  refuseUnlessOwner(runtime, 'decide');
+  const answer = answerOf(args);
+  const target = await targetOf(runtime, onePositional(args, '[team/]T<id>'), 'write');
+  const { team, names } = target;
+  const written = await team.register.ownerDecide(target.id, answer);
+  const code = report(runtime, written, 'DECIDED', team, target.label);
+  if (written.ok) {
+    const { task } = written.value;
+    const owner = team.config.register.ownerSource;
+    await wakeLine(runtime, target, task.owner, ownerDecideLine(owner, names.task(task.id), task.decided?.note ?? ''));
+  }
+  return code;
+}
+
+/**
+ * `owner later <[team/]T<id>> --until in-<n>h|tomorrow|monday|<time>`: the owner puts a card off from the pane's
+ * Decisions tab (T4078), to n hours from now, 09:00 on the team's clock tomorrow or next Monday, or a typed time. It
+ * is kept in the task's history as the owner's Later, and the task's session is told without a wake, as nothing waits
+ * on it to act. Refused on a task that waits on no decision or approval of the owner, on a time gone by, and under
+ * CLAUDECODE.
+ */
+export async function ownerLater(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
+  refuseUnlessOwner(runtime, 'later');
+  const text = requiredFlag(args.flags, 'until');
+  const target = await targetOf(runtime, onePositional(args, '[team/]T<id>'), 'write');
+  const { team, names } = target;
+  const until = untilOf(text, { nowMs: runtime.clock.now(), zone: team.zone });
+  const written = await team.register.ownerLater(target.id, until);
+  const code = report(runtime, written, 'LATER', team, target.label);
+  if (written.ok) {
+    const { task } = written.value;
+    const owner = team.config.register.ownerSource;
+    const shown = names.session(task.owner);
+    const line = ownerLaterLine(owner, names.task(task.id), storedText(until, team.zone));
+    await tellLine(runtime, team, owner, task.owner, line, `${shown} was not told ${owner} put off ${names.task(task.id)}`, shown);
   }
   return code;
 }

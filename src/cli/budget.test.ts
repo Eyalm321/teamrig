@@ -21,7 +21,10 @@ import { formatUtcDay, MS_PER_DAY, MS_PER_MINUTE } from '../core/time.ts';
 import { formatMeeting, type Meeting } from '../meeting/state.ts';
 import { APP, CliHarness, EVENTS_PATH, KIT, TEAM, TEAM_HOME, USER_HOME, type CliResult, type RunOptions } from '../testing/cli-harness.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
+import { bareHost } from '../testing/bare-host.ts';
+import { NO_PATHS_HOST } from '../testing/host.ts';
 import { MemoryTranscripts } from '../testing/memory-transcripts.ts';
+import { shippedStatusSource } from '../testing/shipped-status-line.ts';
 import { SUB_TEAMS, teamConfigOf, teamHomeOf, treeHarness } from '../testing/team-tree.ts';
 import { promptLine, replyLine, transcript, type FixtureTool } from '../testing/transcript-lines.ts';
 import type { RepoState } from '../push-guard/push.ts';
@@ -79,7 +82,7 @@ function weekOnlyStatus(cwd: string): string {
 /** A status line snapshot a tab of another team saved in `dir`: the week `usedPct` used, read now. */
 async function saveReading(kit: CliHarness, dir: string, session: string, usedPct: number): Promise<void> {
   const input = JSON.stringify({ session_id: session, cwd: APP, rate_limits: { seven_day: { used_percentage: usedPct, resets_at: RESET / 1000 } } });
-  const snapshot = snapshotOfStatus(input, kit.clock.now());
+  const snapshot = snapshotOfStatus(shippedStatusSource(), input, kit.clock.now());
   assert.ok(snapshot, input);
   await kit.files.write(join(dir, `${session}.json`), formatSnapshot(snapshot));
 }
@@ -263,6 +266,16 @@ describe('teamrig budget', () => {
     await kit.files.write(teamConfigOf('web'), formatConfig({ configVersion: 1, sessions: ['lead', 'front', 'back'], roles: { lead: 'lead' } }));
     await recordConfigDir(kit.files, join(teamHomeOf('web'), 'state', 'usage', 'claude-config-dir.json'), join(USER_HOME, '.claude'));
     assert.deepEqual(ok(await run(['budget'])).slice(3, 4), ['  the team    2.5%    6.2%  25.00M      3']);
+  });
+
+  it("splits with no team recorded in another host's folder when its own host tells none of its folders", async () => {
+    const { kit, run } = await world({ ...TEAM, budget: { weeklyLimitW: 1_000_000_000, account: 'work' } });
+    await kit.files.write(teamConfigOf('web'), formatConfig({ configVersion: 1, sessions: ['lead', 'front', 'back'], roles: { lead: 'lead' } }));
+    await recordConfigDir(kit.files, join(teamHomeOf('web'), 'state', 'usage', 'claude-config-dir.json'), join(USER_HOME, '.claude'));
+    assert.deepEqual(ok(await run(['budget'], { host: NO_PATHS_HOST })).slice(3, 4), ['  the team    2.5%   12.4%  25.00M      3']);
+    const unrecorded = await world({ ...TEAM, budget: { weeklyLimitW: 1_000_000_000, account: 'work' } });
+    await unrecorded.kit.files.write(teamConfigOf('web'), formatConfig({ configVersion: 1, sessions: ['lead', 'front', 'back'], roles: { lead: 'lead' } }));
+    assert.deepEqual(ok(await unrecorded.run(['budget'], { host: NO_PATHS_HOST })).slice(3, 4), ['  the team    2.5%    6.2%  25.00M      3'], 'a team with no folder recorded is on its login');
   });
 
   it('reads the week from the newest snapshot of any team on the account, never of a team on another account', async () => {
@@ -913,7 +926,7 @@ describe("teamrig budget in a child team on its parent's account", () => {
       const byDay = { '2030-01-07': { w, calls: 1, patterns: emptyPatterns() } };
       assert.ok(await store.save(id, { ...EMPTY_USAGE, byDay }, (await store.load(id)).rev), `${id}'s use saved`);
     }
-    const period = { start: Date.parse('2030-01-07T01:00:00Z'), end: RESET, kind: 'week', lastPct: 30, lastAt: kit.clock.now() } as const;
+    const period = { start: Date.parse('2030-01-07T01:00:00Z'), end: RESET, kind: 'week', startPct: 0, lastPct: 30, lastAt: kit.clock.now() } as const;
     await kit.files.write(join(usage, 'period.json'), formatPeriod(period));
     kit.clock.advance(60_000);
     ok(await run(['statusline'], { stdin: status(APP, 31) }));
@@ -1061,6 +1074,16 @@ describe('teamrig statusline', () => {
     assert.match(kit.files.get(join(LIVE, WEEK_SUMMARY_FILE)) ?? '', /^\{"v":2,"reading":\{"used_percentage":30,"resets_at":1894582800,"at":"2030-01-08T10:00:00\.000Z","after":/);
   });
 
+  it('saves nothing on a host that draws no status line: it prints the reason, or with --pass the input, and exits 0', async () => {
+    const kit = new CliHarness(LIMITED);
+    const result = await kit.run(['statusline'], { stdin: status(APP), host: bareHost });
+    const reason = 'no status line is drawn';
+    assert.deepEqual([result.code, result.stdout, result.stderr], [EXIT.ok, [reason], [`teamrig statusline: ${reason}; nothing saved`]]);
+    const passed = await kit.run(['statusline', '--pass'], { stdin: `${status(APP)}\n`, host: bareHost });
+    assert.deepEqual([passed.code, passed.stdout], [EXIT.ok, [status(APP)]]);
+    assert.deepEqual([kit.files.get(join(LIVE, SNAPSHOT)), kit.files.get(join(LIVE, WEEK_SUMMARY_FILE))], [undefined, undefined]);
+  });
+
   it("folds the status input's five-hour reading into the folder's summary", async () => {
     const kit = new CliHarness(LIMITED);
     await kit.run(['statusline'], { stdin: status(APP) });
@@ -1123,8 +1146,9 @@ describe('teamrig statusline', () => {
     const fallen = JSON.stringify({ session_id: ALPHA_TAB, cwd: APP, rate_limits: { seven_day: { used_percentage: 0.5, resets_at: RESET / 1000 } } });
     ok(await run(['statusline'], { stdin: fallen }));
     const lines = ok(await run(['budget']));
-    // The pace line runs from 10:00 to an hour before the reset, 134 hours: 1 of them is 0.74%.
-    assert.match(lines[0] ?? '', /^Week: 0\.50% used at 11:00 UTC \(status line\); the pace line is at 0\.74%/);
+    // The pace line runs from 10:00 to an hour before the reset, 134 hours, from the 0.5% the reset left (T4864):
+    // 1 of them is 0.5 + 99 / 134, 1.24%.
+    assert.match(lines[0] ?? '', /^Week: 0\.50% used at 11:00 UTC \(status line\); the pace line is at 1\.2%/);
     assert.match(lines[0] ?? '', / Counted from \w{3} 01-08 10:00 UTC, after a reset inside the week\.$/);
     // Today's use counts from 10:00 too: the team's 09:00 calls were the last budget's.
     assert.match(lines[3] ?? '', /^ {2}the team +0[.0]*% /);
@@ -1138,7 +1162,7 @@ describe('teamrig statusline', () => {
     kit.clock.advance(3_600_000);
     const fallen = JSON.stringify({ session_id: ALPHA_TAB, cwd: APP, rate_limits: { seven_day: { used_percentage: 0.5, resets_at: RESET / 1000 } } });
     ok(await run(['statusline'], { stdin: fallen }));
-    assert.match(ok(await run(['budget']))[0] ?? '', /the pace line is at 0\.74%/);
+    assert.match(ok(await run(['budget']))[0] ?? '', /the pace line is at 1\.2%/);
     const start = Date.parse('2030-01-08T10:00:00Z');
     assert.equal(parsePeriod(kit.files.get(join(TEAM_HOME, 'state', 'usage', 'period.json')) ?? '')?.start, start);
     await kit.files.write(TEAM_WEEK, formatTeamWeek({ ...KEPT_WEEK, start }));

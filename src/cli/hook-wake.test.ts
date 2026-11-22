@@ -33,6 +33,7 @@ import { holdFileLock } from '../testing/held-file-lock.ts';
 import { FaultyFiles, systemError } from '../testing/faulty-files.ts';
 import { FakeSessionProcesses } from '../testing/fake-session-processes.ts';
 import { MemoryTranscripts } from '../testing/memory-transcripts.ts';
+import { steplessHost } from '../testing/shipped-steps.ts';
 import { teamConfigOf, teamHomeOf, teamInboxOf } from '../testing/team-tree.ts';
 import { WakeAsks } from '../wake/asks.ts';
 import { WakePrompts, type WakePrompt } from '../wake/prompts.ts';
@@ -759,6 +760,21 @@ describe('hook wake-check rush poke (T2865)', () => {
     assert.match((await check(kit, idle)).stdout[0] ?? '', /"toast":"teamrig poked this tab \(rush on PROD, idle 30 min\): T1 /);
   });
 
+  it('hands the wait on the unfinished task a started one is planned after in the poke (#1516)', async () => {
+    const kit = await rushingAlpha();
+    const ran = async (args: readonly string[]): Promise<void> => {
+      const result = await kit.run(args);
+      assert.equal(result.code, EXIT.ok, result.stderr.join('\n'));
+    };
+    await ran(['add', '--title', 'Open the route', '--description', 'what and why', '--priority', 'p2', '--owner', 'bravo', '--session', 'lead']);
+    await ran(['update', 'T1', '--after', 'T2', '--session', 'lead']);
+    await ran(['set', 'T1', '--session', 'alpha', '--status', 'in-progress']);
+    const idle = turnAt(kit.clock.now() - 30 * MINUTE);
+    const planned = (await check(kit, idle)).stdout[0] ?? '';
+    assert.match(planned, /"toast":"teamrig poked this tab \(rush on PROD, idle 30 min\): T1 /);
+    assert.ok(planned.includes('set T1 --session alpha --status waiting --waits task:T2 --note'), planned);
+  });
+
   it('starts a session whose restart waits for work fresh in place of the poke (T1383)', async () => {
     const { kit, store } = await parkedRestart(AUTO_RESTART_TEAM);
     await hand(kit, 'Ship the page', 'p2');
@@ -1018,6 +1034,17 @@ describe('hook wake-check runs the idle pass', () => {
       const state: unknown = JSON.parse(kit.files.get(PASS_STATE) ?? '');
       assert.equal(JSON.stringify(state).includes('told'), false, `${mode}: its mark dropped`);
     }
+  });
+
+  it('names no reopened tab on a host that names no steps, and its pass still runs', async () => {
+    const kit = await idleTeam(ON);
+    await new SessionLog(kit.files, SESSION_LOG).append({ kind: 'reopen', session: 'bravo', at: new Date(kit.clock.now()).toISOString(), resumed: 'claude-bravo' });
+    kit.clock.advance(5 * MINUTE);
+    await kit.run(['hook', 'wake-check'], { stdin: payload(), probe: new FakePathProbe({ folders: [APP] }), memory: new FakeHostMemory().lists([], COMMIT), host: steplessHost() });
+    const records = await logLines(kit, PASS_LOG);
+    assert.equal(records.some((record) => JSON.stringify(record).includes('"kind":"hookless"')), false);
+    assert.equal(records.some((record) => JSON.stringify(record).includes('"kind":"failed"')), false, 'the pass did not fail');
+    assert.deepEqual(await new WakeAsks(kit.files, ASKS).read('lead'), []);
   });
 
   it("in mode on names a reopened lead tab to the delivery owner on a team above, with a wake there (T1143)", async () => {

@@ -102,6 +102,8 @@ export interface MergeGit {
   fastForward(dir: string, to: string): GitOutcome;
   /** `git reset --keep <to>`: moves the checked-out branch and its files back to `to`; refused where a local change would be lost. */
   resetTo(dir: string, to: string): GitOutcome;
+  /** `git switch --detach <ref>`: moves a checkout on no branch, and its files, to `ref`; refused where a local change would be lost. */
+  detachAt(dir: string, ref: string): GitOutcome;
   /** The ssh command the user set in git's config (`core.sshCommand`, from any level); undefined when none is set. */
   sshCommand(dir: string): string | undefined;
 }
@@ -134,15 +136,15 @@ function rebaseStopped(dir: string, onto: string, said: string): string {
 
 /**
  * Why a rebase stopped: its conflicting paths when it has any, else git's own reason. A conflict also says the way
- * out: a force-push of a branch already pushed for review would throw away what its reviewers saw, so the resolved
- * change goes out again under a new branch name. The paths print with control characters escaped: `-z` leaves them
+ * out: a branch already pushed for review goes back to the same branch and pull request with a lease, so its review
+ * keeps one thread and a push someone else made since is never overwritten. The paths print with control characters escaped: `-z` leaves them
  * raw, and a newline or ESC in one would add lines to the reason or reach the terminal.
  */
 export function rebaseStopReason(onto: string, conflicts: readonly string[], said: string, abort: GitOutcome): string {
   const why = conflicts.length > 0 ? `conflicts in ${conflicts.map(printable).join(', ')}` : said;
   const aborted = abort.ok || /no rebase in progress/i.test(abort.reason);
   const left = aborted ? 'aborted, the branch is as it was' : `git rebase --abort failed too (${abort.reason}): finish or abort it by hand`;
-  const fix = aborted && conflicts.length > 0 ? `; to land it, rebase onto ${onto} by hand, resolve those files and merge again, a branch already pushed for review under a new name, never force-pushed` : '';
+  const fix = aborted && conflicts.length > 0 ? `; to land it, rebase onto ${onto} by hand, resolve those files and merge again; a branch already pushed for review goes back to the same branch with --force-with-lease` : '';
   return `rebase onto ${onto} stopped (${why}); ${left}${fix}`;
 }
 
@@ -385,5 +387,6 @@ export const GIT_MERGE: MergeGit = {
   checkout: (dir, branch) => refusedAsOption(branch, 'git checkout') ?? outcome(runGit(dir, ['checkout', branch, '--']), 'git checkout'),
   fastForward: (dir, to) => outcome(runGit(dir, ['merge', '--ff-only', '--end-of-options', to], LONG_TIMEOUT_MS), 'git merge --ff-only'),
   resetTo: (dir, to) => refusedAsOption(to, 'git reset --keep') ?? outcome(runGit(dir, ['reset', '--keep', to, '--'], LONG_TIMEOUT_MS), 'git reset --keep'),
+  detachAt: (dir, ref) => refusedAsOption(ref, 'git switch --detach') ?? outcome(runGit(dir, ['switch', '--detach', ref], LONG_TIMEOUT_MS), 'git switch --detach'),
   sshCommand: (dir) => queryLine(dir, ['config', '--get', 'core.sshCommand']),
 };

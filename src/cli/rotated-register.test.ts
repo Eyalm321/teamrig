@@ -20,15 +20,17 @@ async function runAll(kit: CliHarness, steps: readonly (readonly string[])[], en
  * A register rotated twenty days after its first week: T1 (planned in that week) is done and T2 dropped,
  * so a compaction retires both; T3 is open in the current week plan.
  */
+const FIRST_WEEK = [
+  ['add', '--title', 'Old plan', '--description', 'what and why', '--priority', 'p2', '--week', '2030-01-07', '--session', 'alpha'],
+  ['set', 'T1', '--status', 'done', '--note', 'shipped', '--evidence', 'abc1234', '--skill', 'none', '--followups', 'none', '--session', 'alpha'],
+  ['add', '--title', 'Dropped idea', '--description', 'what and why', '--priority', 'p3', '--session', 'alpha'],
+  ['set', 'T2', '--status', 'dropped', '--note', 'not needed', '--session', 'alpha'],
+  ['add', '--title', 'Current plan', '--description', 'what and why', '--priority', 'p1', '--week', '2030-01-21', '--session', 'alpha'],
+] as const;
+
 async function rotatedKit(): Promise<CliHarness> {
   const kit = new CliHarness();
-  await runAll(kit, [
-    ['add', '--title', 'Old plan', '--description', 'what and why', '--priority', 'p2', '--week', '2030-01-07', '--session', 'alpha'],
-    ['set', 'T1', '--status', 'done', '--note', 'shipped', '--evidence', 'abc1234', '--skill', 'none', '--followups', 'none', '--session', 'alpha'],
-    ['add', '--title', 'Dropped idea', '--description', 'what and why', '--priority', 'p3', '--session', 'alpha'],
-    ['set', 'T2', '--status', 'dropped', '--note', 'not needed', '--session', 'alpha'],
-    ['add', '--title', 'Current plan', '--description', 'what and why', '--priority', 'p1', '--week', '2030-01-21', '--session', 'alpha'],
-  ]);
+  await runAll(kit, FIRST_WEEK);
   kit.clock.advance(20 * MS_PER_DAY);
   const compaction = await rotateRegister(kit.files, EVENTS_PATH, { now: new Date(kit.clock.now()) });
   assert.deepEqual(compaction.retiredNow, ['T1', 'T2']);
@@ -69,6 +71,63 @@ describe('the CLI on a rotated register', () => {
     assert.match(shown.stdout.join('\n'), /Old plan[\s\S]*shipped/);
     const missing = await kit.run(['show', 'T9'], AS_ALPHA);
     assert.deepEqual([missing.code, missing.stdout], [EXIT.refused, ['REFUSED no task T9']]);
+  });
+
+  it('shows an active task created before the snapshot\'s event window with its whole history (T4076)', async () => {
+    // T3's events are twenty days old, so the snapshot holds it as a task line alone; its history is in the archive.
+    const historyOf = (stdout: readonly string[]): string[] => {
+      const lines = stdout.join('\n').split('\n');
+      const start = lines.findIndex((line) => line.startsWith('history'));
+      const end = lines.findIndex((line, index) => index > start && !line.startsWith('  '));
+      return start < 0 ? [] : lines.slice(start, end < 0 ? undefined : end);
+    };
+    const kit = await rotatedKit();
+    await runAll(kit, [['update', 'T3', '--priority', 'p2', '--session', 'alpha']]);
+    const unrotated = new CliHarness();
+    await runAll(unrotated, FIRST_WEEK);
+    unrotated.clock.advance(20 * MS_PER_DAY);
+    await runAll(unrotated, [['update', 'T3', '--priority', 'p2', '--session', 'alpha']]);
+    const shown = await kit.run(['show', 'T3', '--history'], AS_ALPHA);
+    const whole = await unrotated.run(['show', 'T3', '--history'], AS_ALPHA);
+    assert.equal(shown.code, EXIT.ok);
+    assert.deepEqual(historyOf(shown.stdout), historyOf(whole.stdout));
+    assert.equal(historyOf(shown.stdout).length, 3, 'the header, the create and the update');
+  });
+
+  it("shows a task with the description its snapshot task line left out, read from the history (T4781)", async () => {
+    const kit = await rotatedKit();
+    const snapshot = kit.files.get(layoutPaths(EVENTS_PATH).snapshot) ?? '';
+    assert.doesNotMatch(snapshot, /what and why/, 'the task line of T3 holds no description');
+    const shown = await kit.run(['show', 'T3'], AS_ALPHA);
+    assert.equal(shown.code, EXIT.ok);
+    assert.ok(shown.stdout.join('\n').split('\n').includes('description: what and why'), shown.stdout.join('\n'));
+  });
+
+  it('shows several tasks with the whole history once any of them was created before the event window (T2536)', async () => {
+    // T4 is new, so the snapshot alone holds its events; T3's are twenty days old, so only the archive holds them.
+    const historiesOf = (stdout: readonly string[]): string[][] => {
+      const lines = stdout.join('\n').split('\n');
+      const starts = lines.flatMap((line, index) => (line.startsWith('history') ? [index] : []));
+      return starts.map((start) => {
+        const end = lines.findIndex((line, index) => index > start && !line.startsWith('  '));
+        return lines.slice(start, end < 0 ? undefined : end);
+      });
+    };
+    const recent = [
+      ['add', '--title', 'New idea', '--description', 'what and why', '--priority', 'p2', '--session', 'alpha'],
+      ['update', 'T3', '--priority', 'p2', '--session', 'alpha'],
+    ] as const;
+    const kit = await rotatedKit();
+    await runAll(kit, recent);
+    const unrotated = new CliHarness();
+    await runAll(unrotated, FIRST_WEEK);
+    unrotated.clock.advance(20 * MS_PER_DAY);
+    await runAll(unrotated, recent);
+    const shown = await kit.run(['show', 'T4', 'T3', '--history'], AS_ALPHA);
+    const whole = await unrotated.run(['show', 'T4', 'T3', '--history'], AS_ALPHA);
+    assert.equal(shown.code, EXIT.ok);
+    assert.deepEqual(historiesOf(shown.stdout), historiesOf(whole.stdout));
+    assert.deepEqual(historiesOf(shown.stdout).map((block) => block.length), [2, 3], "T4's create; T3's create and update");
   });
 
   it("reads the whole history for a week plan as old as the retired tasks' newest", async () => {

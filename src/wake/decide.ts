@@ -12,10 +12,11 @@ import { answerTo } from '../register/approval.ts';
 import { waitsLetGoOn } from '../register/can-move.ts';
 import type { PokeMark } from './rush-poke.ts';
 import { taskNumber, type Task } from '../register/fold.ts';
-import type { TaskStatus } from '../register/model.ts';
+import { BLOCKER_PRIORITY_ID, priorityText, type TaskStatus } from '../register/model.ts';
 import { wouldPark, type ParkRules } from '../register/park.ts';
 import { neededIds, type TasksElsewhere } from '../register/tree.ts';
 import { unfinishedAfter, waitContext, type WaitContext } from '../register/waits.ts';
+import { isExemptFromRest, type RestExemption } from './exempt.ts';
 
 /**
  * Waking a session idle at its prompt when work is handed to it, pure. A wake is a model turn, so only work the
@@ -24,7 +25,8 @@ import { unfinishedAfter, waitContext, type WaitContext } from '../register/wait
  * someone else or by the clock since the session last touched it (handed to it, raised,
  * reopened, freed by another's finish, its waits cleared, or an approval it waits on answered). Each task wakes a
  * session once, tasks handed together wake it once (`wake.batchSeconds`), and wakes of one session are
- * `wake.minGapMinutes` apart. The plugin's mod asks `hook wake-check` while no turn runs and submits the prompt. A
+ * `wake.minGapMinutes` to `wake.maxGapMinutes` apart, by how much waits ({@link wakeGapMs}). The plugin's mod asks
+ * `hook wake-check` while no turn runs and submits the prompt. A
  * parked task (src/register/park.ts) wakes nothing: `list` leaves it out, so a wake would send the session to work it
  * cannot find, and a task no owner touched stays news for ever. An event on it ends the parking, and with it the silence.
  */
@@ -84,6 +86,8 @@ export function canGoOn(task: Task, context: WaitContext): boolean {
 /** What a wake judges a task by: its waits, and whether the park rule took it. */
 export interface WakeContext extends WaitContext {
   isParked(task: Task): boolean;
+  /** The work a held session takes past its priority cap ({@link isExemptFromRest}); absent: none. */
+  readonly exemption?: RestExemption | undefined;
 }
 
 /**
@@ -91,18 +95,30 @@ export interface WakeContext extends WaitContext {
  * the rule, as most never do. A wake's `elsewhere` comes from `snapshotWithElsewhere`, which gives none when the own
  * tasks need no outside id, so a need from another register goes unseen: a wake may pass over a task `list` still shows.
  */
-export function wakeContext(tasks: ReadonlyMap<string, Task>, elsewhere: TasksElsewhere, now: number, zone: TimeZone, parking: ParkRules): WakeContext {
+export function wakeContext(
+  tasks: ReadonlyMap<string, Task>,
+  elsewhere: TasksElsewhere,
+  now: number,
+  zone: TimeZone,
+  parking: ParkRules,
+  exemption?: RestExemption,
+): WakeContext {
   let needed: ReadonlySet<string> | undefined;
   const isNeeded = (id: string): boolean => {
     needed ??= neededIds(tasks.values(), elsewhere);
     return needed.has(id);
   };
-  return { ...waitContext(tasks, new Date(now), zone, elsewhere), isParked: (task) => wouldPark(task, { ...parking, now, needed: isNeeded }) };
+  const context = { ...waitContext(tasks, new Date(now), zone, elsewhere), isParked: (task: Task) => wouldPark(task, { ...parking, now, needed: isNeeded }) };
+  return exemption === undefined ? context : { ...context, exemption };
 }
 
-/** True when the task is the session's, it can go on with it now, it is urgent enough to wake it, and it is not parked. */
+/**
+ * True when the task is the session's, it can go on with it now, it is urgent enough to wake it (or its rest's
+ * exemption lets it past the cap: {@link isExemptFromRest}), and it is not parked.
+ */
 export function isWakeWorthy(task: Task, session: string, maxPriority: number, context: WakeContext): boolean {
-  return task.owner === session && task.priority <= maxPriority && canGoOn(task, context) && !context.isParked(task);
+  const urgent = task.priority <= maxPriority || isExemptFromRest(task, context.exemption);
+  return task.owner === session && urgent && canGoOn(task, context) && !context.isParked(task);
 }
 
 function timeOf(at: string | null): number {
@@ -206,10 +222,33 @@ export interface WakeInput {
   /** The team's zone, which a waiting task's stored day is a day of. */
   readonly zone: TimeZone;
   readonly maxPriority: number;
+  /** The work past `maxPriority` a held session still wakes for (`restExemptionOf`); absent: none. */
+  readonly exemption?: RestExemption | undefined;
   readonly parking: ParkRules;
   readonly batchMs: number;
+  /** The least gap after the last wake, for one task due (`wake.minGapMinutes`). */
   readonly minGapMs: number;
+  /** The gap once {@link FULL_GAP_LOAD} tasks or more are due (`wake.maxGapMinutes`); never below `minGapMs`. */
+  readonly maxGapMs: number;
   readonly previous: WakeState | undefined;
+}
+
+/** How many tasks due stretch the gap between wakes to its most: the number a wake names. */
+export const FULL_GAP_LOAD = WAKE_LIST_MAX;
+
+/**
+ * The gap after a session's last wake before the next, for the tasks due: none when one is a blocker, which never
+ * waits (T4329); else from `minGapMs` for one task up to `maxGapMs` at {@link FULL_GAP_LOAD}, in even steps. A wake
+ * is a turn priced in the week's usage, not in time (T4852), so a session with much waiting takes it in
+ * fewer, fuller wakes, while a lone urgent task waits only the least gap.
+ */
+export function wakeGapMs(due: readonly Task[], minGapMs: number, maxGapMs: number): number {
+  if (due.some((task) => task.priority === BLOCKER_PRIORITY_ID)) {
+    return 0;
+  }
+  const load = Math.min(Math.max(due.length, 1), FULL_GAP_LOAD);
+  const span = Math.max(maxGapMs - minGapMs, 0);
+  return minGapMs + Math.round((span * (load - 1)) / (FULL_GAP_LOAD - 1));
 }
 
 export type WakeVerdict =
@@ -228,11 +267,11 @@ export function byUrgency(a: Task, b: Task): number {
 }
 
 /** What picks the tasks that could wake a session at a moment. */
-export type WorthyInput = Pick<WakeInput, 'tasks' | 'elsewhere' | 'session' | 'now' | 'zone' | 'maxPriority' | 'parking'>;
+export type WorthyInput = Pick<WakeInput, 'tasks' | 'elsewhere' | 'session' | 'now' | 'zone' | 'maxPriority' | 'exemption' | 'parking'>;
 
 /** The session's tasks that could wake it at `now` ({@link isWakeWorthy}), in the register's order. */
 export function worthyTasksOf(input: WorthyInput): Task[] {
-  const context = wakeContext(input.tasks, input.elsewhere, input.now, input.zone, input.parking);
+  const context = wakeContext(input.tasks, input.elsewhere, input.now, input.zone, input.parking, input.exemption);
   return [...input.tasks.values()].filter((task) => isWakeWorthy(task, input.session, input.maxPriority, context));
 }
 
@@ -245,7 +284,7 @@ export interface OpenedTab extends WorthyInput {
 /**
  * The wake state of a tab teamrig opened on a Claude Code session it resumed: its first prompt has the session read
  * its list, so the open counts as its wake. What could wake it now is known, so only work handed after the open wakes
- * it, and the open is its last wake for `wake.minGapMinutes`. A resumed tab keeps the id it had before its close, so
+ * it, and the open is its last wake for the gap ({@link wakeGapMs}). A resumed tab keeps the id it had before its close, so
  * without this the check went on from the state before the close and woke it again for the work it reads (T1616).
  */
 export function openedWakeState(opened: OpenedTab): WakeState {
@@ -275,7 +314,7 @@ export function decideWake(input: WakeInput): WakeDecision {
     return { verdict: none, state: { tab, known, pending: undefined, lastWakeAt: previous.lastWakeAt, settled } };
   }
   const since = kept.length > 0 && previous.pending !== undefined ? previous.pending.since : now;
-  const gapEnd = previous.lastWakeAt === undefined ? Number.NEGATIVE_INFINITY : previous.lastWakeAt + input.minGapMs;
+  const gapEnd = previous.lastWakeAt === undefined ? Number.NEGATIVE_INFINITY : previous.lastWakeAt + wakeGapMs(due, input.minGapMs, input.maxGapMs);
   const at = Math.max(since + input.batchMs, gapEnd);
   const ids = due.map((task) => task.id);
   if (now < at) {
@@ -291,6 +330,11 @@ export function decideWake(input: WakeInput): WakeDecision {
 export interface WakeRest {
   readonly held: boolean;
   readonly quiet: boolean;
+  /**
+   * True when only the daily cap or a leader's plain cut holds it, so a waited-on task still wakes it
+   * (`restExemptionOf`, T4948); a stop or a short day's pause holds it whatever waits. Absent: false.
+   */
+  readonly yields?: boolean;
 }
 
 /**
@@ -314,7 +358,9 @@ export function wakeRestOf(facts: BudgetFacts | undefined, quietHours: QuietHour
     return { held: false, quiet: quietSpanOf(quietHours, now) !== undefined };
   }
   const turnPct = facts.todayWPerPct > 0 ? turnW / facts.todayWPerPct : 0;
-  return { held: isPausedNow(facts) || isHeld(facts, turnPct), quiet: sessionQuietSpan(facts, quietHours) !== undefined };
+  const paused = isPausedNow(facts);
+  const held = paused || isHeld(facts, turnPct);
+  return { held, quiet: sessionQuietSpan(facts, quietHours) !== undefined, yields: held && !paused && facts.cut?.stop !== true };
 }
 
 /**
@@ -393,13 +439,13 @@ export function taskListText(tasks: readonly Task[]): string {
  */
 function taskTag(task: Task): string {
   if (!goesOnByWaits(task.status)) {
-    return `p${task.priority}`;
+    return priorityText(task.priority);
   }
   if (task.decided !== null) {
-    return `p${task.priority}, ${task.status}: ${task.decided.by} recorded the owner's decision`;
+    return `${priorityText(task.priority)}, ${task.status}: ${task.decided.by} recorded the owner's decision`;
   }
   const answer = task.waits.map((reason) => answerTo(task, reason)).find((found) => found !== undefined);
-  return `p${task.priority}, ${task.status}: ${answer === undefined ? 'every wait cleared' : `${answer.by} ${answer.verdict} it`}`;
+  return `${priorityText(task.priority)}, ${task.status}: ${answer === undefined ? 'every wait cleared' : `${answer.by} ${answer.verdict} it`}`;
 }
 
 /** The prompt the session reads, under the plugin's name. */

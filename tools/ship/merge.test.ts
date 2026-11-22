@@ -7,7 +7,9 @@ import type { Gh, RequiredChecks } from './github.ts';
 import type { Credential } from './keychain.ts';
 import type { GateDeps } from './local-gate.ts';
 import { type MainBranch, type MergeArgs, type MergeDeps, type MergeRequest, type MergeResult, type Waiter, MERGE_ATTEMPTS, ciProof,mainBranchOf, mergeBranch, mergeCommand, mergeRun, mergeThroughPull, parseArgs, pullBody, realMergeDeps, runMerge, missingSections, stepShareOf, waitForChecks } from './merge.ts';
+import type { PullTask } from './pull-task.ts';
 import { parseProfiles } from './repos.ts';
+import type { Supersede } from './superseded.ts';
 import { TempRepo } from '../lib/temp-repo.ts';
 
 const REPO = 'Owner/repo';
@@ -19,6 +21,9 @@ const HEAD = 'dev';
 const BASE = 'base000aaa';
 const MOVED = 'moved00bbb';
 const MINUTE = 60_000;
+/** The branch's task in the register, linked to issue #9 of REPO (whose name GitHub reads lower-cased). */
+const TASK: PullTask = { id: 'T1', priority: 1, type: null, ref: `gh:${REPO}#9` };
+const ISSUE_PATH = `repos/${REPO.toLowerCase()}/issues/9`;
 
 /**
  * main on origin: each tip read takes the next of `tips` (the last repeats), and SHA contains BASE only.
@@ -77,7 +82,7 @@ const RERUN_PATH = `repos/${REPO}/actions/runs/1/rerun-failed-jobs`;
  * makes its next attempt, or throws `rerun` when given. Each merge call answers the next of `merges` (the last
  * repeats) when given, else `merge`.
  */
-function fakeGitHub(options: { rounds: readonly (readonly JobState[])[]; openPullSha?: string | null; openedSha?: string; merge?: string | Error; merges?: readonly (string | Error)[]; rerun?: Error; branch?: string; heads?: readonly PushedHead[] }): FakeGitHub {
+function fakeGitHub(options: { rounds: readonly (readonly JobState[])[]; openPullSha?: string | null; openedSha?: string; merge?: string | Error; merges?: readonly (string | Error)[]; rerun?: Error; branch?: string; heads?: readonly PushedHead[]; repoLabels?: readonly string[] }): FakeGitHub {
   const writes: string[][] = [];
   let round = 0;
   let attempt = 1;
@@ -111,6 +116,9 @@ function fakeGitHub(options: { rounds: readonly (readonly JobState[])[]; openPul
       return JSON.stringify({ jobs: jobs.map(([name, status, conclusion, unstarted]) => ({ name, status, conclusion, steps: unstarted === undefined ? [{ name: 'Set up job' }] : [] })) });
     }
     if (path.endsWith('/status')) return '{"statuses":[]}';
+    if (path === ISSUE_PATH) return JSON.stringify({ title: 'Ship titles', labels: [{ name: 'area:cli' }, { name: 'p3' }] });
+    if (path === `repos/${REPO}/labels?per_page=100`) return JSON.stringify((options.repoLabels ?? []).map(name => ({ name })));
+    if (path === `repos/${REPO}/issues/3/labels`) return '[]';
     throw new Error(`unexpected gh ${args.join(' ')}`);
   });
   return { gh, writes };
@@ -124,15 +132,18 @@ const request = (overrides: Partial<MergeRequest> = {}): MergeRequest => ({
   title: 'Merge dev into main: 2 commit(s)',
   body: '- a\n- b',
   lacks: null,
+  opens: true,
+  labels: [],
+  unlinked: null,
   ...overrides,
 });
 
 const POLLING = { timeoutMs: 10 * MINUTE, intervalMs: MINUTE };
-const CHECKS: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: [] };
+const CHECKS: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: [], conditional: [] };
 
 /** mergeThroughPull on the `ci` gate: checks gates and test on GitHub. */
-const mergeOnCi = (gh: Gh, main: MainBranch, log: (line: string) => void, lacks: string | null = null): Promise<MergeResult> =>
-  mergeThroughPull(request({ lacks }), gh, main, ciProof(gh, REPO, HEAD, CHECKS, fakeWaiter(), POLLING), log);
+const mergeOnCi = (gh: Gh, main: MainBranch, log: (line: string) => void, lacks: string | null = null, supersede: Supersede = () => undefined): Promise<MergeResult> =>
+  mergeThroughPull(request({ lacks }), gh, main, ciProof(gh, REPO, HEAD, CHECKS, fakeWaiter(), POLLING), log, supersede);
 
 const green: readonly JobState[] = [
   ['gates', 'completed', 'success'],
@@ -182,6 +193,29 @@ test('reuses an open pull request instead of opening a second one', async () => 
   assert.match(log[0] ?? '', /^found pull request #3/);
 });
 
+test('hands the pull request it opened or found to supersede once, before its checks run (T4780)', async () => {
+  for (const openPullSha of [null, SHA]) {
+    const log: string[] = [];
+    const seen: string[][] = [];
+    const supersede = mock.fn<Supersede>(() => {
+      seen.push([...log]);
+    });
+    assert.equal((await mergeOnCi(fakeGitHub({ rounds: [green], openPullSha }).gh, fakeMain(), line => log.push(line), null, supersede)).kind, 'merged');
+    assert.deepEqual(supersede.mock.calls.map(call => call.arguments[0].number), [3]);
+    assert.deepEqual(seen, [[`${openPullSha === null ? 'opened' : 'found'} pull request #3 https://github.com/${REPO}/pull/3`]]);
+  }
+});
+
+test('supersedes nothing for a pull request at another head, or for the release pull request', async () => {
+  const supersede = mock.fn<Supersede>();
+  const moved = await mergeOnCi(fakeGitHub({ rounds: [green], openPullSha: 'other99' }).gh, fakeMain(), () => undefined, null, supersede);
+  assert.equal(moved.kind, 'refused');
+  const { gh } = fakeGitHub({ rounds: [green], openPullSha: SHA });
+  const release = await mergeThroughPull(request({ opens: false }), gh, fakeMain(), ciProof(gh, REPO, HEAD, CHECKS, fakeWaiter(), POLLING), () => undefined, supersede);
+  assert.equal(release.kind, 'merged');
+  assert.equal(supersede.mock.callCount(), 0);
+});
+
 test('opens no pull request whose body lacks a section the repo asks for, but merges one already open with a warning', async () => {
   const fresh = fakeGitHub({ rounds: [green] });
   const refused = await mergeOnCi(fresh.gh, fakeMain(), () => undefined, '## Reach');
@@ -192,6 +226,37 @@ test('opens no pull request whose body lacks a section the repo asks for, but me
   const log: string[] = [];
   assert.equal((await mergeOnCi(open.gh, fakeMain(), line => log.push(line), '## Reach')).kind, 'merged');
   assert.equal(log[1], "warning: pull request #3 lacks ## Reach, which this repo's template asks for: add it to its text");
+});
+
+/** mergeThroughPull on the `ci` gate for `overrides` of the request. */
+const mergeRequestOnCi = (gh: Gh, overrides: Partial<MergeRequest>, log: (line: string) => void): Promise<MergeResult> =>
+  mergeThroughPull(request(overrides), gh, fakeMain(), ciProof(gh, REPO, HEAD, CHECKS, fakeWaiter(), POLLING), log, () => undefined);
+
+test('opens no pull request for a task that links no issue, but merges one already open with a warning (T4796)', async () => {
+  const unlinked = 'T1 links no GitHub issue, so its pull request would close none';
+  const fresh = fakeGitHub({ rounds: [green] });
+  const refused = await mergeRequestOnCi(fresh.gh, { unlinked }, () => undefined);
+  assert.deepEqual(refused.kind === 'refused' ? refused.reason : refused, unlinked);
+  assert.equal(fresh.writes.length, 0);
+  const open = fakeGitHub({ rounds: [green], openPullSha: SHA });
+  const log: string[] = [];
+  assert.equal((await mergeRequestOnCi(open.gh, { unlinked }, line => log.push(line))).kind, 'merged');
+  assert.equal(log[1], `warning: pull request #3: ${unlinked}`);
+});
+
+test('labels the pull request it opened or found at the head before its checks run, and none at another head (T4796)', async () => {
+  const labelsPath = `repos/${REPO}/issues/3/labels`;
+  for (const openPullSha of [null, SHA]) {
+    const { gh, writes } = fakeGitHub({ rounds: [green], openPullSha });
+    const log: string[] = [];
+    assert.equal((await mergeRequestOnCi(gh, { labels: ['p1', 'area:cli'] }, line => log.push(line))).kind, 'merged');
+    assert.deepEqual(writes.map(write => write[1]), [...(openPullSha === null ? [`repos/${REPO}/pulls`] : []), labelsPath, `repos/${REPO}/pulls/3/merge`]);
+    assert.deepEqual(writes.find(write => write[1] === labelsPath)?.slice(2), ['-X', 'POST', '-f', 'labels[]=p1', '-f', 'labels[]=area:cli']);
+    assert.deepEqual(log.slice(0, 3), [`${openPullSha === null ? 'opened' : 'found'} pull request #3 https://github.com/${REPO}/pull/3`, 'labelled pull request #3: p1, area:cli', 'check passed: gates (success)']);
+  }
+  const moved = fakeGitHub({ rounds: [green], openPullSha: 'fff0000older' });
+  assert.equal((await mergeRequestOnCi(moved.gh, { labels: ['p1'] }, () => undefined)).kind, 'refused');
+  assert.deepEqual(moved.writes, []);
 });
 
 test('names each ## section a note lacks of those the repo asks for', () => {
@@ -278,7 +343,7 @@ test('a re-run GitHub refuses fails the unstarted check with its error; one stil
 });
 
 test('the summary job failing beside an unstarted leg is re-run with it; failing again on the next attempt refuses (T2675)', async () => {
-  const withSummary: RequiredChecks = { names: ['gates', 'test', 'all'], summary: 'all', flaky: [] };
+  const withSummary: RequiredChecks = { names: ['gates', 'test', 'all'], summary: 'all', flaky: [], conditional: [] };
   const echo: readonly JobState[] = [['gates', 'completed', 'success'], macosUnstarted, ['all', 'completed', 'failure']];
   const recovers = fakeGitHub({ rounds: [echo, [...green, ['all', 'completed', 'success']]] });
   const passed = await waitForChecks(recovers.gh, REPO, SHA, HEAD, withSummary,fakeWaiter(), POLLING);
@@ -455,8 +520,8 @@ test("fetches main once more when the fetch lost a ref-store race with another f
 });
 
 test('reads the repo dir and the polling flags', () => {
-  assert.deepEqual(parseArgs(['C:/repo']), { dir: 'C:/repo', head: null, timeoutMin: 45, intervalS: 30, noteFile: null, approved: null });
-  assert.deepEqual(parseArgs(['C:/repo', '--head', 'feature/x', '--timeout-min', '5', '--interval-s', '10']), { dir: 'C:/repo', head: 'feature/x', timeoutMin: 5, intervalS: 10, noteFile: null, approved: null });
+  assert.deepEqual(parseArgs(['C:/repo']), { dir: 'C:/repo', head: null, timeoutMin: 45, intervalS: 30, noteFile: null, approved: null, release: null });
+  assert.deepEqual(parseArgs(['C:/repo', '--head', 'feature/x', '--timeout-min', '5', '--interval-s', '10']), { dir: 'C:/repo', head: 'feature/x', timeoutMin: 5, intervalS: 10, noteFile: null, approved: null, release: null });
   assert.equal(parseArgs(['C:/repo', '--approved', 'abc1234def']).approved, 'abc1234def');
   assert.throws(() => parseArgs(['C:/repo', '--approved', 'HEAD']), /usage: ship\.ts merge/);
   assert.throws(() => parseArgs([]), /usage: ship\.ts merge/);
@@ -492,17 +557,66 @@ interface RunFixture {
   lostShare?: string;
   /** Whether main, at BASE when the merge starts, moves to MOVED while the first head's checks run (mainTip unset). */
   movesDuringWait?: boolean;
+  /** Whether each landing-turn wait ends because older merges landed (T4280); none waited unless given. */
+  olderLanded?: boolean;
   /** The work commits each head carries over main (approval.ts `workCommitsOf`); SHA and REBASED the same two unless given. */
   work?: Readonly<Record<string, readonly WorkCommit[]>>;
   /** How many of main's fetches after the merge call fail on a ref-store race with another fetch (#1452); none unless given. */
   racedFetches?: number;
+  /**
+   * The repo's release pull request (T4645), on RELEASE at SHA as origin has it: whether it is open (yes unless given)
+   * and why the release check refuses its head (it never does unless given). Unset, repos.json lists none.
+   */
+  release?: { open?: boolean; refusal?: string };
+  /**
+   * What catching up the release head main moved past answers, in turn (the last repeats; T5055); refused unless
+   * given. A rebased answer moves the release branch on origin to its sha, or to `releaseRewritten` when given, as the
+   * release tool's own push would.
+   */
+  releaseCatchUp?: readonly CatchUp[];
+  releaseRewritten?: string;
+  /** Whether main merges through GitHub's merge queue (T3386): its pull request is out of the queue, then merged at QUEUED. */
+  queue?: boolean;
+  /** The register's task of the branch (T4796): TASK unless given; null for none. */
+  task?: PullTask | null;
+  /** The labels the repo has (T4796); none unless given, so no label is added. */
+  repoLabels?: readonly string[];
 }
 
+/** The queue's merge commit of the pull request, which main on origin holds once it landed. */
+const QUEUED = 'queued0eee';
+
+/** GitHub's merge queue in front of `rest`: the graphql reads and the enqueue go to it, every other call to `rest`. */
+function withMergeQueue(rest: Gh, enqueued: string[][]): Gh {
+  let reads = 0;
+  return args => {
+    if (args[1] !== 'graphql') return rest(args);
+    if (args.some(arg => arg.startsWith('query=mutation'))) {
+      enqueued.push([...args]);
+      return JSON.stringify({ data: { enqueuePullRequest: { mergeQueueEntry: { state: 'QUEUED', position: 1 } } } });
+    }
+    const merged = reads++ > 0;
+    return JSON.stringify({
+      data: { repository: { pullRequest: { id: 'PR_node3', headRefOid: SHA, merged, mergeCommit: merged ? { oid: QUEUED } : null, mergeQueueEntry: null, timelineItems: { nodes: [] } } } },
+    });
+  };
+}
+
+/** The branch the release tool keeps the release pull request on (T4645). */
+const RELEASE = 'release-please--branches--main';
+
 /** The head a catch-up pushes: BRANCH rebased onto MOVED. */
+/** The head the fake catch-up answers: merge.ts merges whatever head it names (catch-up.ts keeps the name, T4907). */
 const NEXT = 't9-change-2';
 const REBASED = 'rebased0ccc';
 const CAUGHT_UP: CatchUp = { kind: 'rebased', head: NEXT, sha: REBASED };
 const CAUGHT_UP_REFUSED: CatchUp = { kind: 'refused', reason: 'main moved to moved00, which t9-change abc1234 does not contain, and rebasing it onto that tip conflicts' };
+/** The release head caught up onto MOVED, on the same branch (release-catch-up.ts, T5055). */
+const RELEASE_CAUGHT_UP: CatchUp = { kind: 'rebased', head: 'release-please--branches--main', sha: REBASED };
+const RELEASE_REFUSAL = `main moved to moved00, which the release pull request's head abc1234 does not contain, and 5ca1ab1e "feat: b" may change the release notes`;
+const RELEASE_REFUSED: CatchUp = { kind: 'refused', reason: RELEASE_REFUSAL };
+/** A head the release tool pushed itself while the merge caught up its own. */
+const REWRITTEN = 'rewritten0fff';
 
 /** The approved head's two work commits, and the same patches as REBASED carries them. */
 const APPROVED_WORK: readonly WorkCommit[] = [
@@ -570,9 +684,15 @@ function runFixture(fixture: RunFixture = {}): {
   renamedCallers: ReturnType<typeof mock.fn<MergeDeps['renamedCallers']>>;
   sweep: ReturnType<typeof mock.fn<MergeDeps['sweep']>>;
   clearMerge: ReturnType<typeof mock.fn<MergeDeps['clearMerge']>>;
+  clearTaskMerge: ReturnType<typeof mock.fn<MergeDeps['clearTaskMerge']>>;
+  pullTask: ReturnType<typeof mock.fn<MergeDeps['pullTask']>>;
+  releaseRefusal: ReturnType<typeof mock.fn<MergeDeps['releaseRefusal']>>;
   catchUp: ReturnType<typeof mock.fn<MergeDeps['catchUp']>>;
+  releaseCatchUp: ReturnType<typeof mock.fn<MergeDeps['releaseCatchUp']>>;
   /** Each step-away and step-back of the step's host share, in turn, with the catch-ups run before it. */
   shareCalls: string[];
+  /** Each enqueue call to GitHub's merge queue (fixture `queue`). */
+  enqueued: string[][];
 } {
   const gitCalls: string[] = [];
   const shareCalls: string[] = [];
@@ -596,6 +716,9 @@ function runFixture(fixture: RunFixture = {}): {
     [`merge-base ${REBASED} ${MOVED}`]: fixture.rebasedBehind === true ? BASE : MOVED,
     [`rev-parse ${REBASED}^{tree}`]: 'tree-checked',
     'rev-parse --verify --quiet abc1234^{commit}': SHA,
+    [`fetch --quiet origin ${RELEASE} main`]: '',
+    [`log --reverse --format=%s refs/remotes/origin/main..${REWRITTEN}`]: 'chore(main): release 1.2.0',
+    [`merge-base ${BASE} ${QUEUED}`]: QUEUED,
   };
   const out: string[] = [];
   const err: string[] = [];
@@ -603,23 +726,42 @@ function runFixture(fixture: RunFixture = {}): {
   const caughtUpHead = fixture.mainTip === MOVED;
   // A main that moves during the wait sees the first head's pull request opened, then the caught-up one's.
   const heads: readonly PushedHead[] | undefined = fixture.movesDuringWait === true ? [{ sha: SHA, branch: BRANCH }, { sha: REBASED, branch: NEXT }] : undefined;
-  const { gh, writes } = fakeGitHub({ rounds: fixture.rounds ?? [green], openedSha: caughtUpHead ? REBASED : SHA, branch: caughtUpHead ? NEXT : BRANCH, ...(heads === undefined ? {} : { heads }) });
+  // The release tool opened the release pull request at SHA, and CI ran on its branch.
+  const releasePull = fixture.release === undefined ? {} : { openPullSha: fixture.release.open === false ? null : caughtUpHead ? REBASED : SHA, branch: RELEASE };
+  const { gh, writes } = fakeGitHub({ rounds: fixture.rounds ?? [green], openedSha: caughtUpHead ? REBASED : SHA, branch: caughtUpHead ? NEXT : BRANCH, ...(heads === undefined ? {} : { heads }), ...releasePull, ...(fixture.repoLabels === undefined ? {} : { repoLabels: fixture.repoLabels }) });
   let mainReads = 0;
   let mainFetches = 0;
   let raced = fixture.racedFetches ?? 0;
   const local = fakeGate(fixture.local ?? {}, line => out.push(line));
-  const ghFor = mock.fn((_token: string): Gh => gh);
+  const enqueued: string[][] = [];
+  const github = fixture.queue === true ? withMergeQueue(gh, enqueued) : gh;
+  const ghFor = mock.fn((_token: string): Gh => github);
   const renamedCallers = mock.fn((_base: string, _tip: string, _repo: string): string | null => fixture.renamedCallers ?? null);
   const sweep = mock.fn<MergeDeps['sweep']>(() => undefined);
   const clearMerge = mock.fn<MergeDeps['clearMerge']>(() => Promise.resolve(fixture.clearance ?? { kind: 'approved', by: 'lead' }));
+  const clearTaskMerge = mock.fn<MergeDeps['clearTaskMerge']>(() => Promise.resolve(fixture.clearance ?? { kind: 'approved', by: 'lead' }));
+  const pullTask = mock.fn<MergeDeps['pullTask']>(() => Promise.resolve(fixture.task === null ? undefined : (fixture.task ?? TASK)));
+  const releaseRefusal = mock.fn<MergeDeps['releaseRefusal']>(() => fixture.release?.refusal ?? null);
+  const releaseProfile = fixture.release === undefined ? '' : `,"release":{"head":"${RELEASE}","changelog":"CHANGELOG.md"}`;
   const answersOfCatchUp = fixture.catchUp ?? [CAUGHT_UP_REFUSED];
   let caughtUp = 0;
+  let landedWaits = 0;
   const catchUp = mock.fn<MergeDeps['catchUp']>(() => answersOfCatchUp[Math.min(caughtUp++, answersOfCatchUp.length - 1)] ?? CAUGHT_UP_REFUSED);
+  // The release branch as origin has it: the release tool's SHA, until a catch-up pushes it.
+  let releaseSha = SHA;
+  const answersOfReleaseCatchUp = fixture.releaseCatchUp ?? [RELEASE_REFUSED];
+  let releaseCaughtUp = 0;
+  const releaseCatchUp = mock.fn<MergeDeps['releaseCatchUp']>(() => {
+    const answer = answersOfReleaseCatchUp[Math.min(releaseCaughtUp++, answersOfReleaseCatchUp.length - 1)] ?? RELEASE_REFUSED;
+    if (answer.kind === 'rebased') releaseSha = fixture.releaseRewritten ?? answer.sha;
+    return answer;
+  });
   const deps: MergeDeps = {
     git: (...args) => {
       const key = args.join(' ');
       gitCalls.push(key);
       if (fixture.movesDuringWait === true && key === 'rev-parse refs/remotes/origin/main') return mainReads++ === 0 ? BASE : MOVED;
+      if (key === `rev-parse refs/remotes/origin/${RELEASE}`) return releaseSha;
       if (key === 'fetch --quiet origin main' && ++mainFetches >= 3 && raced > 0) {
         raced -= 1;
         throw new Error(REF_RACE);
@@ -628,7 +770,7 @@ function runFixture(fixture: RunFixture = {}): {
       if (answer === undefined) throw new Error(`unexpected git ${key}`);
       return answer;
     },
-    profiles: parseProfiles(`{"${REPO}":{"main":"main","gate":"${fixture.local === undefined ? 'ci' : 'local'}","checks":["gates","test"],"regenerated":["out/"],${LOCAL_PROFILE}}}`),
+    profiles: parseProfiles(`{"${REPO}":{"main":"main","gate":"${fixture.local === undefined ? 'ci' : 'local'}","checks":["gates","test"],"regenerated":["out/"],${LOCAL_PROFILE}${releaseProfile}${fixture.queue === true ? ',"queue":true' : ''}}}`),
     credential: () => fixture.credential ?? { kind: 'found', secret: GH_SECRET },
     ghFor,
     waiter: fakeWaiter(),
@@ -636,7 +778,11 @@ function runFixture(fixture: RunFixture = {}): {
     renamedCallers,
     sweep,
     clearMerge,
+    clearTaskMerge,
+    pullTask,
+    releaseRefusal,
     catchUp,
+    releaseCatchUp,
     workOf: (rev) => (fixture.work ?? { [SHA]: APPROVED_WORK, [REBASED]: REBASED_WORK })[rev] ?? [],
     share: {
       away: () => {
@@ -652,18 +798,20 @@ function runFixture(fixture: RunFixture = {}): {
     turn: {
       wait: () => {
         gitCalls.push('turn wait');
+        if (fixture.olderLanded === true) landedWaits += 1;
         return Promise.resolve();
       },
+      waited: () => landedWaits,
       beat: () => undefined,
       end: () => undefined,
     },
     out: line => out.push(line),
     err: line => err.push(line),
   };
-  return { deps, gitCalls, out, err, ghFor, ghWrites: writes, local, renamedCallers, sweep, clearMerge, catchUp, shareCalls };
+  return { deps, gitCalls, out, err, ghFor, ghWrites: writes, local, renamedCallers, sweep, clearMerge, clearTaskMerge, pullTask, releaseRefusal, catchUp, releaseCatchUp, shareCalls, enqueued };
 }
 
-const ARGS: MergeArgs = { dir: 'C:/repo', head: BRANCH, timeoutMin: 10, intervalS: 60, noteFile: null, approved: null };
+const ARGS: MergeArgs = { dir: 'C:/repo', head: BRANCH, timeoutMin: 10, intervalS: 60, noteFile: null, approved: null, release: null };
 /** What `ship.ts merge` says once the lead's approval cleared the head (T2788). */
 const APPROVED_LINE = `merge of ${BRANCH} abc1234de: approved by lead`;
 
@@ -712,6 +860,27 @@ test('merges the pushed head of a repo found from its origin remote, with the to
   assert.equal(ghFor.mock.calls[0]?.arguments[0], GH_SECRET);
   assert.equal(gitCalls[1], `fetch --quiet origin ${BRANCH} main`);
   assert.ok(!gitCalls.includes('rev-parse --abbrev-ref HEAD'), 'an explicit --head is not second-guessed');
+});
+
+test("on a merge queue repo, a head whose checks passed is enqueued at its sha with no landing turn and no merge call, and lands at the queue's commit (T3386)", async () => {
+  const { deps, gitCalls, out, err, ghWrites, enqueued, sweep } = runFixture({ queue: true });
+  assert.equal(await runMerge(ARGS, deps), 0);
+  assert.deepEqual(err, []);
+  assert.equal(enqueued.length, 1);
+  assert.ok(enqueued[0]?.includes(`head=${SHA}`), 'the queue takes the checked head only');
+  assert.ok(!gitCalls.includes('turn wait'), 'the queue orders the landings, so no landing turn is waited for');
+  assert.deepEqual(ghWrites.filter(write => write.some(arg => arg.endsWith('/merge'))), []);
+  assert.ok(out.includes(`enqueued #3 at ${SHA.slice(0, 7)} in the merge queue`));
+  assert.equal(out.at(-1), `MERGED #3 into main, now at ${QUEUED.slice(0, 7)}`);
+  assert.equal(sweep.mock.callCount(), 1);
+});
+
+test('without the merge queue, a head whose checks passed waits for its landing turn and merges through the merge call', async () => {
+  const { deps, gitCalls, ghWrites, enqueued } = runFixture();
+  assert.equal(await runMerge(ARGS, deps), 0);
+  assert.ok(gitCalls.includes('turn wait'));
+  assert.deepEqual(enqueued, []);
+  assert.equal(ghWrites.filter(write => write.some(arg => arg.endsWith('/merge'))).length, 1);
 });
 
 test('without --head it merges the branch checked out in the repo dir', async () => {
@@ -814,13 +983,13 @@ test('a drift check whose fetch lost a race keeps the merge a success: retried o
   assert.equal(twice.sweep.mock.callCount(), 1, 'a landed merge sweeps its head as usual');
 });
 
-test('a head main moved past while the merge waited is caught up as a new branch and that branch merges (T2809)', async () => {
+test('a head main moved past while the merge waited is caught up and the head catch-up names merges (T2809)', async () => {
   const { deps, out, err, catchUp, sweep, gitCalls } = runFixture({ mainTip: MOVED, catchUp: [CAUGHT_UP] });
   assert.equal(await runMerge(ARGS, deps), 0);
   assert.deepEqual(err, []);
   assert.deepEqual(
     catchUp.mock.calls.map(call => call.arguments[0]),
-    [{ head: BRANCH, stem: BRANCH, tip: MOVED, main: 'main', regenerated: ['out/'] }],
+    [{ head: BRANCH, tip: MOVED, main: 'main', regenerated: ['out/'] }],
   );
   assert.ok(gitCalls.includes(`fetch --quiet origin ${NEXT} main`), 'the second run reads the new head as pushed');
   assert.equal(out.at(-1), 'MERGED #3 into main, now at main999');
@@ -864,25 +1033,101 @@ test('a head refused clearance is never caught up, even when main moved past it'
 test('without --head the caught-up head is the branch checked out; a ship merge gets the move back and catches nothing up', async () => {
   const checkedOut = runFixture({ mainTip: MOVED, catchUp: [CAUGHT_UP] });
   assert.equal(await runMerge({ ...ARGS, head: null }, checkedOut.deps), 0);
-  assert.deepEqual(checkedOut.catchUp.mock.calls[0]?.arguments[0], { head: BRANCH, stem: BRANCH, tip: MOVED, main: 'main', regenerated: ['out/'] });
+  assert.deepEqual(checkedOut.catchUp.mock.calls[0]?.arguments[0], { head: BRANCH, tip: MOVED, main: 'main', regenerated: ['out/'] });
 
   const shipped = runFixture({ mainTip: MOVED, catchUp: [CAUGHT_UP] });
   assert.equal((await mergeBranch(['C:/repo', '--head', BRANCH], () => shipped.deps)).kind, 'moved');
   assert.equal(shipped.catchUp.mock.callCount(), 0);
 });
 
-test(`main moving past ${MERGE_ATTEMPTS} heads in one merge is refused, each new head numbered from the first`, async () => {
+test(`main moving past ${MERGE_ATTEMPTS} heads in one merge is refused, each caught-up head caught up again`, async () => {
   const { deps, err, catchUp, sweep } = runFixture({ mainTip: MOVED, catchUp: [CAUGHT_UP], rebasedBehind: true });
   assert.equal(await runMerge(ARGS, deps), 1);
   assert.deepEqual(
-    catchUp.mock.calls.map(call => [call.arguments[0].head, call.arguments[0].stem]),
-    [
-      [BRANCH, BRANCH],
-      [NEXT, BRANCH],
-    ],
+    catchUp.mock.calls.map(call => call.arguments[0].head),
+    [BRANCH, NEXT],
   );
   assert.deepEqual(err, [`REFUSED main moved to moved00, which ${NEXT} rebased does not contain: rebase ${NEXT} onto origin/main, push it and run merge again (main moved ${MERGE_ATTEMPTS} times during this merge)`]);
   assert.equal(sweep.mock.callCount(), 0);
+});
+
+/** `ship.ts merge --release` on the release task T7, approved at SHA (T4645). */
+const RELEASE_ARGS: MergeArgs = { ...ARGS, head: null, release: 'T7', approved: 'abc1234' };
+
+test('--release names the release task, and takes neither --head nor --note-file (T4645)', () => {
+  assert.equal(parseArgs(['C:/repo', '--release', 'T7']).release, 'T7');
+  assert.throws(() => parseArgs(['C:/repo', '--release', 'seven']), /usage: ship\.ts merge/);
+  assert.throws(() => parseArgs(['C:/repo', '--release', 'T7', '--head', RELEASE]), /--release merges the branch repos\.json names for the release pull request, so it takes no --head/);
+  assert.throws(() => parseArgs(['C:/repo', '--note-file', 'C:/pr.md', '--release', 'T7']), /--release opens no pull request, so it takes no --note-file/);
+});
+
+test("the release pull request merges on its release task's approval, its head read from origin alone (T4645)", async () => {
+  const { deps, gitCalls, out, err, clearMerge, clearTaskMerge, releaseRefusal, ghWrites, sweep } = runFixture({ release: {} });
+  assert.equal(await runMerge(RELEASE_ARGS, deps), 0, err.join('\n'));
+  assert.deepEqual(clearTaskMerge.mock.calls.map(call => call.arguments), [['T7', SHA, 'abc1234']]);
+  assert.equal(clearMerge.mock.callCount(), 0, 'the release branch names no task to clear on');
+  assert.deepEqual(releaseRefusal.mock.calls.map(call => call.arguments.slice(1)), [[{ head: RELEASE, changelog: 'CHANGELOG.md' }, SHA]]);
+  assert.equal(out[0], `merge of the release pull request ${RELEASE} abc1234de: approved by lead on T7`);
+  assert.equal(out.at(-1), 'MERGED #3 into main, now at main999');
+  assert.ok(!gitCalls.some(call => call === 'rev-parse --abbrev-ref HEAD' || call.startsWith('rev-parse refs/heads/')), 'no local branch is read');
+  assert.ok(!ghWrites.some(args => args[1] === `repos/${REPO}/pulls`), 'it opens no pull request');
+  assert.deepEqual(sweep.mock.calls.map(call => call.arguments[0]), [{ repo: REPO, head: RELEASE, sha: SHA }]);
+});
+
+test('a release pull request that is not open is refused, never opened by the merge (T4645)', async () => {
+  const { deps, err, ghWrites } = runFixture({ release: { open: false } });
+  assert.equal(await runMerge(RELEASE_ARGS, deps), 1);
+  assert.deepEqual(err, [`REFUSED no open pull request from ${RELEASE} into main: the release tool opens it, never a merge`]);
+  assert.deepEqual(ghWrites, []);
+});
+
+test('a release head holding more than a release, or refused clearance, stops before the token is read or any GitHub call (T4645)', async () => {
+  const notRelease = 'src/cli/main.ts is not a version file nor the changelog: the release pull request holds only a release';
+  const changed = runFixture({ release: { refusal: notRelease } });
+  assert.equal(await runMerge(RELEASE_ARGS, changed.deps), 1);
+  assert.deepEqual(changed.err, [`REFUSED ${notRelease}`]);
+  assert.equal(changed.clearTaskMerge.mock.callCount(), 0);
+  assert.equal(changed.ghFor.mock.callCount(), 0);
+
+  const unapproved = runFixture({ release: {}, clearance: { kind: 'refused', reason: 'T7 has no approval of abc1234de by lead' } });
+  assert.equal(await runMerge(RELEASE_ARGS, unapproved.deps), 1);
+  assert.deepEqual(unapproved.err, ['REFUSED T7 has no approval of abc1234de by lead']);
+  assert.equal(unapproved.ghFor.mock.callCount(), 0);
+});
+
+test('a release head main moved past only by hidden commits is caught up on the same branch and merges on its approval (T5055)', async () => {
+  const { deps, out, err, catchUp, releaseCatchUp, clearTaskMerge, sweep } = runFixture({ release: {}, mainTip: MOVED, releaseCatchUp: [RELEASE_CAUGHT_UP] });
+  assert.equal(await runMerge(RELEASE_ARGS, deps), 0);
+  assert.deepEqual(err, []);
+  assert.deepEqual(releaseCatchUp.mock.calls.map(call => call.arguments[0]), [{ head: RELEASE, sha: SHA, tip: MOVED, main: 'main' }]);
+  assert.equal(catchUp.mock.callCount(), 0, 'a release head is never caught up as a change branch');
+  assert.deepEqual(clearTaskMerge.mock.calls.map(call => call.arguments[1]), [SHA], "the caught-up head merges on the first head's approval");
+  assert.ok(out.includes(`merge of the release pull request ${RELEASE} rebased0c: caught up from abc1234de, approved by lead on T7`), out.join('\n'));
+  assert.deepEqual(sweep.mock.calls.map(call => call.arguments[0]), [{ repo: REPO, head: RELEASE, sha: REBASED }]);
+});
+
+test("a release head main moved past by a commit its changelog shows is refused with the catch-up's reason (T5055)", async () => {
+  const { deps, err, sweep } = runFixture({ release: {}, mainTip: MOVED });
+  assert.equal(await runMerge(RELEASE_ARGS, deps), 1);
+  assert.deepEqual(err, [`REFUSED ${RELEASE_REFUSAL}`]);
+  assert.equal(sweep.mock.callCount(), 0);
+});
+
+test('a release head the release tool rewrote during a catch-up is asked for its own approval, never carried (T5055)', async () => {
+  const { deps, err, clearTaskMerge } = runFixture({ release: {}, mainTip: MOVED, releaseCatchUp: [RELEASE_CAUGHT_UP], releaseRewritten: REWRITTEN });
+  clearTaskMerge.mock.mockImplementation((_task, sha) =>
+    Promise.resolve<MergeClearance>(sha === SHA ? { kind: 'approved', by: 'lead' } : { kind: 'refused', reason: `T7 has no approval of ${sha.slice(0, 9)} by lead` }),
+  );
+  assert.equal(await runMerge(RELEASE_ARGS, deps), 1);
+  assert.deepEqual(clearTaskMerge.mock.calls.map(call => call.arguments[1]), [SHA, REWRITTEN]);
+  assert.deepEqual(err, ['REFUSED T7 has no approval of rewritten by lead']);
+});
+
+test('--release on a repo whose repos.json lists no release pull request is refused before any GitHub call (T4645)', async () => {
+  const { deps, gitCalls, ghFor } = runFixture();
+  await assert.rejects(runMerge(RELEASE_ARGS, deps), /Owner\/repo lists no release pull request in repos\.json/);
+  assert.ok(!gitCalls.some(call => call.startsWith('fetch')));
+  assert.equal(ghFor.mock.callCount(), 0);
 });
 
 /** A catch-up whose push failed as main moved again, to AGAIN (T4131). */
@@ -896,8 +1141,8 @@ test('a head whose catch-up push lost to a merge landing meanwhile is caught up 
   assert.deepEqual(
     catchUp.mock.calls.map(call => call.arguments[0]),
     [
-      { head: BRANCH, stem: BRANCH, tip: MOVED, main: 'main', regenerated: ['out/'] },
-      { head: BRANCH, stem: BRANCH, tip: AGAIN, main: 'main', regenerated: ['out/'] },
+      { head: BRANCH, tip: MOVED, main: 'main', regenerated: ['out/'] },
+      { head: BRANCH, tip: AGAIN, main: 'main', regenerated: ['out/'] },
     ],
   );
   assert.equal(out.at(-1), 'MERGED #3 into main, now at main999');
@@ -910,6 +1155,17 @@ test(`each move during a catch-up counts toward the ${MERGE_ATTEMPTS} a merge al
   assert.equal(catchUp.mock.callCount(), MERGE_ATTEMPTS - 1);
   assert.deepEqual(err, [`REFUSED ${MOVED_AGAIN.kind === 'moved' ? MOVED_AGAIN.reason : ''} (main moved ${MERGE_ATTEMPTS} times during this merge)`]);
   assert.equal(ghWrites.length, 0);
+});
+
+test(`a move read right after older merges landed during the turn's wait is not counted toward the ${MERGE_ATTEMPTS} (T4280)`, async () => {
+  const afterTurn = runFixture({ movesDuringWait: true, olderLanded: true, catchUp: [MOVED_AGAIN, MOVED_AGAIN, CAUGHT_UP] });
+  assert.equal(await runMerge(ARGS, afterTurn.deps), 0, afterTurn.err.join('\n'));
+  assert.equal(afterTurn.catchUp.mock.callCount(), MERGE_ATTEMPTS);
+  assert.equal(afterTurn.out.at(-1), 'MERGED #3 into main, now at main999');
+
+  const raced = runFixture({ movesDuringWait: true, catchUp: [MOVED_AGAIN, MOVED_AGAIN, CAUGHT_UP] });
+  assert.equal(await runMerge(ARGS, raced.deps), 1, 'the same moves with no older merge waited on still count');
+  assert.match(raced.err.at(-1) ?? '', new RegExp(`main moved ${MERGE_ATTEMPTS} times during this merge`));
 });
 
 test("on the ci gate the step's host share is set aside for the checks' wait and the merge call, never taken back once merged (T3336)", async () => {
@@ -1097,14 +1353,38 @@ test('--note-file opens the body of the pull request it opens, and a missing not
   const gate: GateDeps = { ...deps.gate, readText: path => (path === 'C:/notes/gap.md' ? '## Gap\nmacOS unchecked\n' : null) };
   assert.equal(await runMerge({ ...ARGS, noteFile: 'C:/notes/gap.md' }, { ...deps, gate }), 0);
   const opened = ghWrites.find(args => args[1] === `repos/${REPO}/pulls`);
-  assert.ok(opened?.includes('body=## Gap\nmacOS unchecked\n\n## Commits\n- cli: a\n- docs: b\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'));
+  assert.ok(opened?.includes('body=## Gap\nmacOS unchecked\n\nCloses #9\n\n## Commits\n- cli: a\n- docs: b\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'));
 
   const missing = runFixture();
   await assert.rejects(runMerge({ ...ARGS, noteFile: 'C:/notes/none.md' }, missing.deps), /--note-file C:\/notes\/none\.md: no such file/);
   assert.equal(missing.ghFor.mock.callCount(), 0);
 });
 
-const FLAKY: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: ['test'] };
+test("a ship's pull request takes its issue's title, a Closes line and the repo's labels of its task; the release one is never dressed (T4796)", async () => {
+  const { deps, ghWrites, err, pullTask } = runFixture({ repoLabels: ['P1', 'task', 'area:cli', 'bug'] });
+  assert.equal(await runMerge(ARGS, deps), 0, err.join('\n'));
+  assert.deepEqual(pullTask.mock.calls.map(call => call.arguments), [[BRANCH]]);
+  const opened = ghWrites.find(args => args[1] === `repos/${REPO}/pulls`);
+  assert.ok(opened?.includes('title=T1: Ship titles'), opened?.join(' '));
+  assert.ok(opened?.some(arg => arg.startsWith('body=Closes #9\n\n## Commits\n')), opened?.join(' '));
+  // The issue's p3 is the task's p1 now; bug is not this task's type.
+  assert.deepEqual(ghWrites.find(args => args[1] === `repos/${REPO}/issues/3/labels`)?.slice(4), ['-f', 'labels[]=P1', '-f', 'labels[]=task', '-f', 'labels[]=area:cli']);
+
+  const release = runFixture({ release: {}, repoLabels: ['P1'] });
+  assert.equal(await runMerge(RELEASE_ARGS, release.deps), 0, release.err.join('\n'));
+  assert.equal(release.pullTask.mock.callCount(), 0);
+  assert.ok(!release.ghWrites.some(args => (args[1] ?? '').endsWith('/labels')));
+});
+
+test('a branch whose task links no issue opens no pull request and says how to link one (T4796)', async () => {
+  const { deps, err, ghWrites } = runFixture({ task: { ...TASK, ref: null } });
+  assert.equal(await runMerge(ARGS, deps), 1);
+  assert.equal(err.length, 1);
+  assert.match(err[0] ?? '', /^REFUSED T1 links no GitHub issue, so its pull request would close none: open its issue, then teamrig update T1 --ref gh:/);
+  assert.deepEqual(ghWrites, []);
+});
+
+const FLAKY: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: ['test'], conditional: [] };
 const testFails: readonly JobState[] = [
   ['gates', 'completed', 'success'],
   ['test', 'completed', 'failure'],

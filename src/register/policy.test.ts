@@ -7,13 +7,15 @@ import { TEST_CARD, TEST_OWNER_CARD } from '../testing/card.ts';
 import { testTask } from '../testing/task.ts';
 import { foldEvents, type RegisterState, type Task } from './fold.ts';
 import type { DecisionCard } from './card.ts';
+import { cutTask } from './description-cut.ts';
 import { NO_SLICED_GOALS } from './focus.ts';
-import { CARD_USAGE, DESCRIPTION_NEEDED, GITHUB_ACTOR, normaliseTitle, PROOF_WAITS_USAGE, RegisterPolicy, type AddInput, type AskInput, type AuditSubject, type ImportInput, type StatusContext, type StatusInput, type Verdict } from './policy.ts';
+import { BLOCKER_WHY, CARD_USAGE, DESCRIPTION_NEEDED, GITHUB_ACTOR, normaliseTitle, PROOF_WAITS_USAGE, RegisterPolicy, type AddInput, type AskInput, type AuditSubject, type ImportInput, type StatusContext, type StatusInput, type Verdict } from './policy.ts';
 import type { ProblemReview } from './review.ts';
 import { NO_TASKS_ELSEWHERE, type TasksElsewhere } from './tree.ts';
 import type { WaitReason } from './waits.ts';
 import { JERUSALEM } from '../testing/zone.ts';
 import { WATCH_USAGE } from './verify.ts';
+import { BLOCKER_PRIORITY_ID } from './model.ts';
 
 const EMPTY: RegisterState = foldEvents([]);
 const INPUT: AddInput = { title: 'Add a health check', description: 'what and why', owner: 'alpha', source: 'lead', priority: 2 };
@@ -59,7 +61,7 @@ describe('RegisterPolicy.add', () => {
     const verdict = policy.add({ ...INPUT, title: '  Add a health check ' }, EMPTY);
     assert.deepEqual(verdict, {
       ok: true,
-      value: { title: 'Add a health check', description: 'what and why', owner: 'alpha', source: 'lead', ref: null, priority: 2, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, workClass: null, prepares: null },
+      value: { title: 'Add a health check', description: 'what and why', owner: 'alpha', source: 'lead', ref: null, priority: 2, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, exempt: null, workClass: null, prepares: null },
     });
   });
 
@@ -83,7 +85,10 @@ describe('RegisterPolicy.add', () => {
     assert.equal(verdict.ok ? verdict.value.priority : undefined, 0);
     const own = new RegisterPolicy(testConfig({ register: { priorities: [{ id: 2, name: 'soon' }] } }));
     assert.equal(error(own.add({ ...INPUT, priority: 0 }, EMPTY)), 'allowed');
-    assert.equal(error(own.add({ ...INPUT, priority: 1 }, EMPTY)), 'priority p1 is not one of p0, p2');
+    assert.equal(error(own.add({ ...INPUT, priority: 1 }, EMPTY)), 'priority p1 is not one of blocker, p0, p2');
+    const blocker = policy.add({ ...INPUT, priority: BLOCKER_PRIORITY_ID }, EMPTY);
+    assert.equal(blocker.ok ? blocker.value.priority : undefined, BLOCKER_PRIORITY_ID, 'the blocker level above p0 (T4329)');
+    assert.equal(error(own.add({ ...INPUT, priority: BLOCKER_PRIORITY_ID }, EMPTY)), 'allowed');
   });
 
   it('keeps the type and critical mark it is given', () => {
@@ -104,7 +109,7 @@ describe('RegisterPolicy.add', () => {
       [{ title: 'x'.repeat(141) }, /141 characters; the limit is 140/],
       [{ owner: 'charlie' }, /owner charlie is not a session/],
       [{ source: 'The Owner' }, /neither a session id nor owner/],
-      [{ priority: 9 }, /^priority p9 is not one of p0, p1, p2, p3, p4, p5$/],
+      [{ priority: 9 }, /^priority p9 is not one of blocker, p0, p1, p2, p3, p4, p5$/],
       [{ due: 'friday' }, /due friday is not/],
       [{ week: '2030-1-7' }, /week 2030-1-7 is not/],
       [{ ref: 'r'.repeat(301) }, /ref has 301 characters/],
@@ -171,7 +176,7 @@ describe('RegisterPolicy.add', () => {
 
   it('refuses an active task with the same title, but not a closed one', () => {
     const open = foldEvents([
-      { v: 1, type: 'create', id: 'T4', at: TASK.createdAt, by: 'lead', task: { ...INPUT, description: null, ref: null, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, workClass: null, prepares: null } },
+      { v: 1, type: 'create', id: 'T4', at: TASK.createdAt, by: 'lead', task: { ...INPUT, description: null, ref: null, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, exempt: null, workClass: null, prepares: null } },
     ]);
     assert.match(error(policy.add({ ...INPUT, title: 'add a  HEALTH check' }, open)), /T4 already tracks this \(open, owner alpha\)/);
     const closed = foldEvents([
@@ -234,7 +239,7 @@ describe('RegisterPolicy: the description', () => {
   });
 
   it("leaves the description to the owner: the lead may not change it on another session's task", () => {
-    assert.equal(error(policy.update(TASK, 'lead', { description: 'Why it matters.' }, undefined, EMPTY)), 'a leader may change only owner, priority, due, week, after, size, type, critical, pin, workClass, prepares on a task it does not own (asked: description)');
+    assert.equal(error(policy.update(TASK, 'lead', { description: 'Why it matters.' }, undefined, EMPTY)), 'a leader may change only owner, priority, due, week, after, size, type, critical, pin, exempt, workClass, prepares on a task it does not own (asked: description)');
     assert.equal(error(policy.update(TASK, 'bravo', { description: 'Why it matters.' }, undefined, EMPTY)), 'only the owner (alpha) or the lead (lead) changes T1');
   });
 
@@ -652,10 +657,11 @@ describe('RegisterPolicy.setStatus to verifying', () => {
     assert.equal(policy.setStatus(TASK, 'alpha', verifying([...approval, ...RUN_TONIGHT]), CTX).ok, true);
   });
 
-  it('waits a proof only on a task in progress or verifying, whose end runs it', () => {
+  it("waits a proof only on a task in progress or verifying, or an open one of its own owner's, whose end runs it", () => {
     const started = '2030-01-07T10:00:00.000Z';
     const tasks = [
       testTask({ id: 'T4', owner: 'bravo', status: 'open' }),
+      testTask({ id: 'T8', owner: 'alpha', status: 'open' }),
       testTask({ id: 'T5', owner: 'bravo', status: 'waiting', startedAt: started, waits: OWNER_DECISION }),
       testTask({ id: 'T6', owner: 'bravo', status: 'in-progress', startedAt: started }),
       testTask({ id: 'T7', owner: 'bravo', status: 'verifying', startedAt: started, proof: 'the nightly run' }),
@@ -664,13 +670,32 @@ describe('RegisterPolicy.setStatus to verifying', () => {
     const onTask = (id: string): StatusInput => ({ status: 'verifying', note: 'shipped', proof: 'p', waits: [{ kind: 'task', id }], followups: [] });
     assert.equal(
       error(policy.setStatus(TASK, 'alpha', onTask('T4'), context)),
-      'T4 is open: a proof waits only on a task in progress or verifying; until it starts, set T1 waiting on it (--status waiting --waits task:T4)',
+      "T4 is open and bravo's: a proof waits only on a task in progress or verifying, or an open one of its own owner's; until it starts, set T1 waiting on it (--status waiting --waits task:T4)",
     );
-    assert.match(error(policy.setStatus(TASK, 'alpha', onTask('T5'), context)), /^T5 is waiting: a proof waits only on a task in progress or verifying;/);
+    assert.match(error(policy.setStatus(TASK, 'alpha', onTask('T5'), context)), /^T5 is waiting: a proof waits only on a task in progress or verifying, or an open one of its own owner's;/);
+    assert.equal(policy.setStatus(TASK, 'alpha', onTask('T8'), context).ok, true, "an open task of the proof's own owner, startable now (#1544)");
     assert.equal(policy.setStatus(TASK, 'alpha', onTask('T6'), context).ok, true);
     assert.equal(policy.setStatus(TASK, 'alpha', onTask('T7'), context).ok, true);
     const waiting = policy.setStatus(TASK, 'alpha', { status: 'waiting', note: 'needs the schema', waits: [{ kind: 'task', id: 'T4' }] }, context);
     assert.equal(waiting.ok, true, 'a waiting task may wait on one not started');
+  });
+
+  it("refuses a proof on its owner's open task planned after an unfinished one, naming it, as that task cannot start now", () => {
+    const started = '2030-01-07T10:00:00.000Z';
+    const tasks = [
+      testTask({ id: 'T4', owner: 'bravo', status: 'in-progress', startedAt: started }),
+      testTask({ id: 'T5', owner: 'bravo', status: 'done', startedAt: started }),
+      testTask({ id: 'T6', owner: 'alpha', status: 'open' }),
+      testTask({ id: 'T8', owner: 'alpha', status: 'open', after: ['T5', 'T4', 'T6'] }),
+      testTask({ id: 'T9', owner: 'alpha', status: 'open', after: ['T5'] }),
+    ];
+    const context = { ...CTX, state: stateOf(TASK, ...tasks) };
+    const onTask = (id: string): StatusInput => ({ status: 'verifying', note: 'shipped', proof: 'p', waits: [{ kind: 'task', id }], followups: [] });
+    assert.equal(
+      error(policy.setStatus(TASK, 'alpha', onTask('T8'), context)),
+      "T8 is planned after T4, T6, not finished yet, so it cannot start now: a proof waits on an open task of its own owner's only once it can start; until then, set T1 waiting on it (--status waiting --waits task:T8)",
+    );
+    assert.equal(policy.setStatus(TASK, 'alpha', onTask('T9'), context).ok, true, 'every task T9 is planned after is finished, so it can start now');
   });
 
   it("refuses a peer's approval of the proof, naming the ask that makes it the peer's task", () => {
@@ -931,6 +956,7 @@ describe('RegisterPolicy.ask', () => {
         type: null,
         critical: false,
         pin: null,
+        exempt: null,
         workClass: null,
         prepares: null,
       },
@@ -1015,12 +1041,12 @@ describe('RegisterPolicy.update', () => {
     assert.equal(error(policy.update(left, 'lead', { owner: 'yankee' }, undefined, EMPTY)), 'owner yankee is not a session on this team', 'an owner a write sets is a session');
     assert.equal(
       error(policy.update(left, 'lead', { title: 'x' }, undefined, EMPTY)),
-      'a leader may change only owner, priority, due, week, after, size, type, critical, pin, workClass, prepares, ref on a task it does not own (asked: title)',
+      'a leader may change only owner, priority, due, week, after, size, type, critical, pin, exempt, workClass, prepares, ref on a task it does not own (asked: title)',
     );
     assert.equal(error(policy.update(left, 'alpha', { ref: 'notes/new.md' }, undefined, EMPTY)), 'only the owner (zulu) or the lead (lead) changes T1');
     assert.equal(
       error(policy.update(TASK, 'lead', { ref: 'notes/new.md' }, undefined, EMPTY)),
-      'a leader may change only owner, priority, due, week, after, size, type, critical, pin, workClass, prepares on a task it does not own (asked: ref)',
+      'a leader may change only owner, priority, due, week, after, size, type, critical, pin, exempt, workClass, prepares on a task it does not own (asked: ref)',
       'an owner on the team keeps its own ref',
     );
   });
@@ -1030,7 +1056,7 @@ describe('RegisterPolicy.update', () => {
     const bravos = testTask({ id: 'T9', owner: 'bravo' });
     assert.deepEqual(tree.update(bravos, 'lead', { ref: 'gh:acme/app#7' }, undefined, EMPTY), { ok: true, value: { changes: { ref: 'gh:acme/app#7' }, note: null } });
     assert.equal(tree.update(bravos, 'lead', { ref: 'gh:acme/app#7', priority: 1 }, undefined, EMPTY).ok, true, 'beside the work order');
-    const refused = 'a leader may change only owner, priority, due, week, after, size, type, critical, pin, workClass, prepares on a task it does not own (asked: ref)';
+    const refused = 'a leader may change only owner, priority, due, week, after, size, type, critical, pin, exempt, workClass, prepares on a task it does not own (asked: ref)';
     assert.equal(error(tree.update(bravos, 'lead', { ref: 'notes/plan.md' }, undefined, EMPTY)), refused, 'a ref that is no issue');
     const noted = testTask({ id: 'T9', owner: 'bravo', ref: 'notes/plan.md' });
     assert.deepEqual(tree.update(noted, 'lead', { ref: 'gh:acme/app#7' }, 'ref was: notes/plan.md', EMPTY), { ok: true, value: { changes: { ref: 'gh:acme/app#7' }, note: 'ref was: notes/plan.md' } }, 'a note ref gives way');
@@ -1038,6 +1064,23 @@ describe('RegisterPolicy.update', () => {
     assert.equal(error(tree.update(testTask({ id: 'T9', owner: 'bravo', ref: 'gh:acme/app#3' }), 'lead', { ref: 'gh:acme/app#7' }, undefined, EMPTY)), refused, 'its issue stays');
     assert.equal(error(tree.update(bravos, 'alpha', { ref: 'gh:acme/app#7' }, undefined, EMPTY)), refused, 'a sub-lead does not');
     assert.equal(error(tree.update(bravos, 'charlie', { ref: 'gh:acme/app#7' }, undefined, EMPTY)), 'only the owner (bravo) or a leader above bravo (alpha or lead) changes T9');
+  });
+
+  it("lets a holder of issue migrate point any session's task holding no issue at its issue, the ref alone (T4606)", () => {
+    const roles = { serviceRoles: { github: { holders: ['charlie'], commands: ['issue migrate'] } } };
+    const tree = new RegisterPolicy(testConfig({ sessions: ['lead', 'alpha', 'bravo', 'charlie'], ...roles }));
+    const bravos = testTask({ id: 'T9', owner: 'bravo', ref: 'notes/plan.md' });
+    assert.deepEqual(tree.update(bravos, 'charlie', { ref: 'gh:acme/app#7' }, 'ref was: notes/plan.md', EMPTY), { ok: true, value: { changes: { ref: 'gh:acme/app#7' }, note: 'ref was: notes/plan.md' } });
+    const notLeader = 'only the owner (bravo) or the lead (lead) changes T9';
+    assert.equal(error(tree.update(bravos, 'charlie', { ref: 'gh:acme/app#7', priority: 1 }, undefined, EMPTY)), notLeader, 'another field beside it');
+    assert.equal(error(tree.update(bravos, 'charlie', { ref: 'notes/other.md' }, undefined, EMPTY)), notLeader, 'a ref that is no issue');
+    assert.equal(error(tree.update(testTask({ id: 'T9', owner: 'bravo', ref: 'gh:acme/app#3' }), 'charlie', { ref: 'gh:acme/app#7' }, undefined, EMPTY)), notLeader, 'its issue stays');
+    assert.equal(error(tree.update(bravos, 'alpha', { ref: 'gh:acme/app#7' }, undefined, EMPTY)), notLeader, 'a session holding no such role');
+    const closer = new RegisterPolicy(testConfig({ sessions: ['lead', 'alpha', 'bravo', 'charlie'], serviceRoles: { github: { holders: ['charlie'], commands: ['issue close'] } } }));
+    assert.equal(error(closer.update(bravos, 'charlie', { ref: 'gh:acme/app#7' }, undefined, EMPTY)), notLeader, 'a role without issue migrate');
+    const kept = testTask({ id: 'T9', owner: 'bravo', ref: 'local: security hole, private' });
+    assert.equal(error(tree.update(kept, 'charlie', { ref: 'gh:acme/app#7' }, undefined, EMPTY)), notLeader, 'a task kept local stays local');
+    assert.equal(tree.update(kept, 'lead', { ref: 'gh:acme/app#7' }, undefined, EMPTY).ok, true, 'its leader lifts the mark');
   });
 
   it('keeps a class the team renamed out of focus.classes on any other change, and refuses setting one outside them (T2076)', () => {
@@ -1115,6 +1158,19 @@ describe('RegisterPolicy.update', () => {
     assert.equal(error(tree.update(deltas, 'charlie', { pin: 'alpha' }, undefined, EMPTY)), 'a pin names the session that sets it (charlie), not alpha');
     assert.equal(tree.update(testTask({ owner: 'lead' }), 'lead', { pin: 'lead' }, undefined, EMPTY).ok, true, 'the lead pins its own');
     assert.equal(error(tree.update(deltas, 'bravo', { pin: 'bravo' }, undefined, EMPTY)), 'only the owner (delta) or a leader above delta (charlie or alpha or lead) changes T9');
+  });
+
+  it("lets only the owner's leaders exempt its task from its rest, each mark naming who set it, and the lead its own tasks too (T4948)", () => {
+    const tree = new RegisterPolicy(testConfig({ sessions: ['lead', 'alpha', 'bravo', 'charlie', 'delta'], leads: { alpha: ['bravo', 'charlie'], charlie: ['delta'] } }));
+    const deltas = testTask({ id: 'T9', owner: 'delta' });
+    assert.deepEqual(tree.update(deltas, 'charlie', { exempt: 'charlie' }, undefined, EMPTY), { ok: true, value: { changes: { exempt: 'charlie' }, note: null } }, "delta's sub-lead exempts");
+    assert.equal(tree.update(deltas, 'lead', { exempt: null }, undefined, EMPTY).ok, true, 'the lead clears it');
+    const own = "only a leader above delta (charlie or alpha or lead) exempts T9 from its owner's rest: the mark wakes delta past its budget hold";
+    assert.equal(error(tree.update(deltas, 'delta', { exempt: 'delta' }, undefined, EMPTY)), own, 'never its owner');
+    assert.equal(error(tree.update(deltas, 'delta', { exempt: null }, undefined, EMPTY)), own, 'nor clears it');
+    assert.equal(error(tree.update(deltas, 'charlie', { exempt: 'alpha' }, undefined, EMPTY)), 'an exemption names the session that sets it (charlie), not alpha');
+    assert.equal(error(tree.update(deltas, 'bravo', { exempt: 'bravo' }, undefined, EMPTY)), "only a leader above delta (charlie or alpha or lead) exempts T9 from its owner's rest: the mark wakes delta past its budget hold", 'nor a peer');
+    assert.equal(tree.update(testTask({ owner: 'lead' }), 'lead', { exempt: 'lead' }, undefined, EMPTY).ok, true, 'the lead exempts its own');
   });
 
   it('plans an open task after others, and clears that plan on any task', () => {
@@ -1320,17 +1376,17 @@ describe('RegisterPolicy, the GitHub import', () => {
 
   it('adds a task sourced github, keyed by its ref, even under a title the team already tracks', () => {
     const team = testTask({ title: 'Fix login', ref: 'gh:acme/web#8' });
-    assert.deepEqual(policy.importAdd(ISSUE, stateOf(team)), {
+    assert.deepEqual(policy.importAdd('github', ISSUE, stateOf(team)), {
       ok: true,
-      value: { title: 'Fix login', description: null, owner: 'bravo', source: 'github', ref: 'gh:acme/web#7', priority: 1, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, workClass: null, prepares: null },
+      value: { title: 'Fix login', description: null, owner: 'bravo', source: 'github', ref: 'gh:acme/web#7', priority: 1, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, exempt: null, workClass: null, prepares: null },
     });
-    assert.equal(error(policy.importAdd(ISSUE, stateOf(team, IMPORTED))), 'T2 already has ref gh:acme/web#7');
-    assert.equal(error(policy.importAdd({ ...ISSUE, owner: 'octocat' }, EMPTY)), 'owner octocat is not a session on this team');
+    assert.equal(error(policy.importAdd('github', ISSUE, stateOf(team, IMPORTED))), 'T2 already has ref gh:acme/web#7');
+    assert.equal(error(policy.importAdd('github', { ...ISSUE, owner: 'octocat' }, EMPTY)), 'owner octocat is not a session on this team');
   });
 
   it('refuses a task for an issue a team task links to: that task tracks it', () => {
     const linked = testTask({ id: 'T5', title: 'Login fails', ref: 'gh:acme/web#7' });
-    assert.equal(error(policy.importAdd(ISSUE, stateOf(linked))), 'T5 already has ref gh:acme/web#7');
+    assert.equal(error(policy.importAdd('github', ISSUE, stateOf(linked))), 'T5 already has ref gh:acme/web#7');
   });
 
   it('keeps the github source for the import: a session can neither add nor move a task to it', () => {
@@ -1340,47 +1396,86 @@ describe('RegisterPolicy, the GitHub import', () => {
   });
 
   it('updates only the title and priority that differ, on its own tasks only', () => {
-    assert.deepEqual(policy.importUpdate(IMPORTED, { title: 'Fix the login', priority: 1 }, 'title changed on GitHub'), {
+    assert.deepEqual(policy.importUpdate('github', IMPORTED, { title: 'Fix the login', priority: 1 }, 'title changed on GitHub'), {
       ok: true,
       value: { changes: { title: 'Fix the login' }, note: 'title changed on GitHub' },
     });
-    assert.equal(error(policy.importUpdate(IMPORTED, { title: 'Fix login', priority: 1 }, 'again')), 'nothing to change');
-    assert.equal(error(policy.importUpdate(IMPORTED, { priority: 9 }, 'p9')), 'priority p9 is not one of p0, p1, p2, p3, p4, p5');
-    assert.equal(error(policy.importUpdate(TASK, { title: 'Other' }, 'x')), 'T1 is not a GitHub task (source lead): the import changes only its own');
+    assert.equal(error(policy.importUpdate('github', IMPORTED, { title: 'Fix login', priority: 1 }, 'again')), 'nothing to change');
+    assert.equal(error(policy.importUpdate('github', IMPORTED, { priority: 9 }, 'p9')), 'priority p9 is not one of blocker, p0, p1, p2, p3, p4, p5');
+    assert.equal(error(policy.importUpdate('github', TASK, { title: 'Other' }, 'x')), 'T1 is not a github task (source lead): the github import changes only its own');
   });
 
   it('carries the issue body as the description, and follows it, emptied too, whatever the add demands', () => {
-    const added = policy.importAdd({ ...ISSUE, description: 'Steps:\n1. log in' }, EMPTY);
+    const added = policy.importAdd('github', { ...ISSUE, description: 'Steps:\n1. log in' }, EMPTY);
     assert.equal(added.ok && added.value.description, 'Steps:\n1. log in');
-    assert.deepEqual(policy.importUpdate(IMPORTED, { description: 'Now with steps.' }, 'description as on GitHub'), {
+    assert.deepEqual(policy.importUpdate('github', IMPORTED, { description: 'Now with steps.' }, 'description as on GitHub'), {
       ok: true,
       value: { changes: { description: 'Now with steps.' }, note: 'description as on GitHub' },
     });
     const described = testTask({ ...IMPORTED, description: 'Now with steps.' });
-    assert.deepEqual(policy.importUpdate(described, { description: null }, 'description as on GitHub'), {
+    assert.deepEqual(policy.importUpdate('github', described, { description: null }, 'description as on GitHub'), {
       ok: true,
       value: { changes: { description: null }, note: 'description as on GitHub' },
     });
-    assert.equal(error(policy.importUpdate(described, { description: 'Now with steps.' }, 'again')), 'nothing to change');
+    assert.equal(error(policy.importUpdate('github', described, { description: 'Now with steps.' }, 'again')), 'nothing to change');
+  });
+
+  it('judges a task whose line left the description out by its mark: the same body changes nothing, an edited one is written', () => {
+    const cut = cutTask(testTask({ ...IMPORTED, description: 'Now with steps.' }));
+    assert.equal(cut.description, null);
+    assert.equal(error(policy.importUpdate('github', cut, { description: 'Now with steps.' }, 'again')), 'nothing to change');
+    assert.deepEqual(policy.importUpdate('github', cut, { description: 'Now with stops.' }, 'description as on GitHub'), {
+      ok: true,
+      value: { changes: { description: 'Now with stops.' }, note: 'description as on GitHub' },
+    });
+    assert.deepEqual(policy.importUpdate('github', cut, { description: null }, 'description as on GitHub'), {
+      ok: true,
+      value: { changes: { description: null }, note: 'description as on GitHub' },
+    });
   });
 
   it('opens, finishes or drops its own tasks, a done with the issue url and no skill', () => {
     const working = testTask({ ...IMPORTED, status: 'in-progress' });
-    assert.deepEqual(policy.importStatus(working, { status: 'done', note: 'closed on GitHub as completed', evidence: URL }), {
+    assert.deepEqual(policy.importStatus('github', working, { status: 'done', note: 'closed on GitHub as completed', evidence: URL }), {
       ok: true,
       value: { status: 'done', note: 'closed on GitHub as completed', evidence: URL, skill: null },
     });
-    assert.equal(policy.importStatus({ ...IMPORTED, status: 'done' }, { status: 'open', note: 'reopened on GitHub' }).ok, true);
-    assert.equal(policy.importStatus(IMPORTED, { status: 'dropped', note: 'closed on GitHub as not planned' }).ok, true);
-    assert.equal(error(policy.importStatus(IMPORTED, { status: 'done', note: 'closed' })), 'done needs evidence: the issue url');
-    assert.equal(error(policy.importStatus(IMPORTED, { status: 'open', note: 'again' })), 'T2 is already open');
-    assert.equal(error(policy.importStatus(IMPORTED, { status: 'in-progress' })), 'the GitHub import sets only open, done, dropped, not in-progress');
+    assert.equal(policy.importStatus('github', { ...IMPORTED, status: 'done' }, { status: 'open', note: 'reopened on GitHub' }).ok, true);
+    assert.equal(policy.importStatus('github', IMPORTED, { status: 'dropped', note: 'closed on GitHub as not planned' }).ok, true);
+    assert.equal(error(policy.importStatus('github', IMPORTED, { status: 'done', note: 'closed' })), 'done needs evidence: the issue url');
+    assert.equal(error(policy.importStatus('github', IMPORTED, { status: 'open', note: 'again' })), 'T2 is already open');
+    assert.equal(error(policy.importStatus('github', IMPORTED, { status: 'in-progress' })), 'the github import sets only open, done, dropped, not in-progress');
   });
 
   it('refuses the github actor on any task that is not the import own, on both status paths', () => {
-    assert.equal(error(policy.importStatus(TASK, { status: 'done', evidence: URL })), 'T1 is not a GitHub task (source lead): the import changes only its own');
+    assert.equal(error(policy.importStatus('github', TASK, { status: 'done', evidence: URL })), 'T1 is not a github task (source lead): the github import changes only its own');
     assert.equal(error(policy.setStatus(TASK, GITHUB_ACTOR, { status: 'done', evidence: URL, skill: 'none' }, CTX)), 'only the owner (alpha) sets the status of T1');
     assert.equal(error(policy.setStatus(IMPORTED, GITHUB_ACTOR, { status: 'done', evidence: URL, skill: 'none' }, CTX)), 'only the owner (bravo) sets the status of T2');
+  });
+});
+
+describe('RegisterPolicy, an import per tracker', () => {
+  const policy = new RegisterPolicy(testConfig());
+  const JIRA_ISSUE: ImportInput = { title: 'Fix login', description: null, owner: 'bravo', ref: 'jira:ENG-12', priority: 1 };
+  const JIRA_TASK: Task = testTask({ id: 'T3', title: 'Fix login', owner: 'bravo', source: 'jira', ref: 'jira:ENG-12', priority: 1 });
+  const GITHUB_TASK: Task = testTask({ id: 'T2', title: 'Fix login', owner: 'bravo', source: 'github', ref: 'gh:acme/web#7', priority: 1 });
+
+  it('sources a Jira task jira, and refuses a ref of another tracker for it', () => {
+    const added = policy.importAdd('jira', JIRA_ISSUE, EMPTY);
+    assert.equal(added.ok && added.value.source, 'jira');
+    assert.equal(error(policy.importAdd('jira', { ...JIRA_ISSUE, ref: 'gh:acme/web#7' }, EMPTY)), 'ref gh:acme/web#7 is not a jira ref: it starts with jira:');
+    assert.equal(error(policy.importAdd('github', JIRA_ISSUE, EMPTY)), 'ref jira:ENG-12 is not a github ref: it starts with gh:');
+  });
+
+  it("changes only its own tracker's tasks, never another import's", () => {
+    assert.equal(policy.importUpdate('jira', JIRA_TASK, { title: 'Fix the login' }, 'title as on Jira').ok, true);
+    assert.equal(error(policy.importUpdate('jira', GITHUB_TASK, { title: 'Other' }, 'x')), 'T2 is not a jira task (source github): the jira import changes only its own');
+    assert.equal(error(policy.importStatus('github', JIRA_TASK, { status: 'dropped' })), 'T3 is not a github task (source jira): the github import changes only its own');
+    assert.equal(error(policy.importStatus('jira', JIRA_TASK, { status: 'in-progress' })), 'the jira import sets only open, done, dropped, not in-progress');
+  });
+
+  it('keeps the jira source for the import too', () => {
+    assert.equal(error(policy.add({ ...INPUT, source: 'jira' }, EMPTY)), 'source jira is kept for the tasks teamrig issue sync imports');
   });
 });
 /** True when the reasons ask a decision or an approval, which take a card. */
@@ -2057,5 +2152,45 @@ describe('RegisterPolicy.setStatus: a set that would drop an approval (T3207)', 
     assert.equal(error(policy.setStatus(approved, 'alpha', { status: 'dropped', note: 'superseded', dropApproval: true }, CTX)), refusal);
     const declined: Task = { ...approved, answer: { verdict: 'declined', by: 'lead', at: '2030-01-08T11:00:00.000Z', note: 'no tests' } };
     assert.equal(error(policy.setStatus(declined, 'alpha', { status: 'in-progress', note: 'adding tests' }, CTX)), 'allowed');
+  });
+});
+
+describe('RegisterPolicy: a blocker (T4329)', () => {
+  const policy = new RegisterPolicy(testConfig());
+  const WHY: Task = { ...TASK, description: 'the night flow cannot write' };
+  const BLOCKER: Task = { ...WHY, priority: BLOCKER_PRIORITY_ID };
+
+  it('takes a blocker with its why and refuses one without, whatever register.requireDescription says', () => {
+    assert.equal(error(policy.add({ ...INPUT, priority: BLOCKER_PRIORITY_ID }, EMPTY)), 'allowed');
+    const { description, ...undescribed } = INPUT;
+    assert.equal(description, 'what and why');
+    const lax = new RegisterPolicy(testConfig({ register: { requireDescription: false } }));
+    assert.equal(error(lax.add({ ...undescribed, priority: BLOCKER_PRIORITY_ID }, EMPTY)), BLOCKER_WHY);
+    assert.equal(error(lax.add({ ...undescribed, priority: 0 }, EMPTY)), 'allowed', 'p0 keeps the team rule');
+  });
+
+  it('refuses a blocker planned after another task: that is a plain wait', () => {
+    const state = stateOf(testTask({ id: 'T4', status: 'open' }));
+    assert.match(error(policy.add({ ...INPUT, priority: BLOCKER_PRIORITY_ID, after: ['T4'] }, state)), /^a blocker is fixed now, never after another task: the task waiting on T4 is a plain wait/);
+    assert.match(error(policy.update({ ...WHY, status: 'open', startedAt: null, after: ['T4'] }, 'alpha', { priority: BLOCKER_PRIORITY_ID }, undefined, state)), /T1 waiting on T4 is a plain wait/);
+  });
+
+  it('refuses a blocker that waits on a task, set waiting or raised while waiting, and takes other edits of one', () => {
+    const state = stateOf(TASK, testTask({ id: 'T4', status: 'in-progress' }));
+    const context: StatusContext = { ...CTX, state };
+    assert.match(error(policy.setStatus(BLOCKER, 'alpha', { status: 'waiting', note: 'needs T4', waits: [{ kind: 'task', id: 'T4' }] }, context)), /^a blocker is fixed now, never after another task: T1 waiting on T4/);
+    const waiting: Task = { ...WHY, status: 'waiting', waits: [{ kind: 'task', id: 'T4' }] };
+    assert.match(error(policy.update(waiting, 'alpha', { priority: BLOCKER_PRIORITY_ID }, undefined, state)), /T1 waiting on T4 is a plain wait/);
+    assert.equal(error(policy.update({ ...waiting, priority: BLOCKER_PRIORITY_ID }, 'alpha', { title: 'Renamed' }, undefined, state)), 'allowed');
+  });
+
+  it("refuses its owner's start of other work, --one-commit too, until the blocker is done", () => {
+    const other = testTask({ id: 'T5', status: 'open' });
+    const open: Task = { ...BLOCKER, status: 'open', startedAt: null };
+    const context: StatusContext = { ...CTX, state: stateOf(open, other) };
+    const refusal = 'alpha holds the blocker T1: drop everything and fix it first; start T5 once it is done or waits on an answer';
+    assert.equal(error(policy.setStatus(other, 'alpha', { status: 'in-progress' }, context)), refusal);
+    assert.equal(error(policy.setStatus(other, 'alpha', { status: 'in-progress', oneCommit: true }, context)), refusal);
+    assert.equal(error(policy.setStatus(other, 'alpha', { status: 'in-progress' }, { ...CTX, state: stateOf({ ...open, status: 'done' }, other) })), 'allowed');
   });
 });

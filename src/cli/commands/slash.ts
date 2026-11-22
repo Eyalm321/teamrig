@@ -1,14 +1,15 @@
-import { isRecord, stringField } from '../../core/guards.ts';
+import { stringField, type JsonRecord } from '../../core/guards.ts';
 import { ENV, KIT_NAME } from '../../core/home.ts';
-import { sessionIdOf } from '../../inbox/inbox.ts';
+import type { HostSteps } from '../../ports/host/index.ts';
 import { planSlash, SESSION_FLAG, sessionReads, withSession, type CommandTable } from '../../slash/plan.ts';
 import { joinWords, splitWords } from '../../slash/words.ts';
+import { refuseUnlessPerson } from '../agent-run.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
-import { underClaudeCode } from '../claude-code-env.ts';
 import type { CommandHelp } from '../help.ts';
+import { hostNameOf, stepsOf } from '../host.ts';
 import { openKit, rosterOf } from '../kit.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
-import { parseJson, sessionTeam, teamSessionOf } from './hook-input.ts';
+import { readModRequest, sessionTeam, teamSessionOf, type HookOrigin } from './hook-input.ts';
 
 /** What `hook slash-command` takes from the CLI: its command table, its help and its runner, given so this module never imports run.ts back. */
 export interface SlashDeps {
@@ -35,11 +36,11 @@ interface SlashInput {
   readonly agreed: string | undefined;
 }
 
-function slashInputOf(payload: unknown): SlashInput {
-  if (!isRecord(payload)) {
+function slashInputOf(fields: JsonRecord | undefined): SlashInput {
+  if (fields === undefined) {
     return { args: '', origin: undefined, agreed: undefined };
   }
-  return { args: stringField(payload, 'args') ?? '', origin: stringField(payload, 'origin'), agreed: stringField(payload, 'agreed') };
+  return { args: stringField(fields, 'args') ?? '', origin: stringField(fields, 'origin'), agreed: stringField(fields, 'agreed') };
 }
 
 /**
@@ -52,8 +53,8 @@ type Tab =
   | { readonly kind: 'team'; readonly team: string; readonly session: string | undefined };
 
 /** The tab's team and session, read as its hooks read them (hook-input.ts): `$TEAMRIG_SESSION`, else the area it read its inbox as or was bound to. */
-async function tabOf(payload: unknown, runtime: CliRuntime): Promise<Tab> {
-  const found = await sessionTeam(payload, runtime);
+async function tabOf(origin: HookOrigin | undefined, runtime: CliRuntime): Promise<Tab> {
+  const found = await sessionTeam(origin?.cwd, runtime);
   if (found.kind !== 'team') {
     return { kind: 'no-team' };
   }
@@ -62,7 +63,7 @@ async function tabOf(payload: unknown, runtime: CliRuntime): Promise<Tab> {
     return { kind: 'no-config', team: found.team };
   }
   const roster = await rosterOf(runtime, kit, kit.load.config);
-  return { kind: 'team', team: found.team, session: await teamSessionOf(runtime, kit, roster, sessionIdOf(payload)) };
+  return { kind: 'team', team: found.team, session: await teamSessionOf(runtime, kit, roster, origin?.session ?? null) };
 }
 
 /**
@@ -75,10 +76,10 @@ function tabRuntime(runtime: CliRuntime, tab: Tab): CliRuntime {
   return { ...runtime, env, readStdin: () => Promise.resolve('') };
 }
 
-/** The lines `/teamrig` alone adds under the short help: what runs as the tab's session, and what asks first. */
-export function slashRule(table: CommandTable): string {
+/** The lines `/teamrig` alone adds under the short help, in the host's own words: what runs as the tab's session, and what asks first. */
+export function slashRule(table: CommandTable, steps: HostSteps, cli: string): string {
   return [
-    `In a Claude Code tab, /${KIT_NAME} <command> runs it there. Without --${SESSION_FLAG}, ${sessionReads(table).join(', ')}`,
+    `In a ${cli} tab, ${steps.pluginCommand(KIT_NAME)} <command> runs it there. Without --${SESSION_FLAG}, ${sessionReads(table).join(', ')}`,
     `run as this tab's session; a command that changes the team's files shows the line with this tab's session`,
     `and asks first. Those run only when you type them, never when another session, a channel or claude -p sends them.`,
   ].join('\n');
@@ -86,7 +87,7 @@ export function slashRule(table: CommandTable): string {
 
 /** Why a write that did not come from the person is not run. */
 function notThePerson(argv: readonly string[], origin: string | undefined): string {
-  return `${KIT_NAME} ${joinWords(argv)} changes the team's files, and /${KIT_NAME} runs that only when you type it in the tab; this line came from ${origin ?? 'an unnamed source'}. Run it in a terminal instead.`;
+  return `${KIT_NAME} ${joinWords(argv)} changes the team's files or acts on the machine, and /${KIT_NAME} runs that only when you type it in the tab; this line came from ${origin ?? 'an unnamed source'}. Run it in a terminal instead.`;
 }
 
 /**
@@ -106,14 +107,15 @@ export function slashCommand(deps: SlashDeps): (args: ParsedArgs, runtime: CliRu
   return async (args, runtime) => {
     noPositionals(args);
     // Its stdin says who typed the line, and whoever runs it writes that stdin, so only the mod runs it (T3081). The
-    // mod runs it without CLAUDECODE; a tool call, a script and a hook have it.
-    if (underClaudeCode(runtime)) {
-      throw new RefusedError(
-        `${KIT_NAME} hook slash-command answers /${KIT_NAME} typed in a tab and runs only from the ${KIT_NAME} mod; ${ENV.claudeCode} is set, so Claude Code started this run (a tool call, a script it runs or a hook). Type /${KIT_NAME} <command> in the tab instead.`,
-      );
-    }
-    const payload = parseJson(await runtime.readStdin());
-    const input = slashInputOf(payload);
+    // mod runs it without the host's mark of an agent's run; a tool call, a script and a hook have it.
+    refuseUnlessPerson(
+      runtime,
+      `${KIT_NAME} hook slash-command`,
+      (mark) =>
+        `${KIT_NAME} hook slash-command answers /${KIT_NAME} typed in a tab and runs only from the ${KIT_NAME} mod; ${mark} is set, so Claude Code started this run (a tool call, a script it runs or a hook). Type /${KIT_NAME} <command> in the tab instead.`,
+    );
+    const request = await readModRequest(runtime);
+    const input = slashInputOf(request?.fields);
     const words = splitWords(input.args);
     if (!words.ok) {
       runtime.out.stderr(deps.help.usageError(words.problem, undefined));
@@ -121,7 +123,7 @@ export function slashCommand(deps: SlashDeps): (args: ParsedArgs, runtime: CliRu
     }
     const plan = planSlash(words.words, deps.table);
     if (plan.kind === 'help') {
-      runtime.out.stdout(`${deps.help.forCommand(undefined)}\n${slashRule(deps.table)}`);
+      runtime.out.stdout(`${deps.help.forCommand(undefined)}\n${slashRule(deps.table, stepsOf(runtime), hostNameOf(runtime))}`);
       return EXIT.ok;
     }
     if (plan.kind === 'internal') {
@@ -131,7 +133,7 @@ export function slashCommand(deps: SlashDeps): (args: ParsedArgs, runtime: CliRu
     if (plan.effect === 'write' && (input.origin === undefined || !PERSON_ORIGINS.has(input.origin))) {
       throw new RefusedError(notThePerson(plan.argv, input.origin));
     }
-    const tab = await tabOf(payload, runtime);
+    const tab = await tabOf(request?.event, runtime);
     const inTab = tabRuntime(runtime, tab);
     if (plan.kind === 'as-typed') {
       return deps.run(plan.argv, inTab);

@@ -1,17 +1,17 @@
 import { launchOf } from '../../config/launch.ts';
 import type { EffortLevel, KitConfig } from '../../config/types.ts';
 import type { SessionAddress } from '../../core/address.ts';
-import { errorMessage, isRecord, stringField, type JsonRecord } from '../../core/guards.ts';
+import { errorMessage } from '../../core/guards.ts';
 import { KIT_NAME } from '../../core/home.ts';
 import { effortChangeLine, effortChangeText, effortWriteback, withLaunchEffort, WritebackMarksStore, type Writeback, type WrittenEffort } from '../../effort/writeback.ts';
-import { payloadEffortOf } from '../../hooks/model-check.ts';
-import { sessionIdOf } from '../../inbox/inbox.ts';
+import type { HookEvent } from '../../ports/host/index.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
 import { postToHolder, sessionNameOn } from '../holder-team.ts';
+import { leadLaunchOf, transcriptsIfKept } from '../host.ts';
 import { checkedNextConfig, configFileJson, configLockOf, requireConfig, teamZone } from '../kit.ts';
 import { EXIT, type CliRuntime, type ExitCode } from '../runtime.ts';
 import { leadAboveOf } from '../tree.ts';
-import { hookScopeOf, parseJson, type SessionScope } from './hook-input.ts';
+import { hookScopeOf, readHookInput, type SessionScope } from './hook-input.ts';
 
 /** The backup name of a config before a typed `/effort` of session `id` was written to it. */
 export function effortBackupName(id: string): string {
@@ -41,7 +41,7 @@ async function writeLaunchEffort(runtime: CliRuntime, scope: SessionScope, level
   const config = requireConfig(scope.kit, runtime, 'write');
   return configLockOf(runtime, scope.kit, config).run(async (writer) => {
     const file = await configFileJson(runtime, scope.kit.load.path);
-    const from = launchOf(checkedNextConfig(file), scope.id).effort;
+    const from = launchOf(checkedNextConfig(file), scope.id, leadLaunchOf(runtime)).effort;
     if (from === level) {
       return undefined;
     }
@@ -92,14 +92,15 @@ async function reportWriteback(runtime: CliRuntime, scope: SessionScope, claude:
  * looked at without a Claude Code session id; a log line or inbox line that fails leaves the written config and is
  * shown to the user.
  */
-export async function effortWritebackOf(runtime: CliRuntime, scope: SessionScope, payload: JsonRecord): Promise<EffortWritebackOutcome> {
-  const claude = sessionIdOf(payload);
-  if (claude === null) {
+export async function effortWritebackOf(runtime: CliRuntime, scope: SessionScope, event: Pick<HookEvent, 'session' | 'transcript' | 'effort'>): Promise<EffortWritebackOutcome> {
+  const claude = event.session;
+  if (claude === undefined) {
     return { config: scope.config, lines: [] };
   }
   let updated = scope.config;
   const deps = {
     files: runtime.files,
+    reader: transcriptsIfKept(runtime),
     clock: runtime.clock,
     marks: new WritebackMarksStore(runtime.files, scope.kit.paths.effortWriteback),
     configChangedAt: () => runtime.files.modifiedAt(scope.kit.load.path),
@@ -112,9 +113,9 @@ export async function effortWritebackOf(runtime: CliRuntime, scope: SessionScope
   const change = await effortWriteback(deps, {
     id: scope.id,
     claude,
-    transcript: stringField(payload, 'transcript_path'),
-    running: payloadEffortOf(payload),
-    config: launchOf(scope.config, scope.id).effort,
+    transcript: event.transcript,
+    running: event.effort,
+    config: launchOf(scope.config, scope.id, leadLaunchOf(runtime)).effort,
   });
   if (change === undefined) {
     return { config: updated, lines: [] };
@@ -129,11 +130,11 @@ export async function effortWritebackOf(runtime: CliRuntime, scope: SessionScope
  */
 export async function effortWritebackHook(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
-  const payload = parseJson(await runtime.readStdin());
-  if (isRecord(payload)) {
-    const scope = await hookScopeOf(runtime, payload).catch(() => undefined);
+  const { event } = await readHookInput(runtime);
+  if (event !== undefined) {
+    const scope = await hookScopeOf(runtime, event).catch(() => undefined);
     if (scope !== undefined) {
-      await effortWritebackOf(runtime, scope, payload).catch(() => undefined);
+      await effortWritebackOf(runtime, scope, event).catch(() => undefined);
     }
   }
   return EXIT.ok;

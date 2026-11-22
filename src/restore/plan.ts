@@ -1,9 +1,8 @@
 import { dirname } from 'node:path';
 import { isEffortLevel, type EffortLevel } from '../config/types.ts';
 import type { PathProbe } from '../core/path-probe.ts';
-import { parseObject } from '../core/jsonl.ts';
-import { isRecord, stringField } from '../core/guards.ts';
 import { PROMPT_MAX } from '../open/prompt.ts';
+import type { EntryKind, SessionLauncher, TranscriptReader } from '../ports/host/index.ts';
 import { carryOf } from '../refresh/carry.ts';
 import { runningWorkOf } from '../refresh/running.ts';
 import { INTENTIONAL_END_REASONS, type RestoreEntry } from './entry.ts';
@@ -80,13 +79,16 @@ export interface JudgeFacts {
   readonly transcripts: ReadonlyMap<string, string>;
   /** What each session's transcript says of where it runs now; a session missing here reads as a tab. */
   readonly kinds: ReadonlyMap<string, TranscriptKind>;
+  /** The host's reading of where a session ran, from the words its entry kept; one it says nothing of reads as a tab. */
+  readonly placeOf: SessionLauncher['sessionPlaceOf'];
 }
 
 export function judgeEntry(entry: RestoreEntry, facts: JudgeFacts): Judgement {
-  if (entry.entrypoint !== undefined && entry.entrypoint !== 'cli') {
-    return { verdict: 'discard', reason: `not a terminal session (${entry.entrypoint})` };
+  const place = facts.placeOf({ startedAs: entry.entrypoint, sessionKind: entry.sessionKind });
+  if (place === 'elsewhere') {
+    return { verdict: 'discard', reason: entry.entrypoint === undefined ? 'not a terminal session' : `not a terminal session (${entry.entrypoint})` };
   }
-  if (entry.sessionKind === 'bg') {
+  if (place === 'background') {
     return { verdict: 'discard', reason: 'background session' };
   }
   if (entry.restoredAt !== undefined && entry.restoredAt >= entry.updatedAt && facts.now - entry.restoredAt < RESTORE_IN_FLIGHT_MS) {
@@ -171,9 +173,9 @@ export interface LostWork {
 }
 
 /** The work the transcript shows still live at `at`; `cut` when the text is the tail of a longer file. */
-export function lostWorkOf(text: string, cut: boolean, at: number): LostWork {
-  const carry = carryOf(text, at, []);
-  return { background: runningWorkOf(text, cut, at), crons: carry.crons.length, wake: carry.wake !== undefined };
+export function lostWorkOf(reader: TranscriptReader, text: string, cut: boolean, at: number): LostWork {
+  const carry = carryOf(reader, text, at, []);
+  return { background: runningWorkOf(reader, text, cut, at),crons: carry.crons.length, wake: carry.wake !== undefined };
 }
 
 function counted(count: number, one: string): string {
@@ -328,30 +330,22 @@ export async function nearestExistingFolder(folder: string, probe: PathProbe): P
   }
 }
 
-const ASSISTANT_TURN = '"type":"assistant"';
+/** The one kind of transcript entry that records an effort. */
+const EFFORT_KINDS: readonly EntryKind[] = ['reply'];
 
 /**
- * The effort the session last ran at: the newest real assistant turn that records one. `claude --resume` alone
- * reopens at the configured default and drops an effort set inside the session (`/effort`). The model is not
- * carried: the transcript records it without its context-window suffix, so passing it would reopen on a smaller
- * window. Undefined when no turn records a known level.
+ * The effort the session last ran at: the newest real reply that records one. A plain resume reopens at the
+ * configured default and drops an effort set inside the session (`/effort`). The model is not carried: the
+ * transcript records it without its context-window suffix, so passing it would reopen on a smaller window.
+ * Undefined when no reply records a known level.
  */
-export function lastRecordedEffort(text: string): EffortLevel | undefined {
+export function lastRecordedEffort(reader: TranscriptReader, text: string): EffortLevel | undefined {
   const lines = text.split('\n');
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index] ?? '';
-    // Most lines are not assistant turns; a torn first line of a tail fails to parse and is skipped.
-    const turn = line.includes(ASSISTANT_TURN) ? parseObject(line) : undefined;
-    if (turn === undefined || turn['type'] !== 'assistant') {
-      continue;
-    }
-    const message = turn['message'];
-    if (isRecord(message) && stringField(message, 'model') === '<synthetic>') {
-      continue;
-    }
-    const effort = turn['effort'];
-    if (isEffortLevel(effort)) {
-      return effort;
+    // Most lines are not replies; a torn first line of a tail is unread and skipped, as is a reply the host made up.
+    const entry = reader.entry(lines[index] ?? '', EFFORT_KINDS);
+    if (entry?.kind === 'reply' && !entry.synthetic && isEffortLevel(entry.effort)) {
+      return entry.effort;
     }
   }
   return undefined;

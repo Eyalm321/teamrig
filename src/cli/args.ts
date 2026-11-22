@@ -67,7 +67,10 @@ export type CommandEffects = Readonly<Partial<Record<string, CommandEffect>>>;
  */
 export type RenamedFlags = Readonly<Partial<Record<string, string>>>;
 
-/** Commands that were renamed, old first word to new command, refused like a renamed flag: `integrate` to `merge`. */
+/**
+ * Commands that were renamed, old command to new, refused like a renamed flag: `integrate` to `merge`. An old name of
+ * two words (`gh sync`) is read before any command, so a first word reused by a new command keeps its old lines' hint.
+ */
 export type RenamedCommands = Readonly<Partial<Record<string, string>>>;
 
 /** The renamed flags and commands a line is read with. */
@@ -84,6 +87,10 @@ function commandOf(
 ): { readonly command: string; readonly tail: readonly string[] } {
   const [first = '', second] = argv;
   const pair = `${first} ${second ?? ''}`;
+  const renamedPair = second === undefined ? undefined : renamedCommands[pair];
+  if (renamedPair !== undefined) {
+    throw new UsageError(`${pair} was renamed: use ${renamedPair}`);
+  }
   if (second !== undefined && commandFlags[pair] !== undefined) {
     return { command: pair, tail: argv.slice(2) };
   }
@@ -173,6 +180,14 @@ export function noPositionals(args: ParsedArgs): void {
   if (extra !== undefined) {
     throw new UsageError(`unexpected "${extra}"`);
   }
+}
+
+/** The command's positional words, at least one, such as task ids. */
+export function somePositionals(args: ParsedArgs, name: string): readonly string[] {
+  if (args.positionals.length === 0) {
+    throw new UsageError(`${args.command} needs <${name}>`);
+  }
+  return args.positionals;
 }
 
 /** The command's single positional word, such as a task id. */

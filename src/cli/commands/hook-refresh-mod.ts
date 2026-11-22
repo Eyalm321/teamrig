@@ -1,17 +1,17 @@
 import { claudeProjectsDir, findTranscript } from '../../budget/discover.ts';
 import { sessionRefreshOf } from '../../config/refresh.ts';
-import { isNonNegativeInteger, isRecord, stringField, type JsonRecord } from '../../core/guards.ts';
-import { ENV, KIT_NAME } from '../../core/home.ts';
-import { sessionIdOf } from '../../inbox/inbox.ts';
+import { isNonNegativeInteger, type JsonRecord } from '../../core/guards.ts';
+import { KIT_NAME } from '../../core/home.ts';
 import { inBookedMeeting, MeetingSchedule } from '../../meeting/schedule.ts';
 import { inMeeting, MeetingStore } from '../../meeting/state.ts';
 import { decideCompact, decideMidTurn, handoverHashOf, type AskContext, type CompactDecision, type DueFacts } from '../../refresh/decide.ts';
 import { readRunningWork } from '../../refresh/running.ts';
 import { RefreshStore } from '../../refresh/store.ts';
 import { readContextEstimate } from '../../refresh/usage.ts';
+import { contextSourceIfTold, identityOf, transcriptsIfKept } from '../host.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
 import { EXIT, type CliRuntime, type ExitCode } from '../runtime.ts';
-import { hookScopeOf, parseJson, type SessionScope } from './hook-input.ts';
+import { hookScopeOf, readHookInput, readModRequest, writeReply, type HookOrigin, type SessionScope } from './hook-input.ts';
 
 /**
  * What `hook refresh-mid` answers the plugin's mod, one JSON line: the ask to add after the tool's result, or
@@ -30,8 +30,8 @@ function answer(runtime: CliRuntime, value: MidTurnAnswer | CompactDecision): Ex
   return EXIT.ok;
 }
 
-function countOf(payload: JsonRecord, key: string): number | undefined {
-  const value = payload[key];
+function countOf(fields: JsonRecord, key: string): number | undefined {
+  const value = fields[key];
   return isNonNegativeInteger(value) ? value : undefined;
 }
 
@@ -42,10 +42,12 @@ function countOf(payload: JsonRecord, key: string): number | undefined {
  */
 export async function dueFactsAt(runtime: CliRuntime, store: RefreshStore, id: string, transcript: string | undefined): Promise<DueFacts> {
   const handover = await store.handover(id);
+  // A host that keeps no transcript teamrig can read shows no running work, as a missing transcript shows none.
+  const reader = transcriptsIfKept(runtime);
   return {
     handoverHash: handoverHashOf(handover),
     handover,
-    running: transcript === undefined ? 0 : await readRunningWork(runtime.files, transcript, runtime.clock.now()),
+    running: transcript === undefined || reader === undefined ? 0 : await readRunningWork(reader, runtime.files, transcript, runtime.clock.now()),
   };
 }
 
@@ -63,13 +65,12 @@ export async function inMeetingNow(runtime: CliRuntime, scope: Pick<SessionScope
 }
 
 /** The tab's own transcript: the mod knows its Claude Code session and project, not where Claude Code keeps it. */
-async function transcriptOf(runtime: CliRuntime, payload: JsonRecord): Promise<string | undefined> {
-  const claudeSession = sessionIdOf(payload);
-  if (claudeSession === null) {
+async function transcriptOf(runtime: CliRuntime, origin: HookOrigin): Promise<string | undefined> {
+  if (origin.session === undefined) {
     return undefined;
   }
-  const project = runtime.env[ENV.claudeProjectDir] ?? stringField(payload, 'cwd');
-  return findTranscript(runtime.transcripts, claudeProjectsDir(runtime.env, runtime.userHome), project, claudeSession);
+  const project = identityOf(runtime).projectDir ?? origin.cwd;
+  return findTranscript(runtime.transcripts, claudeProjectsDir(runtime.env, runtime.userHome), project, origin.session);
 }
 
 function askContextOf(runtime: CliRuntime, scope: SessionScope, store: RefreshStore): AskContext {
@@ -94,17 +95,18 @@ function askContextOf(runtime: CliRuntime, scope: SessionScope, store: RefreshSt
  */
 export async function refreshMid(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
-  const payload = parseJson(await runtime.readStdin());
-  if (!isRecord(payload)) {
+  const request = await readModRequest(runtime);
+  if (request === undefined) {
     return answer(runtime, OFF);
   }
-  const tokens = countOf(payload, 'tokens');
-  const scope = tokens === undefined ? undefined : await hookScopeOf(runtime, payload);
+  const { event, fields } = request;
+  const tokens = countOf(fields, 'tokens');
+  const scope = tokens === undefined ? undefined : await hookScopeOf(runtime, event);
   if (tokens === undefined || scope === undefined || !scope.config.refresh.enabled) {
     return answer(runtime, OFF);
   }
   // The window Claude Code reports, which tells a large one apart; a mod from before it sends none.
-  const window = countOf(payload, 'window');
+  const window = countOf(fields, 'window');
   const store = new RefreshStore(runtime.files, scope.kit.paths);
   const state = await store.state(scope.id);
   const context = askContextOf(runtime, scope, store);
@@ -112,7 +114,7 @@ export async function refreshMid(args: ParsedArgs, runtime: CliRuntime): Promise
   const first = decideMidTurn(state, context, { tokens, window, meeting, due: undefined });
   const decision =
     first.kind === 'measure'
-      ? decideMidTurn(state, context, { tokens, window, meeting, due: await dueFactsAt(runtime, store, scope.id, await transcriptOf(runtime, payload)) })
+      ? decideMidTurn(state, context, { tokens, window, meeting, due: await dueFactsAt(runtime, store, scope.id, await transcriptOf(runtime, event)) })
       : first;
   switch (decision.kind) {
     case 'ask':
@@ -139,13 +141,14 @@ export async function refreshMid(args: ParsedArgs, runtime: CliRuntime): Promise
  */
 export async function compactCheck(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
-  const payload = parseJson(await runtime.readStdin());
-  if (!isRecord(payload)) {
+  const request = await readModRequest(runtime);
+  if (request === undefined) {
     return answer(runtime, GO);
   }
-  const tokens = countOf(payload, 'tokens');
-  const window = countOf(payload, 'window');
-  const scope = tokens === undefined || window === undefined ? undefined : await hookScopeOf(runtime, payload);
+  const { event, fields } = request;
+  const tokens = countOf(fields, 'tokens');
+  const window = countOf(fields, 'window');
+  const scope = tokens === undefined || window === undefined ? undefined : await hookScopeOf(runtime, event);
   if (tokens === undefined || window === undefined || scope === undefined) {
     return answer(runtime, GO);
   }
@@ -163,20 +166,22 @@ export async function compactCheck(args: ParsedArgs, runtime: CliRuntime): Promi
  */
 export async function preCompact(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
-  const payload = parseJson(await runtime.readStdin());
-  if (!isRecord(payload) || stringField(payload, 'trigger') !== 'auto') {
+  const { event } = await readHookInput(runtime);
+  if (event === undefined || event.trigger !== 'auto') {
     return EXIT.ok;
   }
-  const transcript = stringField(payload, 'transcript_path');
-  const scope = transcript === undefined ? undefined : await hookScopeOf(runtime, payload);
+  const { transcript } = event;
+  const scope = transcript === undefined ? undefined : await hookScopeOf(runtime, event);
   if (transcript === undefined || scope === undefined) {
     return EXIT.ok;
   }
-  const tokens = await readContextEstimate(runtime.files, transcript);
+  // No readable transcript or no meter, no estimate: the compaction goes, since a refusal here would block it.
+  const source = contextSourceIfTold(runtime);
+  const tokens = source === undefined ? undefined : await readContextEstimate(source, runtime.files, transcript);
   const state = await new RefreshStore(runtime.files, scope.kit.paths).state(scope.id);
   const decision = tokens === undefined ? GO : decideCompact(state, { settings: scope.config.refresh, command: KIT_NAME }, { tokens, window: undefined });
   if (decision.kind === 'skip') {
-    runtime.out.stdout(JSON.stringify({ decision: 'block', reason: decision.reason }));
+    writeReply(runtime, 'compact-start', { verdict: { kind: 'block', reason: decision.reason } });
   }
   return EXIT.ok;
 }

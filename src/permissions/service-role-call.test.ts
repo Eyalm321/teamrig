@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { COMMAND_TABLE } from '../cli/run.ts';
-import { roleCallOf, roleScanTextOf, toolRoleCallOf, type RoleCallContext } from './service-role-call.ts';
+import { shellCallOf } from '../testing/host.ts';
+import { roleCallOf, roleScanTextOf, shellRoleCallOf, type RoleCallContext } from './service-role-call.ts';
 
 const SHIP_TOOL = '/repo/.ship/tools/ship/ship.ts';
 const CONTEXT: RoleCallContext = { cli: COMMAND_TABLE, ownClient: async (word) => word === 'teamrig', repos: ['acme/web'], isShipTool: (word) => word === SHIP_TOOL };
@@ -27,14 +28,19 @@ describe('service-role call: the mask', () => {
 });
 
 describe('service-role call: the shapes', () => {
-  it('reads issue close and issue comment on a team repository, with the session the line names', async () => {
+  it('reads issue close on a team repository, with the session the line names', async () => {
     assert.deepEqual(await roleCallOf('teamrig issue close acme/web#7 --session gh', CONTEXT), { command: 'issue close', target: 'acme/web#7', session: 'gh' });
     assert.deepEqual(await roleCallOf('teamrig issue close Acme/Web#7 --comment "Fixed in #8; thanks!" --session gh', CONTEXT), {
       command: 'issue close',
       target: 'acme/web#7',
       session: 'gh',
     });
-    assert.deepEqual(await roleCallOf('teamrig issue comment acme/web#12 --session gh --body "Looking at it" 2>&1', CONTEXT), { command: 'issue comment', target: 'acme/web#12', session: 'gh' });
+    assert.deepEqual(await roleCallOf('teamrig issue close acme/web#12 --session gh --comment "Landed" 2>&1', CONTEXT), { command: 'issue close', target: 'acme/web#12', session: 'gh' });
+  });
+
+  it('reads no bare comment, which no role holds (T3169)', async () => {
+    assert.equal(await roleCallOf('teamrig issue comment acme/web#12 --session gh --body "Looking at it"', CONTEXT), undefined);
+    assert.equal(await roleCallOf('teamrig issue reply acme/web#12 --session gh --body-file reply.md', CONTEXT), undefined);
   });
 
   it('reads no call off the table, off the repositories, through another program or joined to another command', async () => {
@@ -68,24 +74,21 @@ describe('service-role call: the shapes', () => {
 
   it('reads no call posting a format or bidi character, a line separator or an @-mention (T2984)', async () => {
     for (const text of ['a\u202Eb', 'zero\u200Bwidth', 'iso\u2066late\u2069', 'line\u2028break', 'cc @bob', '@acme/team look', '(@bob)', 'hi\u00ADdden']) {
-      for (const flag of ['--comment', '--body']) {
-        const command = flag === '--comment' ? 'close' : 'comment';
-        const line = `teamrig issue ${command} acme/web#7 ${flag} "${text}" --session gh`;
-        assert.equal(await roleCallOf(line, CONTEXT), undefined, JSON.stringify(line));
-      }
+      const line = `teamrig issue close acme/web#7 --comment "${text}" --session gh`;
+      assert.equal(await roleCallOf(line, CONTEXT), undefined, JSON.stringify(line));
     }
     assert.equal(await roleCallOf('teamrig issue close acme/web#7 --comment @bob --session gh', CONTEXT), undefined, 'a bare word');
     for (const text of [`mail ${['ops', 'acme.dev'].join('@')}`, 'see a@b', 'déjà vu, 日本', 'x @ y']) {
-      assert.deepEqual(await roleCallOf(`teamrig issue comment acme/web#7 --body "${text}" --session gh`, CONTEXT), { command: 'issue comment', target: 'acme/web#7', session: 'gh' }, text);
+      assert.deepEqual(await roleCallOf(`teamrig issue close acme/web#7 --comment "${text}" --session gh`, CONTEXT), { command: 'issue close', target: 'acme/web#7', session: 'gh' }, text);
     }
   });
 
-  it('reads a Bash call alone, as each text its shell may run', async () => {
+  it('reads a bash call alone, as each text its shell may run', async () => {
     const line = 'teamrig issue close acme/web#7 --comment "done" --session gh';
-    assert.deepEqual(await toolRoleCallOf('Bash', line, 'win32', CONTEXT), { command: 'issue close', target: 'acme/web#7', session: 'gh' });
-    assert.equal(await toolRoleCallOf('PowerShell', line, 'win32', CONTEXT), undefined);
-    assert.equal(await toolRoleCallOf(undefined, line, 'linux', CONTEXT), undefined);
-    assert.equal(await toolRoleCallOf('Bash', 'teamrig issue close acme/web#7 --comment "a\\\\b"', 'win32', CONTEXT), undefined, 'a line with two readings');
+    assert.deepEqual(await shellRoleCallOf(shellCallOf('Bash', line, 'win32'), CONTEXT), { command: 'issue close', target: 'acme/web#7', session: 'gh' });
+    assert.equal(await shellRoleCallOf(shellCallOf('PowerShell', line, 'win32'), CONTEXT), undefined);
+    assert.equal(await shellRoleCallOf(shellCallOf('PowerShell', line, 'linux'), CONTEXT), undefined);
+    assert.equal(await shellRoleCallOf(shellCallOf('Bash', 'teamrig issue close acme/web#7 --comment "a\\\\b"', 'win32'), CONTEXT), undefined, 'a line with two readings');
   });
 });
 
@@ -97,15 +100,44 @@ describe('service-role call: a queued ship or merge (T2984)', () => {
       command: 'queue ship',
       target: '/w/t1-cli',
       session: 'alpha',
-      ship: { tool: SHIP_TOOL, worktree: '/w/t1-cli', files: ['/t/T1/plan.json'], task: 'T1', merges: false },
+      ship: { tool: SHIP_TOOL, worktree: '/w/t1-cli', files: ['/t/T1/plan.json'], task: 'T1', merges: false, release: undefined },
     });
-    const merge = await toolRoleCallOf('Bash', `${ship.replace('--kind test', '--kind ship')} --merge --approved 0123abc --note-file /t/T1/pr.md`, 'win32', CONTEXT);
+    const merge = await shellRoleCallOf(shellCallOf('Bash', `${ship.replace('--kind test', '--kind ship')} --merge --approved 0123abc --note-file /t/T1/pr.md`, 'win32'), CONTEXT);
     assert.deepEqual(merge?.command, 'queue merge');
     assert.ok(merge !== undefined && 'ship' in merge && merge.ship.merges);
   });
 
   it('reads no ship of another tool, joined to another command, under a kind that does not fit it, or naming no --session (N1)', async () => {
     for (const line of [ship.replace(SHIP_TOOL, '/repo/other.ts'), `${ship}; rm -rf x`, ship.replace('--kind test', '--kind ship'), `${ship} --merge --approved 0123abc`, ship.replace(' --session alpha', '')]) {
+      assert.equal(await roleCallOf(line, CONTEXT), undefined, line);
+    }
+  });
+});
+
+describe('service-role call: issue migrate (T4606)', () => {
+  const ROWS = '/kit/teams/acme/tasks/T4/rows.jsonl';
+
+  it('reads a run that opens the issues from a rows file named by an absolute path, with the session the line names', async () => {
+    assert.deepEqual(await roleCallOf(`teamrig issue migrate ${ROWS} --yes --session gh`, CONTEXT), { command: 'issue migrate', target: ROWS, session: 'gh' });
+    assert.deepEqual(await roleCallOf('teamrig issue migrate C:/kit/teams/acme/tasks/T4/rows.jsonl --session gh --yes', CONTEXT), {
+      command: 'issue migrate',
+      target: 'C:/kit/teams/acme/tasks/T4/rows.jsonl',
+      session: 'gh',
+    });
+  });
+
+  it('reads no preview, relative path, --out, backslash path, second file, missing session or joined command', async () => {
+    for (const line of [
+      `teamrig issue migrate ${ROWS} --session gh`,
+      'teamrig issue migrate tasks/T4/rows.jsonl --yes --session gh',
+      `teamrig issue migrate ${ROWS} --yes --out /tmp/preview.md --session gh`,
+      'teamrig issue migrate C:\kit\teams\acme\tasks\T4\rows.jsonl --yes --session gh',
+      `teamrig issue migrate ${ROWS} ${ROWS} --yes --session gh`,
+      `teamrig issue migrate ${ROWS} --yes`,
+      `teamrig issue migrate ${ROWS} --yes --session gh; rm -rf x`,
+      `teamrig issue migrate ${ROWS} --yes --session gh --help`,
+      `node main.js issue migrate ${ROWS} --yes --session gh`,
+    ]) {
       assert.equal(await roleCallOf(line, CONTEXT), undefined, line);
     }
   });

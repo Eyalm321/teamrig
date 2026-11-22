@@ -24,12 +24,16 @@ import {
   weekFoldOf,
   weekUseAt,
   type StatusSnapshot,
+  type StatusSource,
   type WeekFold,
   type WeekUse,
 } from './snapshot.ts';
+import { shippedStatusSource } from '../testing/shipped-status-line.ts';
 
 const SID = '0b6f9c2e-5d1a-4c3e-9f7a-2e8d4b1c6a90';
 const OTHER = '7d2e41a8-93c5-4f60-b1d7-5a9e0c3f8b24';
+/** The shipped host's readers of a status input, which the fixtures below are written for. */
+const SOURCE = shippedStatusSource();
 const NOW = Date.parse('2026-10-15T12:00:50.598Z');
 /** Wednesday 2026-10-21 01:00 UTC, in epoch seconds as Claude Code sends it. */
 const WEEK_RESET_S = 1792544400;
@@ -42,6 +46,7 @@ const STATUS_INPUT = {
   cwd: '/work/app/sub',
   model: { id: 'claude-opus-5-5', display_name: 'Opus 5.5' },
   workspace: { current_dir: '/work/app', project_dir: '/work/app' },
+  effort: { level: 'high' },
   version: '2.1.0',
   cost: { total_cost_usd: 857.79, total_duration_ms: 1000 },
   context_window: { used_percentage: 15, total_input_tokens: 153654 },
@@ -53,7 +58,7 @@ const STATUS = JSON.stringify(STATUS_INPUT);
 /** The pinned file format: a status line of any make that writes this is read by `teamrig budget`. */
 const STORED =
   '{"ts":"2026-10-15T12:00:50.598Z","session_id":"0b6f9c2e-5d1a-4c3e-9f7a-2e8d4b1c6a90","cwd":"/work/app",' +
-  '"agent_name":"reviewer","model":"Opus 5.5","rate_limits":{"five_hour":{"used_percentage":6,"resets_at":1792081200},' +
+  '"agent_name":"reviewer","model":"Opus 5.5","effort":"high","host_version":"2.1.0","rate_limits":{"five_hour":{"used_percentage":6,"resets_at":1792081200},' +
   '"seven_day":{"used_percentage":57,"resets_at":1792544400}},"rate_limits_since":"2026-10-15T12:00:50.598Z","rate_limits_after":null,' +
   '"cost_usd":857.79,"context_used_pct":15,"context_input_tokens":153654}';
 
@@ -64,6 +69,8 @@ function snapshot(overrides: Partial<StatusSnapshot> = {}): StatusSnapshot {
     cwd: '/work/app',
     agentName: null,
     model: 'Opus 5.5',
+    effort: null,
+    hostVersion: null,
     rateLimits: { fiveHour: null, sevenDay: { usedPct: 57, resetsAt: WEEK_RESET_S * 1000 } },
     rateLimitsSince: null,
     rateLimitsAfter: null,
@@ -86,32 +93,75 @@ function reading(ts: string, usedPct: number, since: string | null = null, after
 
 describe('snapshotOfStatus and formatSnapshot', () => {
   it('writes the pinned format from Claude Code status input', () => {
-    const taken = snapshotOfStatus(`${STATUS}\n`, NOW);
+    const taken = snapshotOfStatus(SOURCE, `${STATUS}\n`, NOW);
     assert.ok(taken !== undefined);
     assert.equal(formatSnapshot(taken), STORED);
   });
 
   it('takes the session id from the transcript name, and the folder from cwd, when they are missing', () => {
-    const taken = snapshotOfStatus(JSON.stringify({ transcript_path: `/p/${SID}.jsonl`, cwd: '/work/app/sub' }), NOW);
+    const taken = snapshotOfStatus(SOURCE, JSON.stringify({ transcript_path: `/p/${SID}.jsonl`, cwd: '/work/app/sub' }), NOW);
     assert.equal(taken?.sessionId, SID);
     assert.equal(taken?.cwd, '/work/app/sub');
     assert.equal(taken?.model, null);
+    assert.deepEqual([taken?.effort, taken?.hostVersion], [null, null]);
     assert.equal(taken?.rateLimits, null);
-    assert.equal(snapshotOfStatus(JSON.stringify({ session_id: SID }), NOW)?.cwd, '');
+    assert.equal(snapshotOfStatus(SOURCE, JSON.stringify({ session_id: SID }), NOW)?.cwd, '');
   });
 
   it('keeps a window that is there and drops a damaged one', () => {
     const input = JSON.stringify({ session_id: SID, rate_limits: { seven_day: { used_percentage: 12, resets_at: WEEK_RESET_S }, five_hour: { used_percentage: 'x' } } });
-    assert.deepEqual(snapshotOfStatus(input, NOW)?.rateLimits, { fiveHour: null, sevenDay: { usedPct: 12, resetsAt: WEEK_RESET_S * 1000 } });
+    assert.deepEqual(snapshotOfStatus(SOURCE, input, NOW)?.rateLimits, { fiveHour: null, sevenDay: { usedPct: 12, resetsAt: WEEK_RESET_S * 1000 } });
     const none = JSON.stringify({ session_id: SID, rate_limits: { five_hour: null } });
-    assert.equal(snapshotOfStatus(none, NOW)?.rateLimits, null);
+    assert.equal(snapshotOfStatus(SOURCE, none, NOW)?.rateLimits, null);
   });
 
   it('refuses input that is not an object or names no valid session', () => {
-    assert.equal(snapshotOfStatus('', NOW), undefined);
-    assert.equal(snapshotOfStatus('[1]', NOW), undefined);
-    assert.equal(snapshotOfStatus(JSON.stringify({ session_id: '../../etc/passwd' }), NOW), undefined);
-    assert.equal(snapshotOfStatus(JSON.stringify({ cwd: '/work' }), NOW), undefined);
+    assert.equal(snapshotOfStatus(SOURCE, '', NOW), undefined);
+    assert.equal(snapshotOfStatus(SOURCE, '[1]', NOW), undefined);
+    assert.equal(snapshotOfStatus(SOURCE, JSON.stringify({ session_id: '../../etc/passwd' }), NOW), undefined);
+    assert.equal(snapshotOfStatus(SOURCE, JSON.stringify({ cwd: '/work' }), NOW), undefined);
+  });
+
+  describe('on a host that reads its status input otherwise', () => {
+    const read = { sessionId: OTHER, cwd: '/else', agentName: undefined, model: 'Other 1', effort: 'low', hostVersion: '9.1', costUsd: 2, contextUsedPct: undefined, contextInputTokens: 7 };
+    const told: StatusSource = {
+      statusLine: { parse: () => read },
+      usage: { weekReading: () => ({ fiveHour: null, sevenDay: { usedPct: 3, resetsAt: 5000 } }) },
+    };
+    const ts = new Date(NOW).toISOString();
+
+    it('keeps what the ports read, not what the input holds, an untold field as null', () => {
+      assert.deepEqual(snapshotOfStatus(told, STATUS, NOW), {
+        ts,
+        sessionId: OTHER,
+        cwd: '/else',
+        agentName: null,
+        model: 'Other 1',
+        effort: 'low',
+        hostVersion: '9.1',
+        rateLimits: { fiveHour: null, sevenDay: { usedPct: 3, resetsAt: 5000 } },
+        rateLimitsSince: ts,
+        rateLimitsAfter: null,
+        costUsd: 2,
+        contextUsedPct: null,
+        contextInputTokens: 7,
+      });
+      assert.equal(effortOfStatus(told.statusLine, STATUS), 'low');
+    });
+
+    it('holds no reading of the week without a meter, or when the meter reads none', () => {
+      const unmetered = snapshotOfStatus({ ...told, usage: undefined }, STATUS, NOW);
+      assert.deepEqual([unmetered?.rateLimits, unmetered?.rateLimitsSince], [null, null]);
+      assert.equal(snapshotOfStatus({ ...told, usage: { weekReading: () => undefined } }, STATUS, NOW)?.rateLimits, null);
+    });
+
+    it('takes no snapshot when the status line reads nothing, no session id, or one unsafe as a file name', () => {
+      const reading = (sessionId: string | undefined): StatusSource => ({ ...told, statusLine: { parse: () => ({ ...read, sessionId }) } });
+      assert.equal(snapshotOfStatus({ ...told, statusLine: { parse: () => undefined } }, STATUS, NOW), undefined);
+      assert.equal(snapshotOfStatus(reading(undefined), STATUS, NOW), undefined);
+      assert.equal(snapshotOfStatus(reading('../../etc/passwd'), STATUS, NOW), undefined);
+      assert.equal(effortOfStatus({ parse: () => undefined }, STATUS), undefined);
+    });
   });
 });
 
@@ -136,6 +186,8 @@ describe('parseSnapshot', () => {
       cwd: 'C:\\work',
       agentName: null,
       model: null,
+      effort: null,
+      hostVersion: null,
       rateLimits: { fiveHour: null, sevenDay: { usedPct: 47, resetsAt: WEEK_RESET_S * 1000 } },
       rateLimitsSince: null,
       rateLimitsAfter: null,
@@ -352,22 +404,28 @@ describe('effortOfStatus', () => {
   const withEffort = (effort: unknown): string => JSON.stringify({ ...STATUS_INPUT, effort });
 
   it("reads the effort level Claude Code sends for a model that takes one, kept as sent so a new level shows too", () => {
-    assert.equal(effortOfStatus(withEffort({ level: 'high' })), 'high');
-    assert.equal(effortOfStatus(`${withEffort({ level: 'turbo' })}\n`), 'turbo');
+    assert.equal(effortOfStatus(SOURCE.statusLine, withEffort({ level: 'high' })), 'high');
+    assert.equal(effortOfStatus(SOURCE.statusLine, `${withEffort({ level: 'turbo' })}\n`), 'turbo');
   });
 
   it('is undefined without a level: no effort, an empty or non-text level, or an input that is not JSON', () => {
-    assert.equal(effortOfStatus(STATUS), undefined);
-    assert.equal(effortOfStatus(withEffort({ level: ' ' })), undefined);
-    assert.equal(effortOfStatus(withEffort({ level: 3 })), undefined);
-    assert.equal(effortOfStatus(withEffort('high')), undefined);
-    assert.equal(effortOfStatus('not json'), undefined);
+    assert.equal(effortOfStatus(SOURCE.statusLine, withEffort(undefined)), undefined);
+    assert.equal(effortOfStatus(SOURCE.statusLine, withEffort({ level: ' ' })), undefined);
+    assert.equal(effortOfStatus(SOURCE.statusLine, withEffort({ level: 3 })), undefined);
+    assert.equal(effortOfStatus(SOURCE.statusLine, withEffort('high')), undefined);
+    assert.equal(effortOfStatus(SOURCE.statusLine, 'not json'), undefined);
   });
 
-  it('is not kept in the saved snapshot, whose format stays pinned', () => {
-    const snapshot = snapshotOfStatus(withEffort({ level: 'high' }), NOW);
+  it('is kept in the saved snapshot with the host version, for the commit stamp', () => {
+    const snapshot = snapshotOfStatus(SOURCE, withEffort({ level: 'high' }), NOW);
     assert.ok(snapshot);
     assert.equal(formatSnapshot(snapshot), STORED);
+    assert.deepEqual([parseSnapshot(STORED)?.effort, parseSnapshot(STORED)?.hostVersion], ['high', '2.1.0']);
+  });
+
+  it('reads as null from a snapshot written before the effort and host version were kept', () => {
+    const older = STORED.replace('"effort":"high","host_version":"2.1.0",', '');
+    assert.deepEqual([parseSnapshot(older)?.effort, parseSnapshot(older)?.hostVersion], [null, null]);
   });
 });
 

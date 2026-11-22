@@ -1996,6 +1996,34 @@ describe('HostLock ship slot (T2727)', () => {
     assert.deepEqual(looks, ['taken', 'queued'], 'with no ship running, the merge may start, so the build stays behind it');
   });
 
+  it('holds the slot per repository: a ship of another one shares the host, one of the same or of none waits (#1711)', async () => {
+    const shipOf = (repo: string | undefined): HostShare => runningOf('ship', { id: 's1', request: { ...REQUEST, kind: 'ship', needMb: 4096, heavy: true, exclusive: false, ...(repo === undefined ? {} : { repo }) } });
+    const looks: string[] = [];
+    for (const [running, mine] of [
+      ['/r/a', '/r/b'],
+      ['/r/a', '/r/a'],
+      ['/r/a', undefined],
+      [undefined, '/r/b'],
+    ] as const) {
+      const { lock } = world(Object.fromEntries([shareFile(shipOf(running))]), undefined, undefined, PIPELINE);
+      const taking = await lock.acquire('alpha', 'heavy: ship', 0, 30_000, () => undefined, { request: { ...SHIP, ...(mine === undefined ? {} : { repo: mine }) } });
+      looks.push(taking.kind === 'busy' ? taking.holder.kind : taking.kind);
+    }
+    assert.deepEqual(looks, ['taken', 'shipSlot', 'shipSlot', 'shipSlot']);
+  });
+
+  it("lets a ship pass a merge of another repository first in line while a ship of the merge's repository holds the slot (#1711)", async () => {
+    const merge = ticket(waiterOf('2030-01-08T08:00:00.000Z', { request: { ...REQUEST, kind: 'merge', repo: '/r/a', needMb: 0, heavy: true, exclusive: false }, waitingOn: { reason: 'line', text: 'another step being admitted', since: '2030-01-08T09:59:00.000Z' } }));
+    const looks: string[] = [];
+    for (const repo of ['/r/a', '/r/b']) {
+      const holder = runningOf('ship', { id: 's1', request: { ...REQUEST, kind: 'ship', repo, needMb: 4096, heavy: true, exclusive: false } });
+      const { lock } = world(Object.fromEntries([shareFile(holder), merge]), undefined, undefined, PIPELINE);
+      const taking = await lock.acquire('alpha', 'heavy: ship', 0, 30_000, () => undefined, { request: { ...SHIP, repo: '/r/c' } });
+      looks.push(taking.kind === 'busy' ? taking.holder.kind : taking.kind);
+    }
+    assert.deepEqual(looks, ['taken', 'queued'], 'with no ship of its repository running, the merge may start, so the ship stays behind it');
+  });
+
   it('names the step holding the slot while it waits and when its wait runs out', () => {
     const slot: LockWait = { kind: 'shipSlot', running: [runningOf('ship')] };
     assert.deepEqual(
@@ -2082,6 +2110,19 @@ describe('HostLock setting a share aside while its step waits on a remote servic
       [{ ...aside.share, pid: ME, acquiredAt: '2030-01-08T10:20:00.000Z', expiresAt: '2030-01-08T12:50:00.000Z', awayMs: 20 * 60_000 }, undefined],
       'its id, its process, what it asked and its MB, and the 20 minutes it was away; taken now',
     );
+  });
+
+  it('takes the share back ahead of a later heavy step that admission order alone ranks first, as its step already ran in its turn (T4196)', async () => {
+    const at = world({}, undefined, undefined, PIPELINE);
+    const merge = await at.lock.acquire('alpha', 'heavy: merge', 0, 30_000, () => undefined, { request: { ...MERGE, priority: 3 } });
+    assert.equal(merge.kind, 'taken');
+    const asking = lockOver(at.files, at.clock, OTHER, at.clock.sleep, PIPELINE);
+    assert.equal((await asking.setAside('t1')).kind, 'aside');
+    at.clock.advance(20 * 60_000);
+    const [later, text] = ticket(waiterOf('2030-01-08T10:10:00.000Z', { request: { ...REQUEST, needMb: 0, heavy: true, exclusive: false } }));
+    await at.files.write(later, text);
+    const back = await asking.takeBack('t1', 0, 30_000, () => undefined);
+    assert.equal(back.kind, 'taken', 'the later p1 test outranks the p3 merge by priority, but the merge ran before it joined');
   });
 
   it('reports the time its step spent away while away, back in line and after it took its share back, summed over each time it stepped away (T4218)', async () => {

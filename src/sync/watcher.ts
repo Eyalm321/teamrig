@@ -1,0 +1,31 @@
+import type { KitConfig } from '../config/types.ts';
+
+/**
+ * The session that hears the GitHub news no task owner takes (an outside pull request's news, a mention scan cut
+ * short): `github.watcher`; else the first holder of a service role holding `issue close`, the session the owner
+ * trusted to answer on GitHub (a close posts its comment; T3169 took the bare `issue comment` off every role), so the intake work lands where it is done; else the lead. Roles are read in name order,
+ * as roleHolding reads them, so the pick never hangs on the config file's key order.
+ */
+export function githubWatcher(config: Pick<KitConfig, 'github' | 'serviceRoles' | 'roles'>): string {
+  return githubAnswerer(config) ?? config.roles.lead;
+}
+
+/**
+ * The session the team named to answer on GitHub: `github.watcher`, else the first holder of a service role holding
+ * `issue close`; undefined when it named none. Unlike githubWatcher it never falls back to the lead, so a team that
+ * does not work on GitHub has no answerer the budget keeps (src/budget/unheld.ts, T4388).
+ */
+export function githubAnswerer(config: Pick<KitConfig, 'github' | 'serviceRoles'>): string | undefined {
+  return config.github.watcher ?? intakeHolder(config.serviceRoles);
+}
+
+function intakeHolder(roles: KitConfig['serviceRoles']): string | undefined {
+  for (const name of Object.keys(roles).sort()) {
+    const role = roles[name];
+    // `issue close` needs named holders (TEAM_HELD_COMMANDS), so `team` never holds it; skipped all the same.
+    if (role !== undefined && role.holders !== 'team' && role.commands.includes('issue close')) {
+      return role.holders[0];
+    }
+  }
+  return undefined;
+}

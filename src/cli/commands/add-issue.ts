@@ -1,17 +1,17 @@
-import { ENV } from '../../core/home.ts';
 import type { SecretScanner } from '../../core/secrets.ts';
-import { issueRef } from '../../github/map.ts';
-import type { AddIssueAsk } from '../../github/issue-at-add.ts';
-import type { IssueDraft, IssueHost } from '../../issues/host.ts';
+import { issueRef } from '../../sync/map.ts';
+import type { AddIssueAsk } from '../../sync/issue-at-add.ts';
+import { GITHUB_REPOS_HOST, type HostAccess, type IssueDraft, type IssueStore, type Tracker } from '../../issues/host.ts';
 import type { TaskFields } from '../../register/events.ts';
 import type { AddInput, Verdict } from '../../register/policy.ts';
 import type { WriteResult } from '../../register/register.ts';
 import type { Flags } from '../args.ts';
-import { hostOf } from '../issue-hosts.ts';
+import { hostsOf, type ConnectorSections } from '../issue-hosts.ts';
 import { EXIT, RefusedError, type CliRuntime, type ExitCode } from '../runtime.ts';
-import { GITHUB_OFF, githubOff } from './issue-sync-auto.ts';
+import { CONNECTOR_OFF } from '../connector-off.ts';
+import { githubOffBy } from './issue-sync-auto.ts';
 
-/** The flags of `add` that ask about the new task's issue (github/issue-at-add.ts). */
+/** The flags of `add` that ask about the new task's issue (sync/issue-at-add.ts). */
 export const ADD_ISSUE_FLAGS = ['issue', 'issue-body', 'issue-repo', 'local'] as const;
 
 /** What an add asked about its issue: its issue flags, with the task's own ref, type and priority. */
@@ -36,12 +36,20 @@ export interface IssueAddRegister {
 /** How an add with its issue ended: stopped with nothing written, or the register's answer to the task with its ref. */
 export type IssueAddEnd = { readonly kind: 'stopped'; readonly code: ExitCode } | { readonly kind: 'written'; readonly verdict: Verdict<WriteResult>; readonly ref: string };
 
+/** A tracker turned off on this machine: the environment variable that does it, for the refusal to name. */
+export interface TrackerOff {
+  readonly offBy: string;
+}
+
 /**
- * The host a new task's issue opens on: GitHub, with the token saved for the repository's owner, or none while GitHub is
- * off here. stamp is the team's github.stamp: whether the issue's body ends with the made-with-teamrig footer.
+ * The tracker a new task's issue opens on: GitHub's (the issue's repository is one of github.repos), with the token
+ * saved for the repository's owner, or the switch that turns GitHub off here. stamp is the team's github.stamp: whether the
+ * issue's body ends with the made-with-teamrig footer; sections is the team's connectors map, of which the tracker's
+ * connector reads its own section.
  */
-export function addIssueHost(runtime: CliRuntime, scanner: SecretScanner, stamp: boolean): IssueHost | undefined {
-  return githubOff(runtime.env) ? undefined : hostOf('github', runtime, scanner, stamp);
+export async function addIssueHost(runtime: CliRuntime, scanner: SecretScanner, stamp: boolean, sections: ConnectorSections): Promise<Tracker | TrackerOff> {
+  const offBy = githubOffBy(runtime.env);
+  return offBy === undefined ? (await hostsOf(GITHUB_REPOS_HOST, runtime, scanner, stamp, sections)).tracker : { offBy };
 }
 
 /**
@@ -53,7 +61,7 @@ export function addIssueHost(runtime: CliRuntime, scanner: SecretScanner, stamp:
 export async function addWithIssue(
   say: (line: string) => void,
   register: IssueAddRegister,
-  host: IssueHost | undefined,
+  host: (HostAccess & IssueStore) | TrackerOff,
   by: string,
   input: AddInput,
   draft: IssueDraft,
@@ -62,8 +70,8 @@ export async function addWithIssue(
   if (!judged.ok) {
     throw new RefusedError(judged.error);
   }
-  if (host === undefined) {
-    throw new RefusedError(`${ENV.github}=${GITHUB_OFF} turns GitHub off on this machine, so the new task's issue cannot open and nothing is written: turn GitHub on, or add the task with --local <reason>`);
+  if ('offBy' in host) {
+    throw new RefusedError(`${host.offBy}=${CONNECTOR_OFF} turns GitHub off on this machine, so the new task's issue cannot open and nothing is written: turn GitHub on, or add the task with --local <reason>`);
   }
   const reach = await host.reach(draft.repo, 'open');
   const opened = reach.kind === 'unreachable' ? { kind: 'failed' as const, reason: reach.reason } : await host.open(draft);

@@ -6,7 +6,9 @@ import type { JsonRecord } from '../core/guards.ts';
 import type { RunOutcome, RunRequest } from '../open/processes.ts';
 import { decodePrompt, defaultPrompt, encodePrompt, refreshPrompt } from '../open/prompt.ts';
 import { shellCommand } from '../open/quote.ts';
+import type { SessionStart } from '../ports/host/index.ts';
 import { FakeHostMemory } from '../testing/fake-host-memory.ts';
+import { hostNaming, hostRunning, hostStarting, NO_MARK_HOST, NO_SESSION_HOST } from '../testing/host.ts';
 import { FakePathProbe, FakeProcesses } from '../testing/fake-processes.ts';
 import { FakeSessionProcesses } from '../testing/fake-session-processes.ts';
 import type { RestartRequest } from '../refresh/state.ts';
@@ -88,6 +90,16 @@ describe('teamrig open', () => {
       assert.equal(result.code, EXIT.ok, result.stdout.join('\n'));
       assert.deepEqual(processes.started, []);
       assert.deepEqual(processes.keptFocus, ['wt.exe']);
+    });
+
+    it("keeps the focus where it was on a host that tells no agent's run from the person's", async () => {
+      for (const host of [NO_SESSION_HOST, NO_MARK_HOST]) {
+        const processes = new FakeProcesses().onRun('powershell.exe', { kind: 'exited', code: 0 });
+        const result = await openAlpha(processes, { platform: 'win32', host });
+        assert.equal(result.code, EXIT.ok, result.stdout.join('\n'));
+        assert.deepEqual(processes.started, []);
+        assert.deepEqual(processes.keptFocus, ['wt.exe']);
+      }
     });
 
     it('keeps the focus while the meeting of any team of the tree is open, and gives it once that meeting ended', async () => {
@@ -497,6 +509,15 @@ describe('teamrig launch', () => {
     assert.deepEqual(processes.ran.map((run) => run.env), [{ ...SESSION_ENV, ANTHROPIC_API_KEY: value, GH_TOKEN: value }]);
   });
 
+  it("starts the session with the running host's login and no other host's, and with no session variable of any host", async () => {
+    const processes = new FakeProcesses();
+    const value = 'not-a-real-credential';
+    const host = hostNaming({ marks: ['AGENT_RUN'], identity: ['AGENT_SESSION'] }, {}, { session: ['AGENT_SOCKET'], parked: [], login: ['OPENAI_API_KEY'] });
+    const env = { PATH: '/usr/local/bin', ANTHROPIC_API_KEY: value, OPENAI_API_KEY: value, CLAUDE_PID: '7', CLAUDE_CODE_MESSAGING_TOKEN: value, AGENT_RUN: '1', AGENT_SESSION: 'abc', AGENT_SOCKET: '/run/agent' };
+    await new CliHarness(TEAM).run(LAUNCH, { probe: ON_PATH, processes, env, host });
+    assert.deepEqual(processes.ran.map((run) => run.env), [{ ...SESSION_ENV, OPENAI_API_KEY: value }]);
+  });
+
   it("starts Claude Code without the opener's plugin bin folders on PATH, so the session's own teamrig answers its Bash calls", async () => {
     const processes = new FakeProcesses();
     await launch(processes, [], { env: { PATH: '/home/me/.claude/plugins/cache/teamrig/teamrig/0.75.0/bin:/usr/local/bin' } });
@@ -568,6 +589,15 @@ describe('teamrig launch', () => {
     const result = await kit.run([...LAUNCH, '--effort', 'max', '--no-prompt'], { probe: ON_PATH, processes, env: { PATH: '/usr/local/bin' } });
     assert.deepEqual(result.stdout, [`Starting Claude Code as app-alpha (session alpha of team app) in ${APP}, on model sonnet at max effort`]);
     assert.deepEqual(processes.ran[0]?.args, ['--model', 'sonnet', '--effort', 'max', '--name', 'app-alpha']);
+  });
+
+  it('refuses a configured model the host does not run, before starting it, and names the key to fix', async () => {
+    const processes = new FakeProcesses();
+    const kit = new CliHarness({ ...TEAM, launch: { alpha: { model: 'gpt-5', effort: 'high' } } });
+    const result = await kit.run(LAUNCH, { probe: ON_PATH, processes, env: { PATH: '/usr/local/bin' } });
+    assert.equal(result.code, EXIT.refused);
+    assert.match(result.stdout.join('\n'), /^REFUSED launch\.alpha\.model gpt-5: .*; fix it in the team config, or `teamrig doctor` lists each/);
+    assert.deepEqual(processes.ran, []);
   });
 
   it('starts the lead on Opus at xhigh effort, and any session on its configured model and effort', async () => {
@@ -708,6 +738,23 @@ describe('teamrig launch', () => {
       }
     });
 
+    it("is refused while it runs in the program of the host the run works in, which no other host takes for a session's", async () => {
+      const inDesk = (): Pick<RunOptions, 'sessionProcesses' | 'memory'> => ({
+        ...claudeRuns(6900),
+        sessionProcesses: new FakeSessionProcesses().add({ pid: 6900, parentPid: 1, name: 'agent-desk', commandLine: 'agent-desk' }),
+      });
+      const refused = new CliHarness(TEAM);
+      await recordStart(refused, 6900);
+      const none = new FakeProcesses();
+      const result = await refused.run(LAUNCH, { probe: ON_PATH, processes: none, env: { PATH: '/usr/local/bin' }, host: hostRunning('agent-desk'), ...inDesk() });
+      assert.deepEqual([result.code, result.stdout.at(-1), none.ran], [EXIT.refused, liveLine(6900), []]);
+      const started = new CliHarness(TEAM);
+      await recordStart(started, 6900);
+      const one = new FakeProcesses();
+      const elsewhere = await started.run(LAUNCH, { probe: ON_PATH, processes: one, env: { PATH: '/usr/local/bin' }, ...inDesk() });
+      assert.deepEqual([elsewhere.code, one.ran.length], [EXIT.ok, 1]);
+    });
+
     it('is refused on a restart when another Claude Code took the session meanwhile', async () => {
       const kit = new CliHarness(TEAM);
       const processes = new RestartedOnce(kit, ENDING, () => recordStart(kit, 7300));
@@ -723,6 +770,38 @@ describe('teamrig launch', () => {
     await kit.files.write('C:\\x\\claude.cmd', 'claude-code %*');
     const skipped = await kit.run(LAUNCH, { platform: 'win32', env: { PATH: 'C:\\x' }, probe: new FakePathProbe({ folders: [APP], files: ['C:\\x\\claude.cmd'] }) });
     assert.deepEqual(skipped.stdout, ['REFUSED Claude Code (claude) is not on PATH (skipped: C:\\x\\claude.cmd is not an npm launcher); install it, then run this again']);
+  });
+
+  it('starts the program the running host names, found on PATH as any program is, and none on a host that tells nothing of its sessions', async () => {
+    const desk = '/usr/local/bin/agent-desk';
+    const both = new FakePathProbe({ folders: [APP], files: [CLAUDE, desk] });
+    const processes = new FakeProcesses();
+    const started = await launch(processes, ['--no-prompt'], { probe: both, host: hostStarting('agent-desk') });
+    assert.equal(started.code, EXIT.ok, [...started.stdout, ...started.stderr].join('\n'));
+    assert.deepEqual(processes.ran.map((run) => run.command), [desk]);
+    const missing = await launch(new FakeProcesses(), [], { host: hostStarting('agent-desk') });
+    assert.deepEqual(missing.stdout, ['REFUSED Claude Code (agent-desk) is not on PATH; install it, then run this again']);
+    const none = new FakeProcesses();
+    const untold = await launch(none, [], { probe: both, host: NO_SESSION_HOST });
+    assert.deepEqual([untold.code, untold.stdout, none.ran], [EXIT.refused, ['REFUSED no session of the host is told'], []]);
+  });
+
+  it('starts with the arguments the running host spells, telling it what the session is to be and no flag of its own', async () => {
+    const seen: SessionStart[] = [];
+    const host = hostStarting('agent-desk', (start) => {
+      seen.push(start);
+      return ['run', `as=${start.name ?? 'none'}`];
+    });
+    const kit = new CliHarness(TEAM);
+    await kit.files.write(join(SKILLS_DIR, 'bravo-deploy', 'SKILL.md'), ['---', 'name: bravo-deploy', 'description: Use when testing.', '---', '', 'Owner: bravo', ''].join('\n'));
+    const processes = new FakeProcesses();
+    const probe = new FakePathProbe({ folders: [APP], files: ['/usr/local/bin/agent-desk'] });
+    const argv = [...LAUNCH, '--effort', 'max', '--resume', CLAUDE_SESSION, '--encoded-prompt', encodePrompt('Go on')];
+    const started = await kit.run(argv, { probe, processes, env: { PATH: '/usr/local/bin' }, host });
+    assert.equal(started.code, EXIT.ok, [...started.stdout, ...started.stderr].join('\n'));
+    assert.deepEqual(processes.ran.map((run) => run.args), [['run', 'as=app-alpha']]);
+    const settingsFile = join(TEAM_HOME, 'state', 'launch', 'alpha.settings.json');
+    assert.deepEqual(seen, [{ name: 'app-alpha', model: undefined, effort: 'max', resume: CLAUDE_SESSION, settingsFile, prompt: 'Go on' }]);
   });
 
   it('refuses a session not on the team or a missing project; reads a bad line as a usage error', async () => {

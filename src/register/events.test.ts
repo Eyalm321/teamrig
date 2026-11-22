@@ -1,11 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import type { JsonRecord } from '../core/guards.ts';
+import { isRecord, type JsonRecord } from '../core/guards.ts';
+import { BLOCKER_PRIORITY_ID } from './model.ts';
 import { TEST_CARD } from '../testing/card.ts';
 import { EVENT_VERSION, eventRecord, parseEvent, TASK_LINE_VERSION, type EventParse, type RegisterEvent } from './events.ts';
 
 const BASE = { id: 'T3', at: '2030-01-07T09:00:00.000Z', by: 'alpha' };
-const TASK = { title: 'A task', description: null, owner: 'alpha', source: 'owner', ref: null, priority: 2, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, workClass: null, prepares: null };
+const TASK = { title: 'A task', description: null, owner: 'alpha', source: 'owner', ref: null, priority: 2, due: null, goals: [], noGoal: false, week: null, after: [], size: null, type: null, critical: false, pin: null, exempt: null, workClass: null, prepares: null };
 
 function parse(record: JsonRecord, version = 0): EventParse {
   return parseEvent({ lineNumber: 1, raw: JSON.stringify(record), record, version });
@@ -21,11 +22,11 @@ function createdMark(result: EventParse): [string | null, boolean] | undefined {
 }
 
 describe('eventRecord', () => {
-  it('leaves an empty after, a null description, size, type, pin or workClass and a false critical or noGoal off a create line, and keeps ones that hold something', () => {
+  it('leaves an empty after, a null description, size, type, pin, exempt or workClass and a false critical or noGoal off a create line, and keeps ones that hold something', () => {
     const create: RegisterEvent = { ...BASE, v: 2, type: 'create', task: TASK };
-    const { after, description, size, type, critical, noGoal, pin, workClass, prepares, ...withoutEither } = TASK;
+    const { after, description, size, type, critical, noGoal, pin, exempt, workClass, prepares, ...withoutEither } = TASK;
     assert.deepEqual(eventRecord(create), { ...create, task: withoutEither });
-    assert.deepEqual([after, description, size, type, critical, noGoal, pin, workClass, prepares], [[], null, null, null, false, false, null, null, null]);
+    assert.deepEqual([after, description, size, type, critical, noGoal, pin, exempt, workClass, prepares], [[], null, null, null, false, false, null, null, null, null]);
     const marked: RegisterEvent = { ...create, task: { ...TASK, type: 'bug', critical: true } };
     assert.deepEqual(eventRecord(marked), { ...marked, task: { ...withoutEither, type: 'bug', critical: true } });
     const described: RegisterEvent = { ...create, task: { ...TASK, description: 'Why it matters.\nWhat to do.' } };
@@ -39,6 +40,21 @@ describe('eventRecord', () => {
   it('reads back as the event it was written from', () => {
     const create: RegisterEvent = { ...BASE, v: 2, type: 'create', task: TASK };
     assert.deepEqual(parse(eventRecord(create), 2), { kind: 'event', event: create });
+  });
+
+  it('writes a blocker as p0 marked blocker, so an older reader sees p0, and reads it back as the blocker (T4329)', () => {
+    const create: RegisterEvent = { ...BASE, v: 2, type: 'create', task: { ...TASK, priority: BLOCKER_PRIORITY_ID } };
+    const written = eventRecord(create);
+    const task = written['task'];
+    assert.ok(isRecord(task));
+    assert.deepEqual([task['priority'], task['blocker']], [0, true]);
+    assert.deepEqual(parse(written, 2), { kind: 'event', event: create });
+    const raised: RegisterEvent = { ...BASE, v: 2, type: 'update', changes: { priority: BLOCKER_PRIORITY_ID }, note: null };
+    assert.deepEqual(eventRecord(raised), { ...raised, changes: { priority: 0, blocker: true } });
+    assert.deepEqual(parse(eventRecord(raised), 2), { kind: 'event', event: raised });
+    const lowered: RegisterEvent = { ...raised, changes: { priority: 0 } };
+    assert.deepEqual(eventRecord(lowered), lowered, 'a move off the blocker writes no mark');
+    assert.deepEqual(parse(eventRecord(lowered), 2), { kind: 'event', event: lowered });
   });
 });
 
@@ -298,6 +314,19 @@ describe('parseEvent', () => {
     }
   });
 
+  it('reads the exemption of a create line and of an update, leaves out a null one, and reads an older line as not exempted (T4948)', () => {
+    const exempted: RegisterEvent = { ...BASE, v: 2, type: 'create', task: { ...TASK, exempt: 'lead' } };
+    assert.deepEqual(parse(eventRecord(exempted), 2), { kind: 'event', event: exempted });
+    assert.doesNotMatch(JSON.stringify(eventRecord({ ...BASE, v: 2, type: 'create', task: TASK })), /"exempt"/);
+    const { exempt, ...older } = TASK;
+    assert.equal(exempt, null);
+    const old = parse({ ...BASE, type: 'create', task: older }, 2);
+    assert.equal(old.kind === 'event' && old.event.type === 'create' ? old.event.task.exempt : undefined, null);
+    for (const value of ['lead', null]) {
+      assert.deepEqual(parse({ ...BASE, type: 'update', changes: { exempt: value } }, 2), { kind: 'event', event: { ...BASE, v: 2, type: 'update', changes: { exempt: value }, note: null } });
+    }
+  });
+
   it('reads the work class of a create line and of an update, leaves out an unset one, reads an older line as unset, and refuses a misspelled one (T2076)', () => {
     const classed: RegisterEvent = { ...BASE, v: 2, type: 'create', task: { ...TASK, workClass: 'Roadmap' } };
     assert.deepEqual(parse(eventRecord(classed), 2), { kind: 'event', event: classed });
@@ -330,6 +359,16 @@ describe('parseEvent', () => {
     }
   });
 
+  it('takes as an event\'s time only the stamp the register writes, so no other text rides in as a time', () => {
+    const status = { ...BASE, type: 'status', status: 'in-progress' };
+    assert.equal(parse(status).kind, 'event');
+    const worded = 'Jan 7 2030 09:00 UTC (any words at all)';
+    assert.equal(Number.isNaN(Date.parse(worded)), false, 'the engine reads it as a time');
+    for (const at of [worded, '2030-01-07T09:00:00Z', '2030-01-07T09:00:00.000+00:00', '2030-01-07 09:00', '2030-01-07', '2030-02-30T09:00:00.000Z', ' 2030-01-07T09:00:00.000Z', '', 1893920400000]) {
+      assert.match(reason(parse({ ...status, at })), /^bad time /, JSON.stringify(at));
+    }
+  });
+
   it('rejects malformed lines with a reason', () => {
     const cases: [JsonRecord, RegExp][] = [
       [{ ...BASE, id: 'T0', type: 'create', task: TASK }, /bad task id/],
@@ -337,6 +376,8 @@ describe('parseEvent', () => {
       [{ ...BASE, by: '', type: 'create', task: TASK }, /missing author/],
       [{ ...BASE, type: 'create', task: 'x' }, /task is not an object/],
       [{ ...BASE, type: 'create', task: { ...TASK, priority: -1 } }, /bad priority -1/],
+      [{ ...BASE, type: 'create', task: { ...TASK, priority: 2, blocker: true } }, /blocker on priority 2, not 0/],
+      [{ ...BASE, type: 'update', changes: { priority: 0, blocker: 'yes' } }, /bad blocker "yes"/],
       [{ ...BASE, type: 'create', task: { ...TASK, due: '2030-02-30' } }, /bad due/],
       [{ ...BASE, type: 'create', task: { ...TASK, week: 'next' } }, /bad week/],
       [{ ...BASE, type: 'create', task: { ...TASK, goals: [1] } }, /goals is not a list of text/],
@@ -353,6 +394,8 @@ describe('parseEvent', () => {
       [{ ...BASE, type: 'create', task: { ...TASK, critical: 'yes' } }, /bad critical "yes"/],
       [{ ...BASE, type: 'create', task: { ...TASK, pin: '' } }, /pin is not text/],
       [{ ...BASE, type: 'update', changes: { pin: 3 } }, /pin is not text/],
+      [{ ...BASE, type: 'create', task: { ...TASK, exempt: '' } }, /exempt is not text/],
+      [{ ...BASE, type: 'update', changes: { exempt: true } }, /exempt is not text/],
       [{ ...BASE, type: 'status', status: 4 }, /unknown status 4/],
       [{ ...BASE, type: 'status', status: 'Paused!' }, /unknown status "Paused!"/],
       [{ ...BASE, type: 'status', status: 'done', note: 5 }, /note is not text/],

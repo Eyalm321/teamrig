@@ -5,13 +5,15 @@ import { SHELL_RECHECK_MS } from '../open/end-tab.ts';
 import type { ProcessInfo } from '../open/session-processes.ts';
 import { FakeClock } from '../testing/fake-clock.ts';
 import { FakeSessionProcesses } from '../testing/fake-session-processes.ts';
+import { testSessionProcess } from '../testing/host.ts';
 import { MemoryFiles } from '../testing/memory-files.ts';
+import { shippedTranscripts } from '../testing/shipped-transcripts.ts';
 import { RestoreRegistry, restoreSessionsDir } from '../restore/registry.ts';
 import type { EffortLevel } from '../config/types.ts';
 import type { Files } from '../core/files.ts';
 import { askFileOf, holdWhyFileOf, outcomeFileOf, type ClearMode } from '../mod/clear-hand.ts';
 import { ClearAsks, type ClearAsk, type PostedClearAsk } from './clear-asks.ts';
-import { CLAIM_WAIT_MS, claudeProcessOf, GIVE_UP_MS, LOOKUP_FAILED, NO_HOLD_REASON, personHoldOf, restartMayAct, runRestart, SILENT_MOD, type RestartDeps, type RestartPlan, type TabOpening } from './restart.ts';
+import { CLAIM_WAIT_MS, GIVE_UP_MS, LOOKUP_FAILED, NO_HOLD_REASON, personHoldOf, restartMayAct, runRestart, SILENT_MOD, type RestartDeps, type RestartPlan, type TabOpening } from './restart.ts';
 import type { RestoreEntry } from '../restore/entry.ts';
 import type { RestartRequest } from './state.ts';
 import { RefreshStore } from './store.ts';
@@ -31,8 +33,10 @@ const LIVE_HELPER = '1 agent of this session still live';
 const BUSY_HOUR = 'it stayed busy for 60 minutes';
 const PLAN: RestartPlan = { team: 'app', id: 'alpha', at: AT, delayMs: DELAY_MS, endCommand: ['node', 'tracker.cjs', 'end'], endEnv: { PATH: '/bin' }, fallbackCwd: '/project', hold: { countdownMs: 20_000, afterActivityMs: 300_000 } };
 
+/** A model reply's line, as Claude Code writes one. */
+const REPLY = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } });
 /** What Claude Code writes once a turn has ended. */
-const TURN_END = JSON.stringify({ type: 'system', subtype: 'turn_duration' });
+const TURN_END =JSON.stringify({ type: 'system', subtype: 'turn_duration' });
 
 /** A background command's start and its end, as Claude Code writes them to the transcript. */
 const BACKGROUND_START = [
@@ -100,26 +104,29 @@ class World {
   private sleeps = 0;
 
   constructor(options: WorldOptions = {}) {
-    this.files = new MemoryFiles({ [TRANSCRIPT]: options.transcript ?? `${JSON.stringify({ type: 'assistant' })}\n${TURN_END}\n` });
+    this.files = new MemoryFiles({ [TRANSCRIPT]: options.transcript ?? `${REPLY}\n${TURN_END}\n` });
     this.store = new RefreshStore(this.files, PATHS);
     this.asks = new ClearAsks(this.files, ASK_DIR);
     (options.running ?? [TAB_SHELL, CLAUDE]).forEach((info) => this.processes.add(info));
     this.deps = {
       store: this.store,
       files: this.files,
+      reader: shippedTranscripts(),
       asks: this.asks,
       restore: new RestoreRegistry(this.files, restoreSessionsDir(join('/', 'kit'))),
       processes: this.processes,
+      isSessionProcess: testSessionProcess,
       clock: this.clock,
       sleep: async (ms) => {
         this.sleeps += 1;
         await this.actions.get(this.sleeps)?.();
         if (this.busy) {
-          await this.files.append(TRANSCRIPT, `${JSON.stringify({ type: 'assistant', n: this.sleeps })}\n`);
+          await this.files.append(TRANSCRIPT, `${JSON.stringify({ type: 'assistant', n: this.sleeps, message: { role: 'assistant', content: [] } })}\n`);
         }
         await this.clock.sleep(ms);
       },
       platform: options.platform ?? 'win32',
+      hostPrograms: ['claude'],
       openTab: async () => {
         this.opened.push(this.clock.now());
         return this.opening;
@@ -313,7 +320,7 @@ describe('runRestart', () => {
 
   it('waits while the transcript grows, and restarts after a whole quiet delay', async () => {
     const world = await new World().arm();
-    world.onSleep(2, () => world.files.append(TRANSCRIPT, `${JSON.stringify({ type: 'assistant' })}\n${TURN_END}\n`));
+    world.onSleep(2, () => world.files.append(TRANSCRIPT, `${REPLY}\n${TURN_END}\n`));
     assert.equal((await runRestart(world.deps, PLAN)).kind, 'restarted');
     assert.equal(world.clock.now() - START, 2 * DELAY_MS + CLAIM_WAIT_MS);
   });
@@ -329,7 +336,7 @@ describe('runRestart', () => {
     const command = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_long', name: 'Bash', input: {} }] } });
     const world = await new World({ transcript: `${command}\n` }).arm();
     const result = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_long', content: 'done' }] } });
-    world.onSleep(4, () => world.files.append(TRANSCRIPT, `${result}\n${JSON.stringify({ type: 'assistant' })}\n${TURN_END}\n`));
+    world.onSleep(4, () => world.files.append(TRANSCRIPT, `${result}\n${REPLY}\n${TURN_END}\n`));
     assert.equal((await runRestart(world.deps, PLAN)).kind, 'restarted');
     assert.equal(world.clock.now() - START, 4 * DELAY_MS + CLAIM_WAIT_MS);
   });
@@ -351,6 +358,15 @@ describe('runRestart', () => {
     const node: ProcessInfo = { ...CLAUDE, name: 'node.exe', commandLine: 'node C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js' };
     const script = await new World({ running: [node] }).arm();
     assert.equal((await runRestart(script.deps, PLAN)).kind, 'restarted');
+  });
+
+  it("ends the program the hosts call a session's, whatever its name, and none that no host does", async () => {
+    const desk: ProcessInfo = { ...CLAUDE, name: 'agent-desk', commandLine: 'agent-desk' };
+    const told = await new World({ running: [desk] }).arm();
+    assert.equal((await runRestart({ ...told.deps, isSessionProcess: (process) => process.name === desk.name }, PLAN)).kind, 'restarted');
+    const untold = await new World({ running: [desk] }).arm();
+    assert.deepEqual(await runRestart(untold.deps, PLAN), { kind: 'failed', why: 'process 4100 is agent-desk, not Claude Code' });
+    assert.deepEqual(untold.processes.ends, []);
   });
 
   it('cancels when its Claude Code has already ended', async () => {
@@ -466,7 +482,7 @@ describe("runRestart through the tab's mod", () => {
     world.onSleep(3, () => world.files.append(TRANSCRIPT, `${command}
 `));
     world.onSleep(24, () => world.files.append(TRANSCRIPT, `${result}
-${JSON.stringify({ type: 'assistant' })}
+${REPLY}
 ${TURN_END}
 `));
     world.onSleep(26, () => world.claimAsk());
@@ -522,7 +538,7 @@ function typedEffort(at: string, level: EffortLevel): string {
 
 /** A quiet transcript in which the user typed `/effort <level>` at `at`. */
 function transcriptTyped(at: string, level: EffortLevel): string {
-  return `${typedEffort(at, level)}\n${JSON.stringify({ type: 'assistant' })}\n${TURN_END}\n`;
+  return `${typedEffort(at, level)}\n${REPLY}\n${TURN_END}\n`;
 }
 
 describe("runRestart when the session runs at another effort level than its config's", () => {
@@ -752,33 +768,5 @@ describe('runRestart with shells under its Claude Code', () => {
     const world = await new World({ running: [TAB_SHELL, CLAUDE, mcp, cmd, deeper] }).arm();
     assert.equal((await runRestart(world.deps, PLAN)).kind, 'restarted');
     assert.equal(world.clock.now() - START, DELAY_MS + CLAIM_WAIT_MS, 'no second look');
-  });
-});
-
-describe('claudeProcessOf', () => {
-  const process = (pid: number, parentPid: number, name: string, commandLine: string): ProcessInfo => ({ pid, parentPid, name, commandLine });
-
-  it('finds the Claude Code a hook runs under: its parent, or past a shell between', async () => {
-    const processes = new FakeSessionProcesses()
-      .add(process(10, 1, 'claude.exe', 'claude'))
-      .add(process(11, 10, 'bash.exe', 'bash -c "node main.js hook stop"'))
-      .add(process(20, 1, 'node', 'node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'));
-    assert.equal(await claudeProcessOf(processes, 10), 10);
-    assert.equal(await claudeProcessOf(processes, 11), 10);
-    assert.equal(await claudeProcessOf(processes, 20), 20, 'Claude Code run by Node.js');
-    assert.deepEqual([processes.described, processes.lineages], [[], [10, 11, 20]], 'one listing per look');
-  });
-
-  it('finds none when a process is gone, or Claude Code is further up than a hook would be', async () => {
-    const processes = new FakeSessionProcesses()
-      .add(process(30, 31, 'bash', 'bash'))
-      .add(process(31, 32, 'bash', 'bash'))
-      .add(process(32, 33, 'bash', 'bash'))
-      .add(process(33, 1, 'claude', 'claude'));
-    assert.equal(await claudeProcessOf(processes, 31), 33);
-    assert.equal(await claudeProcessOf(processes, 30), undefined, 'three parents up');
-    assert.equal(await claudeProcessOf(processes, 99), undefined, 'gone');
-    assert.equal(await claudeProcessOf(new FakeSessionProcesses().add(process(40, 41, 'bash', 'bash')), 40), undefined, 'its parent is gone');
-    assert.equal(await claudeProcessOf(processes.hideLineage(), 33), undefined, 'the system would not list the processes');
   });
 });

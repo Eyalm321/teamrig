@@ -87,7 +87,8 @@ once. A decision that frees only Improvements work waits for the weekly Improvem
 `focus.improvementsDay`, as on your agenda, and a dedicated session's is in no batch: it waits for its own meeting.
 In a tree of teams each team's lead holds its own meeting with you, over its subtree: its
 `DECISIONS` lists the waits of every team under it as `<team>/<id>`, and a card decided there never comes back on the
-root's agenda.
+root's agenda. A team named in its parent's `decisions.ownMeetingTeams` meets you itself: the parent's agenda leaves
+its waits, and those of the teams under it, out of `DECISIONS`, with one line counting them.
 
 ## Never stuck on a question
 
@@ -146,9 +147,9 @@ sequenceDiagram
 - You may trim an inbox file by hand; the read mark notices, and if the last line read is gone, the whole file
   counts as unread.
 - A note is one line; an empty line, several lines or a line that looks like a secret is refused. A secret here is
-  a GitHub, AWS, Slack, Anthropic, Google or Stripe live key, an `sk-` API key, a private key block, a JSON web
-  token, credentials in a URL or an Authorization header, a `password=`-style assignment, plus your
-  `register.secretPatterns`. The
+  a GitHub, AWS, Slack, Anthropic, Google, npm or Stripe live key, an `sk-` API key, a private key block, a JSON web
+  token, a Discord or Slack webhook URL, credentials in a URL or an Authorization header, a `password=`-style
+  assignment, plus your `register.secretPatterns`. The
   refusal names the kind, never the value. Task titles, refs, notes and evidence get the same check.
 - In a tree of teams, `--to web/lead` writes to a session of another team, within the rights in
   [Who is on the team](grow-the-team.md#who-is-on-the-team); the note names its sender as `your-team/lead`.
@@ -190,7 +191,9 @@ sequenceDiagram
   p1 turn chain would run on until the morning), whatever `wake.priority` says. While the owner's
   daily meeting is open the lead is not woken; the work waits for the first check after the meeting.
 - How often: each task wakes a session once. The first new task starts a batch of `wake.batchSeconds` (120 s), and
-  one wake names every task handed meanwhile; wakes of one session are at least `wake.minGapMinutes` (15) apart.
+  one wake names every task handed meanwhile; wakes of one session are at least
+  `wake.minGapMinutes` (15) apart for one task due, up to `wake.maxGapMinutes` (30) at five or more; a blocker waits
+  for no gap.
   Work that was there when the tab started, or before a `/clear`, is seen at its first prompt, as before. A closed
   session that `teamrig open` (or the idle pass) resumes counts that open as its wake: only work handed after it
   wakes it.

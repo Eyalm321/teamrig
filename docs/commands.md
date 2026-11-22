@@ -28,7 +28,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
   team tree                    the tree of teams this team is in, with each team's lead and sessions
   open <id|name|team/id> [--prompt "<first prompt>"] [--terminal <name>] [--project <dir>] [--resume]
       a new terminal tab running Claude Code as that session (team/id: another team of the tree);
-      with no terminal it prints the command; a rehired session reads the handover it left first, or,
+      it takes no --session, as the session it opens is its argument; --terminal print opens no tab
+      and prints the command to run, as open does when no terminal it tries opens (exit 3);
+      a rehired session reads the handover it left first, or,
       with --resume, goes on in its last Claude Code session when that is small and recent enough,
       as does one whose tab ended outside teamrig (a crash or reboot), on a prompt to re-read its list;
       a session teamrig close ended goes on in its last one by those limits, else opens fresh (on its
@@ -50,6 +52,15 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       other task on its session's list (moving that session's earlier pin), wakes the session to start
       it once the step in hand is done, and tells the lead; refused on a done, dropped or in-progress
       task, and where Claude Code sets $CLAUDECODE; --preview prints what it would do and writes nothing
+  owner decide <[team/]T<id>> --option <n>|--approve|--decline   the owner answers a card from the pane:
+      kept in the task's history as the owner's decision, naming the option chosen or yes or no, which
+      ends the task's wait on the owner and wakes its session to go on from it; refused on a task that
+      waits on no decision or approval of the owner, an option its card lacks, yes or no to a decision,
+      an option to an approval, and where Claude Code sets $CLAUDECODE
+  owner later <[team/]T<id>> --until in-<n>h|tomorrow|monday|<time>   the owner puts a card off from
+      the pane: to n hours from now, 09:00 on the team's clock tomorrow or next Monday, or a time; kept
+      in the task's history as the owner's, the session told with no wake; refused on a task that
+      waits on no decision or approval of the owner, a time gone by, and where Claude Code sets $CLAUDECODE
   owner wake <[team/]id|name> [--terminal <name>] [--project <dir>]   the owner wakes one session from the
       pane: a running idle tab gets an inbox line that wakes it at once to work its list (none more while
       that ask waits), a closed one opens in a new tab; refused on a tab in a turn, at a tool call or with
@@ -131,9 +142,11 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       the batch asked, as a meeting start does; in a tree of teams the root lead's batch holds every
       team's waits under it, and a child team's decisions prints its own and its teams' waits, naming
       that lead
-  add --title "<one line>" --description "<what and why>" --priority p<n> [--ref <where it was asked>]
+  add --title "<one line>" --description "<what and why>" --priority p<n>|blocker [--ref <where it was asked>]
       [--owner <session>] [--source <session>|<owner source>] [--due <date>] [--goals a,b|none]
       [--week <date>] [--after T5,T6] [--size <pct>] [--type task|bug] [--critical] [--class <name>]
+      --priority: p0 (urgent, right now), a level of register.priorities, or blocker, above p0: its owner
+      drops everything and fixes it now; a blocker says why in its description and comes after no task
       --description: what the task is and why, in plain words for a person (newlines kept, at most 2,000
       characters), needed unless register.requireDescription is off; show prints it under the title
       --after: the tasks to finish before this one starts; its line shows "after T5"
@@ -153,7 +166,7 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       --local: why the task gets no issue, written as its ref "local: <why>"; a security hole is always added
       with --local; while github.issueAtAdd is set, an add gives --issue or --local (or a --ref to an issue),
       else it is refused
-  add --team <team> [--owner <s>] [--source owner] --title .. --description .. --priority p<n> [...]   asks a team of your tree for work
+  add --team <team> [--owner <s>] [--source owner] --title .. --description .. --priority p<n>|blocker [...]   asks a team of your tree for work
       --source owner: the lead of a team above <team> relays the owner's order, sourced owner there
   set <id> --status open|in-progress|verifying|waiting|done|dropped [--note "<what/why>"] [--evidence <proof>]
       [--skill <name>|none] [--followups T<id>,...|none] [--waits decision:<who>,approval:<who>,task:T<id>,time:<date>|none]
@@ -181,7 +194,7 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       again, alone or behind a task or a time, with a note naming no new head; any other set is refused,
       since a merge on it would be: record progress with update --note, or give the approval up for a
       new ask with --drop-approval
-      verifying needs --waits for when its proof runs: a time, or a task in progress or verifying (the
+      verifying needs --waits for when its proof runs: a time, or a task in progress or verifying, or an open one of your own (the
       owner's approval may stand beside one); set verifying again without --waits keeps them, --waits none clears them
       a wait on the owner's decision or approval needs a card the owner decides from alone
       (register.requireDecisionCard): --question "<what is decided>" --options "<a, its numbers> | <b>"
@@ -208,11 +221,14 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       a critical one (--critical, or an owner in criticalOwners) --harden "<past the direct guard>" too;
       each part at least 3 words besides task ids, kept across sets; tasks a missed part names join
       --followups; verifying and done need every part (requireOn; mode refuse, warn or off)
-  update <id> [--title ..] [--description ..|none] [--owner ..] [--priority ..] [--ref ..|none]
+  update <id> [--title ..] [--description ..|none] [--owner ..] [--priority p<n>|blocker] [--ref ..|none]
       [--due <date>|none] [--goals a,b|none] [--week <date>|none] [--after T5,T6|none] [--size <pct>|none]
       [--type task|bug] [--class <name>|none] [--critical|--not-critical] [--pin|--unpin]
-      [--prepares <goal>:<slice>|none] [--note ..]
-      the lead may change owner, priority, due, week, after, size, type, class, critical and pin on any task
+      [--exempt|--not-exempt] [--prepares <goal>:<slice>|none] [--note ..]
+      the lead may change owner, priority, due, week, after, size, type, class, critical, pin and exempt on any
+      task
+      --exempt: a held owner still wakes for the task past the daily cap or a plain budget cut, never a stop;
+      set only by a leader above the owner (the lead on its own tasks too)
       --pin: puts the task above every other task on its owner's list, set by the owner's leaders (the lead
       on its own tasks too); it moves the owner's earlier pin, and handing the task on clears it
       --prepares <goal>:<slice>|none: marks a design, study or prep plan for that slice of a goal, set only by
@@ -247,6 +263,8 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       (roles.securityReviewer; with none set, any session but the task's owner) pins a hand step file
       (.ps1, .sh or .md) for a task still to finish at the sha256 of its bytes now (core rule 11), so a
       card may hand it to the owner; an edit needs a new audit; the task's owner gets an inbox line;
+      REFUSED for a file that calls gh, or a git command reaching a remote (push, fetch, pull, clone,
+      ls-remote, remote update, submodule update), on the human's own login, naming each call;
       --team <child>: the reviewer on a team above audits a task of that team below
   audit T<n> --verdict "<what the review found>" [--note ..] [--team <child>]   the security reviewer
       gives its verdict on the task's card (core rule 9), pinned with the question, options and
@@ -257,11 +275,12 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       of a task that needs it ("due 01-12 (from T9)"), and a row names another session's task needing it.
       --parked: only the quiet tasks the park rule leaves out of a list; --untriaged: only the tasks that
       wait for a leader to class them
-  show <id> [--tree] [--history]   every field, the last 3 history events and the inbox lines naming it;
-      --history: every event; --tree: what it needs and what needs it, each with owner, status and due, then
-      the next move (who acts first, on which task)
-  check [--week <date>] [--tree] [--all]   tasks and skills that break a team rule and context
-      text over budget, in a short form within 3,000 characters; --all: every flag in full
+  show <id> [<id> ...] [--tree] [--history]   every field, the last 3 history events and the inbox lines naming
+      it, for each id in order (an unknown one refuses the call); --history: every event; --tree: what it needs
+      and what needs it, each with owner, status and due, then the next move (who acts first, on which task)
+  check [--week <date>] [--tree] [--all] [--new]   tasks and skills that break a team rule and context
+      text over budget, in a short form within 3,000 characters; --all: every flag in full; --new:
+      only the flags the session acts on (as start shows them) new since its last start or check --new
   plan [--week <date>] [--tree] [--by-slice]    the week plan (default: the newest week that has
       started); --tree (the lead only): also every team under it, read-only, ids as <team>/T<n>;
       --by-slice: the week's tasks under each slice of the team's goals first, then the rest by band
@@ -305,8 +324,10 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       that costs; a group only from a leader, another team only from a team lead: a team below its
       own, any team's lead, or a session its config names in roles; a receiver teamrig closed has
       its reopen started at once when the host has room (REOPENS), else CLOSED says why; a line
-      with neither flag that names unfinished p0 (or more urgent) work by id wakes as --wake now,
-      or posts with no wake where that gate refuses it, and a NOTE says which
+      with neither flag that names an unfinished blocker by id wakes as --wake now, or posts with
+      no wake where that gate refuses it, and a NOTE says which; one naming p0 work does not; to
+      many receivers it wakes only the blocker's owner and the owners of work it waits on, the rest
+      read it at their prompt
       --wake-by <time>: wakes each receiver at that time instead, only if it has not seen the line by
       then and its tab is idle; the same gate
       --from host:<job>: a line from a host scheduled job, which runs as no session: no --session,
@@ -322,6 +343,45 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       --team <child>: a request of a team below yours, whose roles.securityReviewer names you as <team>/<id>
   exec run R<n>        runs an approved request once, before its approval expires
   who [<id|name|role|team/id>] the name to message a session by (no argument: every session of yours)
+  read <document>... --json [--session <id|name>] [--conversation <id>] [--team <id>] [--owner <id|name>]
+      [--task T<id>] [--range 7d|30d|90d|180d|1y|all] [--since <hours>]
+      [--unless <document>=<revision>[,...]]
+      [--interface <major.minor>]   the public interface's read side, for a program: each document
+      asked is one JSON line on stdout, in the order asked, with its revision and what could not be
+      served (problems); a refusal goes to stderr, so stdout holds answers only.
+      Documents: tasks (the register's working set; --owner keeps one session's), plan (the team's
+      active tasks in plan order, each with the keys of that order, what it needs, who needs it and
+      who moves next, as teamrig's own lists place it; --owner keeps one session's; of another team's
+      task only the id, team, owner and status), goals (the goals a task of the team may serve, its
+      own and those of the teams above it, the ranked ones first: each one's title, rank, open slice,
+      window and every move of its target day), history (every event the register holds of the one
+      task --task names, the oldest first: its creation, each status set, each change of its fields
+      and a move to another team), stats (the register's numbers over --range of the team's days,
+      as teamrig stats counts them, with their Health levels, each count's tasks by id; --owner keeps
+      one session's; validUntil says when a number counted in days of age next goes stale), inbox
+      (--session's own lines, marking none read: the unread ones and the read ones of the last --since
+      hours, 24 unless given), sessions (every session of your tree of teams: its place, hire, state
+      and unread count; a hire's and a retirement's words only for your own team and the teams above
+      it), meetings (the team's scheduled and started meetings by time, as meeting list --json prints
+      them), config (the team, its zone, its priorities and every key of the team config as config get
+      --json reads it, a key naming where a secret is kept without its value; with no team here config
+      alone is answered, with the teams of this machine to join).
+      --conversation: the host's id of the conversation the program runs in; sessions then names the
+      session holding it (self), and inbox serves that session's when no --session is given. --team: a
+      team above yours, for tasks, plan, goals, history, stats, meetings and config. --task: the one
+      task history is asked of. --range: the days stats counts over, 7d unless given. --unless: the
+      revision you hold of a document asked; one still at that revision is answered with unchanged:
+      true in place of its body, from its files' stamps alone. --interface: the version you speak,
+      refused when this teamrig does not serve it. It writes nothing
+  events --json [--documents <document>[,...]] [--session <id|name>] [--conversation <id>] [--team <id>]
+      [--owner <id|name>] [--since <hours>] [--task <id>] [--range <days>]   the public interface's
+      events side, for a program that starts it and reads its stdout: one JSON line a frame, first
+      hello with every followed document's revision, then a changed frame naming the documents whose
+      revision moved, at most one a second. A frame holds documents and revisions only: read --unless
+      serves what changed. --documents: the documents to follow (every one unless given, history
+      only with --task); the other flags are read's, and so are its refusals, on stderr before the
+      first frame. It ends with exit 0 once the
+      program that started it is gone or reads its stdout no more. It writes nothing
   sessions [--pass] [--project <dir>]   each session: running (and the MB its Claude Code's processes
       hold), closed or never recorded; then the host's free memory and commit charge. --pass: what an
       idle pass would close and reopen (one reopen a pass, with room on the host) and why it keeps or
@@ -336,7 +396,7 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       its Claude Code) and which lost their tab: the terminal that started it has ended; without --yes
       it ends nothing, with --yes it ends each orphaned one and what it started, never its own tab's
   rename <id|name> <new-name>  records a session's new name; its old names keep finding it
-      (the session itself or the lead)
+      (the session itself or the lead); then prints the follow-up steps under the new name
   hire <id> --scope "<its job>" --reason "<why>" [--name <name>] [--model <model>] [--effort <level>]
       [--review <YYYY-MM-DD>] [--approved-by "<who>"] [--burst] [--yes]
       (a lead: the lead, or a sub-lead into its own group) adds a worker the leader is sure the team needs,
@@ -358,7 +418,7 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
   demote <id|name> [--yes]     (its own leader) takes a sub-lead's members back; without --yes it shows it
   roles grant <role> --holder <id|name|team> [--commands <a,b>] [--yes]
       (the owner) lets the holder run a service role's teamrig commands past every permission check, from its
-      own tab only: names from teamrig's table (issue close, issue comment, queue ship, queue merge); team for
+      own tab only: names from teamrig's table (issue close, issue migrate, queue ship, queue merge); team for
       every session only where each command checks its caller; teamrig's guard asks before a session's call;
       without --yes it writes nothing
   roles revoke <role> [--holder <id|name>] [--yes]   (the owner) takes the role off one holder, or off the
@@ -369,6 +429,11 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
   doctor                       names, rename log, inboxes, rules.md, context size and the tree of teams that need a fix;
       also a variable that overrides every model or effort choice, and a launch with a model but no effort,
       and a page webhook that gives no https URL
+  ui [--session <id|name>] [--team <team>]   starts the dedicated UI in this terminal, for the team here or the
+      one named, on that session's view; it runs the entry script ui.path names, else the released UI
+      this teamrig pins, fetched once into the kit home's ui folder, held to its sha256 at each start
+      and given only a few variables; refused while neither is there, ui.path names no file or the
+      release speaks an interface version this teamrig does not serve
   page test                    posts one page marked TEST through the team's page webhook, as an expired login's
       page goes; prints which team's alerts key paged, or why none went and fails, never the URL
   compact [--dry-run] [--from-history]   archives the task list's log and rewrites its snapshot, so reads
@@ -386,7 +451,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       sends the status push's labels, assignees, fields and types too (a close it plans is held for --push --yes,
       printed HELD), and assigns an outside person who claims an open issue by a /take comment,
       taking the assignee off after 7 days with no linked pull request,
-      its writes lowered so an hour of runs sends at most 250
+      its writes lowered so an hour of runs sends at most 250; first it imports each other tracker
+      with a connectors.<id> section (Jira: connectors.jira.projects) the same way, as that tracker's
+      source, read-only; --repo reads that GitHub repository alone
   issue watch   the team's one watch on github.repos, started hidden by the hooks: every
       github.probeSeconds (60 by default; 0 runs none) it asks GitHub whether each repository's issues,
       pull requests or Actions runs changed, a conditional read that costs no rate limit when nothing
@@ -409,7 +476,8 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       other status: label taken off; done closes it as completed, dropped as not planned; never
       reopens an issue a person closed, and names it; an open issue of a scheduled task (started or
       with a due date), not a design issue, no one is assigned to is assigned to the login
-      github.owners maps to its task's session, else the repository's owner; at most 40 writes a run; without --yes it writes nothing;
+      github.owners maps to its task's session, else the login the sync runs as, never the repository's owner;
+      a login the repository may not assign takes no write; at most 40 writes a run; without --yes it writes nothing;
       --yes sends them, a repository stopping at its first failed write; a status label the repository
       lacks is made first (MADE); after the labels, each held open issue's github.fields (priority,
       start and target day, score) and type are set where they differ, on a repository that has them
@@ -419,13 +487,21 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       nothing but the --out preview of every issue in full; --yes opens each issue through gh and
       sets the task's ref to it, so issue sync adds no second task; stops at the first failure, and a
       rerun skips each task already holding its issue
-  issue comment <owner/name#n> --body <text>   posts one comment on an issue or pull request of the
-      team's repositories (github.repos; GitHub is the only host so far), with the token saved for the
-      owner, never the gh login; refuses an empty body, a secret shape, private data (a home folder
+  issue reply <owner/name#n> --body-file <path> [--status <status>] [--pr <n>] [--followup <title>
+      [--followup-body-file <path>]] [--assign <login,...>]   a maintainer's reply that takes the
+      thread's state with its words, on an issue or pull request of the team's repositories
+      (github.repos; GitHub is the only host so far), with the token saved for the owner, never the gh
+      login: reads first and writes nothing on a refusal, then --status sets the task holding the issue
+      (teamrig set, with --note, --evidence, --skill, --followups, --waits, --proof; status words as the
+      label shows them, such as 'in review', also go), and it sends the issue's status label and
+      assignee from the register, --assign, the --pr link (a closing line in its body, the issue's
+      labels on it), the --followup issue (named in the comment), then the comment last; the first
+      failure stops it, saying what was done, the comment not posted; a pull request needs labels and
+      takes no --status or --pr; refuses an empty text, a secret shape, private data (a home folder
       path, an e-mail address) or a task id in it; no saved token, or one that cannot be read, stops it
   issue edit <owner/name#n> --body-file <path>   replaces the body (the description) of one issue or
       pull request of the team's repositories with the file's text, with the same access and checks as
-      issue comment; the title, state, labels and assignees stay; the host keeps the old body in its
+      issue reply; the title, state, labels and assignees stay; the host keeps the old body in its
       edit history
   issue close <owner/name#n> [--comment <text>] [--reason completed|not-planned|duplicate]
       [--duplicate-of <owner/name#n>]   closes one issue or pull request of the team's repositories,
@@ -435,8 +511,8 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
   issue label <owner/name#n> [--add <label,...>] [--remove <label,...>]   adds labels to and takes
       labels off one issue or pull request of the team's repositories, with the same access; each
       label to add must already be one of the repository's, but design (talk only, not work to take
-      until agreed) and a label the repository's .github/labels.json defines, which it makes first
-      (MADE); the first failure stops it
+      until agreed), a label the repository's .github/labels.json defines and one the team's
+      github.areaOwners names, which it makes first (MADE); the first failure stops it
   issue similar <owner/name#n>   the issues the task list mirrors that may be duplicates of this one,
       best first: at most 3 at or above github.similarThreshold by TF-IDF over their titles and bodies,
       with no model and no GitHub call; reads the task list only, so issue sync must have added the issue
@@ -448,6 +524,14 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       request's head and prints the files it conflicts on against origin's newest base (its default
       branch unless --base) and the rebase it needs; changes no local branch or file of the clone and
       writes nothing to GitHub; refuses a folder whose origin is another repository
+  pr approve <owner/name#n> --head <sha> [--check]   approves one pull request of the team's repositories
+      at its head, with the token saved for the owner; refused, writing nothing, unless one task holds it
+      (its ref), the caller owns that task, the caller's leader approved it with a note naming the full
+      40-hex head (a root team's lead needs no one), and the pull request is open, no draft, on its default
+      branch and at the full head --head names; --check prints what it would do and writes nothing
+  pr merge <owner/name#n> --head <sha> [--check]   lands that pull request with the same gates, also
+      refused while it conflicts, is queued already or its head's checks have not all passed: into its
+      merge queue where the repository has one, else merged by rebase, both pinned to the head read
   issue links [--repo <owner/name>] [--yes]   puts the task tree on the issues of github.repos: each
       task planned after or waiting on another, both mirrored in one repository, is marked blocked by
       it on GitHub, and a part of one whole becomes its sub-issue; without --yes it reads the links
@@ -526,6 +610,11 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
   setup restore [<stamp>] [--yes] [--remove-new]   lists the backups, or previews putting one back:
       changed and deleted files and files made since; --yes backs the setup up first, then writes and
       prints the restore that undoes it; --remove-new also removes the files made since
+  setup hooks --host <name> [--yes]   puts teamrig's hooks into your own hooks file of a host that loads
+      no plugin's hooks (an unknown name lists those that do), beside your own handlers, which stay; teamrig's
+      earlier ones are replaced, so run it again after every teamrig update; without --yes it counts what
+      it would insert, keep, change and remove and writes nothing; --yes keeps the old file first; it never
+      trusts the hooks for you: trust them in the host's own hooks review after each write
   setup scan [--project <dir>] [--days <n>] [--max-mb <n>]   what the Claude Code setup costs every turn
       in the project (default: the team's, else the working folder) and what to slim: each file and the
       skill and agent type listings a session loads, with chars and tokens; files over 6,000 chars, skill
@@ -546,6 +635,9 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       the first teamrig that reads it, as a tab on an older one refuses every write after; --yes writes it
   commits check --base <ref> [--tip <ref>]   commits in base..tip (default HEAD) over the size rule
       with no reason line; any is REFUSED, for a merge script or CI
+  changes --since <version|date> [--until <version|date>] [--file <path>] [--area <area>]   what changed
+      in the team's project, newest release first: its change notes, its tasks and its commits
+      (changes.sources); a version it never released is REFUSED with the ones it did
   secrets staged | secrets message <file> | secrets pushed <remote>   for git's pre-commit, commit-msg and
       pre-push hooks: a secret the staged change, the message or the pushed commits and tags add is REFUSED,
       named by place and shape, never by value; default shapes and paths outside a team, plus the team's own
@@ -579,7 +671,7 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       delivery.queue.maxRunMinutes (--max-minutes; the time its share is set aside by teamrig step-away does
       not count) and records its start and end in the delivery
       ledger, with its --kind (build, test, lint, push, merge, deploy, other or ship; default read from the
-      command; a ship, merge or deploy holds the host's one ship slot: a second one waits as shipSlot while other steps
+      command; a ship, merge or deploy holds its repository's ship slot: a second one there waits as shipSlot while other steps
       pass it) and --task (default the first task id in --what, else for a ship tool's step the task its worktree's branch
       names); once the shell that started it ends, it kills a running step (exit 129); a
       waiting one goes on as a detached run that keeps its place in line while the tab's Claude Code runs (not a git hook's
@@ -716,6 +808,13 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       file as --small, anything more as a heavy step; exit 0 when the command passed, 1 otherwise. One
       quoted word runs as a shell line ("npm run build && npm test"); several run as one command, each
       word passed as is, so a word that is only &&, || or ; is REFUSED before anything runs
+  gh -- <gh args ...>          runs one gh call with the key saved for the owner of the repository it
+      reaches (-R, a gh api repos/, orgs/ or users/ path, a gh repo command's repository, else GH_REPO,
+      else the folder's git remotes), never the machine's gh login; REFUSED when it reaches more than
+      one owner or none teamrig can tell, for gh auth, config, alias, extension and any alias or
+      extension, for a host other than github.com, and for a write on one of the team's github.repos,
+      which names the teamrig command to run instead; gh runs up to 60 s and 32 MB of output; exit 0
+      when gh did, 1 otherwise, adding a line naming the key when gh says it lacks a right
   hook push-guard | hook package-guard | hook secret-guard | hook db-write-guard | hook exec-guard | hook pass-record-guard | hook service-role-guard | hook cold-send | hook failed-send | hook missing-cli | hook route-reminder | hook loop-nudge | hook secret-redact | hook helper-gate | hook inbox-reminder | hook session-start | hook stop | hook subagent-start | hook subagent-stop | hook refresh-wake | hook restore-track | hook effort-writeback | hook tab-status | hook pre-compact | hook tool-end | hook readonly-allow | hook picker-guard | hook prompt-refuse | hook route-allow
       (run by Claude Code, hook JSON on stdin)
   hook clear-dir | hook clear-claim [--hold [--why <reason>]] [--end]

@@ -1,15 +1,14 @@
-import { join } from 'node:path';
 import { claudeProjectsDir } from '../../budget/discover.ts';
-import { launchOf } from '../../config/launch.ts';
+import { launchModelProblem, launchOf, ownLaunchOf, type LaunchHost } from '../../config/launch.ts';
 import { Roster } from '../../config/roster.ts';
 import type { ContextFilesConfig, KitConfig } from '../../config/types.ts';
-import { claudeConfigDir, KIT_NAME } from '../../core/home.ts';
+import { KIT_NAME } from '../../core/home.ts';
 import type { PathProbe } from '../../core/path-probe.ts';
 import { readContextFiles } from '../../doctor/context-files.ts';
-import { readSettingsDeny, secretDenyLines } from '../../doctor/deny-lines.ts';
-import { doctorFindings, formatFinding, type ConfiguredProject, type ContextInput, type PageProblem, type SecretDeny } from '../../doctor/doctor.ts';
+import { readSettingsDeny } from '../../doctor/deny-lines.ts';
+import { doctorFindings, formatFinding, type ConfiguredProject, type ContextInput, type PageProblem, type SecretDeny, type SessionLaunch } from '../../doctor/doctor.ts';
 import { readSessionLists } from '../../doctor/session-lists.ts';
-import { claudeSettingsFiles, readSettingsEnv } from '../../doctor/settings-env.ts';
+import { readSettingsEnv, sessionSettingsFiles } from '../../doctor/settings-env.ts';
 import { readShellHistory } from '../../doctor/shell-history.ts';
 import { HiringLog } from '../../hiring/log.ts';
 import { retiredSessions } from '../../hiring/record.ts';
@@ -17,6 +16,7 @@ import { inboxStatus } from '../../inbox/inbox.ts';
 import { JsonlRenameLog } from '../../names/log.ts';
 import { readWideAllow } from '../allow-scope.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
+import { launchHostOf, pathsIfKnown, permissionsIfKept } from '../host.ts';
 import { openTeamKit, projectFolder, requireConfig, teamZone } from '../kit.ts';
 import { readLeadStart } from '../lead-start.ts';
 import { pageCheckOf, type PageCheck } from '../login-page.ts';
@@ -26,14 +26,15 @@ import { loadTree } from '../tree.ts';
 import { inboxDepsOf } from './inbox.ts';
 
 /**
- * What the context findings weigh (`ContextInput`): the CLAUDE.md files, memory index and skill listing of `project`,
- * the user's Claude Code folder and the `skills` folder against `budgets`, and the lists of the project's newest
- * session, its transcript read in chunks. `doctor` and `check` read it.
+ * What the context findings weigh (`ContextInput`): the instruction files, memory index and skill listing of `project`
+ * against `budgets`, read from the places the run's host names, and the lists of the project's newest session, its
+ * transcript read in chunks. `doctor` and `check` read it, and both go on where teamrig does not know the host's
+ * folders: only the team's `skills` folder is weighed there.
  */
 export async function readContextInput(runtime: CliRuntime, project: string, skills: string, budgets: ContextFilesConfig): Promise<ContextInput> {
-  const claudeDir = claudeConfigDir(runtime.env, runtime.userHome);
+  const at = { paths: pathsIfKnown(runtime), userHome: runtime.userHome, project, skills };
   return {
-    contextFiles: { read: await readContextFiles(runtime.files, { claudeDir, project, skills }), budgets },
+    contextFiles: { read: await readContextFiles(runtime.files, at), budgets },
     sessionLists: await readSessionLists(runtime.transcripts, claudeProjectsDir(runtime.env, runtime.userHome), project),
   };
 }
@@ -44,21 +45,32 @@ async function configuredProjects(probe: PathProbe, config: KitConfig, ids: read
   const named: readonly Omit<ConfiguredProject, 'kind'>[] = [
     ...(team === undefined ? [] : [{ session: undefined, path: team }]),
     ...ids.flatMap((id) => {
-      const path = launchOf(config, id).project;
+      const path = ownLaunchOf(config, id).project;
       return path === undefined ? [] : [{ session: id, path }];
     }),
   ];
   return Promise.all(named.map(async (entry) => ({ ...entry, kind: await probe.kind(entry.path) })));
 }
 
+/** The settings files a session started in `project` reads; none on a host whose folders teamrig does not know. */
+function sessionSettingsOf(runtime: CliRuntime, project: string): string[] {
+  const host = pathsIfKnown(runtime);
+  return host === undefined ? [] : sessionSettingsFiles({ paths: host, userHome: runtime.userHome }, project);
+}
+
 /**
- * The `permissions.deny` lines of the Claude Code settings a session in `project` reads (the user's, then the
- * project's shared and local ones), and the user's file, where the missing secret deny lines go. `doctor` and `check` read it.
+ * The `permissions.deny` lines of the settings files a session in `project` reads (`sessionSettingsFiles`), and the
+ * person's own file, where the missing secret deny lines go. `doctor` and `check` read it, and both go on where the
+ * host's folders are not known: it is undefined there, with no file to read or to name.
  */
-export async function readSecretDeny(runtime: CliRuntime, project: string): Promise<SecretDeny> {
-  const claudeDir = claudeConfigDir(runtime.env, runtime.userHome);
-  const paths = claudeSettingsFiles(claudeDir, project);
-  return { files: await readSettingsDeny(runtime.files, paths), lines: secretDenyLines(runtime.platform), pasteInto: join(claudeDir, 'settings.json') };
+export async function readSecretDeny(runtime: CliRuntime, project: string): Promise<SecretDeny | undefined> {
+  const host = pathsIfKnown(runtime);
+  const permissions = permissionsIfKept(runtime);
+  if (host === undefined || permissions === undefined) {
+    return undefined;
+  }
+  const paths = sessionSettingsFiles({ paths: host, userHome: runtime.userHome }, project);
+  return { files: await readSettingsDeny(permissions, runtime.files, paths), lines: permissions.denyLines(runtime.platform), pasteInto: host.userSettings(runtime.userHome) };
 }
 
 /** The doctor's view of a page check: only a page webhook that gives no URL is a finding. */
@@ -82,6 +94,15 @@ function pageProblemOf(check: PageCheck): PageProblem | undefined {
  * alerts name that resolves to no https URL (src/cli/login-page.ts; resolved, never posted or printed). It reads only and exits 0
  * like `check`: a finding is advice, and each line says the fix. `check` prints the context, allow and deny findings too.
  */
+/** Each session's launch as it starts on this host, with why the host would not run its model. */
+function sessionLaunches(config: KitConfig, ids: readonly string[], host: LaunchHost): SessionLaunch[] {
+  return ids.map((id) => {
+    const launch = launchOf(config, id, host.leadDefault);
+    const modelProblem = launchModelProblem(launch, host);
+    return { id, launch, ...(modelProblem === undefined ? {} : { modelProblem }) };
+  });
+}
+
 export async function doctor(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
   const kit = await openTeamKit(runtime);
@@ -90,7 +111,6 @@ export async function doctor(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
   const renameLog = await new JsonlRenameLog(runtime.files, paths.renames).read();
   const kitTree = await loadTree(runtime);
   const { tree } = kitTree;
-  const claudeDir = claudeConfigDir(runtime.env, runtime.userHome);
   const project = await projectFolder(runtime, config);
   const roster = new Roster(config, paths.team, renameLog.renames);
   const { records } = await new HiringLog(runtime.files, paths.hires).read();
@@ -106,10 +126,10 @@ export async function doctor(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
     ...(await readContextInput(runtime, project, paths.skills, config.contextFiles)),
     tree: { problems: tree.problemsOf(paths.team), clashes: tree.nameClashesOf(paths.team) },
     env: runtime.env,
-    settingsEnv: await readSettingsEnv(runtime.files, claudeSettingsFiles(claudeDir, project)),
+    settingsEnv: await readSettingsEnv(runtime.files, sessionSettingsOf(runtime, project)),
     settingsDeny: await readSecretDeny(runtime, project),
     wideAllow: await readWideAllow(runtime, { paths, config, project }),
-    launches: roster.ids.map((id) => ({ id, launch: launchOf(config, id) })),
+    launches: sessionLaunches(config, roster.ids, launchHostOf(runtime)),
     projects: await configuredProjects(runtime.probe, config, roster.ids),
     shellHistory: await readShellHistory(runtime.files, runtime.probe, { env: runtime.env, userHome: runtime.userHome, platform: runtime.platform }),
     page: pageProblemOf(await pageCheckOf(runtime, paths.team)),

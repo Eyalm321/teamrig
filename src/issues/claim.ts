@@ -2,8 +2,8 @@ import { isRecord } from '../core/guards.ts';
 import { parseObject, toJsonlLine, VERSION_FIELD } from '../core/jsonl.ts';
 import { DESIGN_LABEL } from './design-label.ts';
 import type { HostIssue, IssueComment, ReadComment } from './issue.ts';
-import { isLogin } from '../github/gh.ts';
-import { isInsider, issueTrust } from '../github/trust.ts';
+import { isLogin } from './login.ts';
+import { isInsider, issueTrust } from '../sync/trust.ts';
 
 /**
  * A contributor claims an open issue by a comment, and code assigns them (T3021 design, section 1). This file holds
@@ -120,7 +120,7 @@ export interface ClaimPass {
 }
 
 /**
- * The most issues one claim pass reads the new comments of in a repository (IssueHost.newComments, one page each),
+ * The most issues one claim pass reads the new comments of in a repository (Comments.newComments, one page each),
  * so a flood of comments cannot turn one sync into hundreds of reads; the rest wait for the next pass.
  */
 export const CLAIM_READS = 10;

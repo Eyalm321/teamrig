@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import type { HostSource } from '../composition/host-ports.ts';
 import type { JsonRecord } from '../core/guards.ts';
+import { bareHost } from '../testing/bare-host.ts';
 import { RestartLog } from '../refresh/restart-log.ts';
 import type { RefreshState, RestartTab } from '../refresh/state.ts';
 import { RefreshStore } from '../refresh/store.ts';
 import { CliHarness, TEAM, TEAM_HOME } from '../testing/cli-harness.ts';
+import { hostRunning } from '../testing/host.ts';
 import { EXIT } from './runtime.ts';
 
 /** The harness's clock is 2030-01-08 10:00 UTC. */
@@ -30,8 +33,9 @@ async function harness(config: JsonRecord = ON, state: RefreshState = READY, las
   return { kit, store };
 }
 
-async function stalledLines(kit: CliHarness): Promise<string[]> {
-  const result = await kit.run(['check', '--all'], { env: { TEAMRIG_SESSION: 'lead' } });
+/** The check's RESTART-STALLED lines, on the shipped host or on `host`. */
+async function stalledLines(kit: CliHarness, host?: HostSource): Promise<string[]> {
+  const result = await kit.run(['check', '--all'], { env: { TEAMRIG_SESSION: 'lead' }, ...(host === undefined ? {} : { host }) });
   assert.equal(result.code, EXIT.ok, result.stderr.join('\n'));
   return result.stdout.filter((line) => line.includes('RESTART-STALLED')).map((line) => line.trim());
 }
@@ -57,6 +61,13 @@ describe('RESTART-STALLED (#705)', () => {
   it('counts the quiet from the ready state when the transcript cannot be read', async () => {
     const { kit } = await harness(ON, { ...READY, transcript: null });
     const [line] = await stalledLines(kit);
+    assert.match(line ?? '', /has sat 30 min with its handover ready since 09:30 UTC/);
+  });
+
+  it('counts the quiet from the ready state too on a host whose transcript teamrig cannot read', async () => {
+    const bare: HostSource = bareHost;
+    const { kit } = await harness();
+    const [line] = await stalledLines(kit, bare);
     assert.match(line ?? '', /has sat 30 min with its handover ready since 09:30 UTC/);
   });
 
@@ -89,6 +100,16 @@ describe('RESTART-STALLED (#705)', () => {
     const reused = await harness();
     reused.kit.sessionProcesses.add({ pid: 4242, parentPid: 4000, name: 'node.exe', commandLine: 'node server.js' });
     assert.deepEqual(await stalledLines(reused.kit), []);
+  });
+
+  it("asks the hosts which program runs a session: one in the running host's own program is still flagged, and on another host that program's tab is gone", async () => {
+    const DESK = { pid: 4242, parentPid: 4000, name: 'agent-desk', commandLine: 'agent-desk --resume c-bravo' };
+    const own = await harness();
+    own.kit.sessionProcesses.add(DESK);
+    assert.equal((await stalledLines(own.kit, hostRunning('agent-desk'))).length, 1);
+    const other = await harness();
+    other.kit.sessionProcesses.add(DESK);
+    assert.deepEqual(await stalledLines(other.kit), []);
   });
 
   it('still flags a session whose ready state recorded no Claude Code process, as it cannot tell its tab is gone', async () => {

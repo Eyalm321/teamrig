@@ -1,5 +1,6 @@
 import type {
   AlertsConfig,
+  ChangesConfig,
   FreezesConfig,
   DeliveryWaitConfig,
   QueueConfig,
@@ -18,7 +19,6 @@ import type {
   IdleConfig,
   ExecConfig,
   HiringConfig,
-  LaunchConfig,
   LockConfig,
   LeadBoundaryConfig,
   LoopsConfig,
@@ -97,10 +97,12 @@ export const DEFAULT_REGISTER: RegisterConfig = {
    * 3 at the median and 9 at the 90th percentile; the two days past 10 (36 and 19) were the run that raised the question.
    * goalProgressDays: a working day that moves no planned task is the drift to catch the next morning.
    * overSizeMultiple: the old register flagged a task whose cost passed twice its estimate (T327).
+   * blockerOpenAfterHours: a blocker is fixed now, so half a working day unfixed is the time to ask why (T4329).
    */
   check: {
     staleAfterHours: 72,
     notPickedUpAfterHours: 24,
+    blockerOpenAfterHours: 4,
     prioritySkipAfterHours: 24,
     maxSelfMadePerDay: 10,
     goalProgressDays: 1,
@@ -137,6 +139,9 @@ export const DEFAULT_CONTEXT_FILES: ContextFilesConfig = {
 };
 
 export const DEFAULT_LOCK: LockConfig = { ttlMs: 300_000, pollMs: 50, waitMs: 20_000 };
+
+/** No change sources named: `teamrig changes` reads every one that applies to the project. */
+export const DEFAULT_CHANGES: ChangesConfig = { sources: [] };
 
 /** No exec PATH: a privileged command names its program by absolute path until the team lists its tool folders. */
 export const DEFAULT_EXEC: ExecConfig = { path: [] };
@@ -251,13 +256,10 @@ export const DEFAULT_ALERTS: AlertsConfig = { persistentFailureHours: 24 };
 /** The remote a repository's merge command merges into when `merge.remote` is unset. */
 export const DEFAULT_MERGE_REMOTE = 'origin';
 
-/** Where `teamrig worktree add` makes a repository's worktrees when `worktreeFolder` is unset: in its main checkout, where Claude Code makes its own. */
-export const DEFAULT_WORKTREE_FOLDER = '.claude/worktrees';
-
 /** A repository's docs folder when `docsFolder` is unset: `docs` at its root, where most projects keep theirs. */
 export const DEFAULT_DOCS_FOLDER = 'docs';
 
-export const DEFAULT_DECISIONS: DecisionsConfig = { batchTimesUtc: [], batchAt: 5, dedicatedOwners: [] };
+export const DEFAULT_DECISIONS: DecisionsConfig = { batchTimesUtc: [], batchAt: 5, dedicatedOwners: [], ownMeetingTeams: [] };
 
 export const DEFAULT_LOOPS: LoopsConfig = { chainNudgeAt: 3 };
 export const DEFAULT_LEAD_BOUNDARY: LeadBoundaryConfig = { enabled: true, ownPaths: [], searchNudgeAt: 3 };
@@ -283,7 +285,7 @@ export const DEFAULT_MEETING_NOTICES: MeetingNoticesConfig = {
  * caps a session at 4 an hour however much is handed. No day start: waking every session each morning costs up to
  * 210k W each, so a team opts in with `wake.dayStartUtc`.
  */
-export const DEFAULT_WAKE: WakeConfig = { enabled: true, priority: 1, batchSeconds: 120, minGapMinutes: 15 };
+export const DEFAULT_WAKE: WakeConfig = { enabled: true, priority: 1, batchSeconds: 120, minGapMinutes: 15, maxGapMinutes: 30 };
 
 /**
  * The agenda panel is on: it shows only in the lead's tab while a meeting is open, so it costs no other tab anything.
@@ -493,11 +495,3 @@ export const DEFAULT_HIRING: HiringConfig = {
   scaleOut: DEFAULT_SCALE_OUT,
 };
 
-/**
- * The lead's model and effort for each key its `launch` entry leaves unset: Opus (Claude Code's `opus`
- * alias, its newest Opus) at xhigh effort, since the lead plans, splits and judges the whole team's work.
- * Not `best`: in a lead A/B, Fable at xhigh judged no better than Opus and cost 2.4 times as much. A team
- * sets `launch.<lead id>.model` to `best` or a full model id to change it. The other sessions default to
- * Claude Code's own.
- */
-export const DEFAULT_LEAD_LAUNCH: Required<Pick<LaunchConfig, 'model' | 'effort'>> = { model: 'opus', effort: 'xhigh' };

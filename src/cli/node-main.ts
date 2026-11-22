@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import type { Writable } from 'node:stream';
 import { text } from 'node:stream/consumers';
 import { nodeTranscriptSource } from '../budget/discover.ts';
+import { HOST_PROGRAM_TIMEOUT_MS, loadHostPorts, loadShippedHosts } from '../composition/host-ports.ts';
 import { nodeFileBytes } from '../core/file-bytes.ts';
 import { nodeFiles } from '../core/files.ts';
 import { GIT_TREES } from '../delivery/git-tree.ts';
@@ -12,18 +13,21 @@ import { launchingShellsOf, nodeEvery, starterWatch } from '../delivery/starter-
 import { nodeStepRunner } from '../delivery/steps.ts';
 import { realSleep, systemClock } from '../core/lock.ts';
 import { NODE_PATH_PROBE } from '../core/path-probe.ts';
-import { NODE_STORE_FOLDERS } from '../core/node-store-folders.ts';
+import { NODE_STORE_FOLDERS } from '../plugin-store/node-folders.ts';
 import { chatWebhook } from '../core/webhook.ts';
-import { nodeProgramRunner, systemCredentials } from '../github/credentials.ts';
+import { CREDENTIAL_TIMEOUT_MS, systemCredentials } from '../core/credentials.ts';
+import { nodeHttpClient } from '../core/http.ts';
+import { nodeProgramRunner } from '../core/program-runner.ts';
 import { GIT_CHECKOUT } from '../exec/binding.ts';
 import { nodeExecSpawner } from '../exec/runner.ts';
-import { nodeGhRunner } from '../github/gh.ts';
-import { GIT_PULLS } from '../github/pull-conflicts.ts';
+import { CONNECTOR_RUN_MAX_BYTES, CONNECTOR_RUN_TIMEOUT_MS } from '../plugin-api/index.ts';
+import { GIT_PULLS } from '../sync/pull-conflicts.ts';
 import { GIT_MERGE } from '../merge/git.ts';
 import { nodeProcesses } from '../open/processes.ts';
 import { nodeSessionProcesses } from '../open/session-processes.ts';
 import { httpPackageRegistry } from '../package-guard/registry.ts';
 import { GIT_CLI, GIT_COMMIT_LOG } from '../push-guard/git.ts';
+import { GIT_CHANGES } from '../changes/git.ts';
 import { gitSecrets } from '../secret-guard/secrets-git.ts';
 import { GIT_POINTER } from '../setup/pointer-git.ts';
 import { requirementsCheck } from '../requirements/requirements.ts';
@@ -37,6 +41,7 @@ import { SHORTCUT_QUERY_TIMEOUT_MS, systemShortcutPlace } from '../restore/short
 import { SHUTDOWN_QUERY_TIMEOUT_MS, systemShutdownLog } from '../restore/shutdowns.ts';
 import { processStopWatch } from '../restore/stops.ts';
 import { CMD_SHIM_LINE_ENV } from './cmd-shim.ts';
+import { sessionProcessCheckOf } from './host.ts';
 import { runCli } from './run.ts';
 import type { ExitCode, Output } from './runtime.ts';
 
@@ -53,22 +58,29 @@ export interface NodeEntry {
   readonly readStdin: () => Promise<string>;
 }
 
-/** The process's own stdout and stderr, a line at a time. */
-export const PROCESS_OUTPUT: Output = {
-  stdout: (line) => process.stdout.write(`${line}\n`),
-  stderr: (line) => process.stderr.write(`${line}\n`),
-};
+/** The process's own stdout and stderr, a line at a time; `stdoutClosed` is what `ignoreClosedPipe` gave for stdout. */
+export function processOutput(stdoutClosed: AbortSignal): Output {
+  return {
+    stdout: (line) => process.stdout.write(`${line}\n`),
+    stderr: (line) => process.stderr.write(`${line}\n`),
+    closed: stdoutClosed,
+  };
+}
 
 /**
  * Ends the stack dump a reader that closed early causes (`teamrig show T1 | head -2`): the write fails with EPIPE, and
  * with no 'error' listener node throws it as an uncaught exception. The run goes on to its own exit code, since a
  * command that also writes files must not stop halfway because nobody reads its output; any other stream error still
- * throws as before.
+ * throws as before. The signal it returns aborts at that EPIPE, for the command that only prints and so has to end
+ * with its reader (`Output.closed`).
  */
-export function ignoreClosedPipe(stream: Writable): void {
+export function ignoreClosedPipe(stream: Writable): AbortSignal {
+  const closed = new AbortController();
   stream.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code !== 'EPIPE') throw error;
+    closed.abort();
   });
+  return closed.signal;
 }
 
 /**
@@ -82,6 +94,12 @@ export async function runWithNode(argv: readonly string[], entry: NodeEntry): Pr
   const cmdShimLine = process.env[CMD_SHIM_LINE_ENV];
   delete process.env[CMD_SHIM_LINE_ENV];
   const sessionProcesses = nodeSessionProcesses();
+  const hostPrograms = nodeProgramRunner(HOST_PROGRAM_TIMEOUT_MS);
+  const host = await loadHostPorts(hostPrograms);
+  const shippedHosts = await loadShippedHosts(hostPrograms);
+  // The watch of this run's starters stops at the session that started it, which the hosts tell: built here, as the
+  // watch is a part of the runtime the hosts are handed to.
+  const isSessionProcess = sessionProcessCheckOf({ host, shippedHosts, env: process.env, platform: process.platform });
   return runCli(argv, {
     env: process.env,
     userHome: homedir(),
@@ -98,15 +116,18 @@ export async function runWithNode(argv: readonly string[], entry: NodeEntry): Pr
     secretsGit: gitSecrets(process.env),
     out: entry.out,
     platform: process.platform,
+    host,
+    shippedHosts,
     processes: nodeProcesses(),
     sessionProcesses,
-    starters: starterWatch(sessionProcesses, { pid: process.pid, shells: launchingShellsOf(process.env, process.ppid) }, nodeEvery),
+    starters: starterWatch(sessionProcesses, { pid: process.pid, shells: launchingShellsOf(process.env, process.ppid) }, isSessionProcess, nodeEvery),
     shell: nodeShellRunner(),
     steps: nodeStepRunner(process.platform),
     memory: nodeHostMemory(process.platform),
     cpu: nodeHostCpu(),
-    gh: nodeGhRunner(),
-    credentials: systemCredentials(process.platform, nodeProgramRunner()),
+    run: nodeProgramRunner(CONNECTOR_RUN_TIMEOUT_MS, CONNECTOR_RUN_MAX_BYTES),
+    credentials: systemCredentials(process.platform, nodeProgramRunner(CREDENTIAL_TIMEOUT_MS)),
+    http: nodeHttpClient(),
     probe: NODE_PATH_PROBE,
     pluginStore: NODE_STORE_FOLDERS,
     transcripts: nodeTranscriptSource,
@@ -122,6 +143,7 @@ export async function runWithNode(argv: readonly string[], entry: NodeEntry): Pr
     },
     mergeGit: GIT_MERGE,
     pulls: GIT_PULLS,
+    changeGit: GIT_CHANGES,
     trees: GIT_TREES,
     hooks: nodeHookRunner(process.platform),
     packageRegistry: httpPackageRegistry(),

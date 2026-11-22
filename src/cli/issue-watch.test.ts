@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { JsonRecord } from '../core/guards.ts';
 import type { Sleep } from '../core/lock.ts';
 import { KIT_VERSION } from '../core/version.ts';
-import { formatWatchLease, LIFETIME_MS, parseWatchLease } from '../github/watch.ts';
+import { formatWatchLease, LIFETIME_MS, parseWatchLease } from '../sync/watch.ts';
 import type { HiddenRequest, StartOutcome } from '../open/processes.ts';
 import { SessionRecordStore } from '../sessions/record.ts';
 import { APP, CLAUDE_SESSION, CLI_PID, CliHarness, CONFIG_PATH, TEAM, TEAM_HOME } from '../testing/cli-harness.ts';
@@ -261,6 +261,7 @@ describe('teamrig issue watch', () => {
       [{ ...TEAM, github: { repos: ['acme/web'], probeSeconds: 0 } }, {}, 'github.probeSeconds is 0: the sync runs only with issue sync --yes'],
       [TEAM, {}, 'no repository is listed under github.repos'],
       [WATCH_TEAM, { TEAMRIG_GITHUB: 'off' }, 'TEAMRIG_GITHUB=off turns the GitHub import off on this machine'],
+      [WATCH_TEAM, { TEAMRIG_CONNECTOR_GITHUB: 'off' }, 'TEAMRIG_CONNECTOR_GITHUB=off turns the GitHub import off on this machine'],
     ] as const) {
       const kit = new CliHarness(config);
       const result = await kit.run(['issue', 'watch'], { env });

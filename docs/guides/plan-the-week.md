@@ -23,6 +23,7 @@ teamrig plan                                       # the week in force, grouped 
 ```
 
 - What goes first: `list`, `plan` and `start` rank by band, then score, and each row shows its class and score. A
+  `blocker` its owner can take up comes before all (its owner starts nothing else until it is fixed). A `blocker` or
   `p0`, a Maintenance task marked critical and a `p1` you asked for go ahead of every score, then Roadmap and
   Maintenance, then the rest. Within a band, a task that cannot move yet (a wait not cleared, or it comes after a task
   not finished) goes after the ones that can. The score is what a delay costs (the value of the class and the best goal
@@ -101,6 +102,9 @@ Week: 31.0% used at 12:00 IDT (status line); the pace line is at 28.6%: 2.4 poin
   today, the lead is told.
 - Past its part once the team has no room, a session is held: only p0 work wakes it or keeps its idle tab open, and
   its helper launches can be held too ([the daily budget](../../plugins/teamrig/skills/teamrig-guide/hooks.md#the-daily-budget-warnings-and-the-helper-gate)).
+- The security reviewer and the GitHub answerer (`github.watcher`, else the `issue close` service role's holder)
+  are never held, cut or paused by the budget, as other sessions and outside contributors wait on them; only a
+  leader's `teamrig budget cut --stop` holds them.
 - A leader moves budget for a day: `teamrig budget lift` gives one session, or a sub-lead's group, a part of its
   parent's daily budget until a stop % (at most `budget.lift.maxStopPct`, 99.3), the end of the day or `--until`;
   the lead also tops up a session of a team under its own, `<team>/<session>`, from its own team's daily budget.
@@ -112,7 +116,8 @@ Week: 31.0% used at 12:00 IDT (status line); the pace line is at 28.6%: 2.4 poin
   or the week's reset.
 - On a short day, when the week's use is past its pace line so what is left gives the day less than the line plans,
   every session keeps its part by default. With `budget.pauseByPriority` on, the day funds the work in priority order
-  instead, across every team on the Claude account: the lead, the delivery owner and lifted sessions first, then
+  instead, across every team on the Claude account: the lead, the delivery owner, the security reviewer, the GitHub
+  answerer and lifted sessions first, then
   the sessions by their top queued task, p0 first, idle sessions last. A session none of it reaches gets a daily budget of 0, marked
   `(paused)`: room or not, only p0 work wakes it, and it is held once the team has no room; a burst's floor still
   holds it up.

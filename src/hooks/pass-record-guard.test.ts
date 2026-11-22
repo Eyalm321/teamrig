@@ -1,11 +1,18 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { passRecordGuardOutput, passRecordReach, passRecordReason } from './pass-record-guard.ts';
+import type { JsonRecord } from '../core/guards.ts';
+import { editEventOf, hookEventOf, replyText } from '../testing/host.ts';
+import { passRecordGuardReply, passRecordReach as reachOf, passRecordReason } from './pass-record-guard.ts';
 
 const RECORD = 'C:/work/repo/.git/local-ci/0123abcd.json';
 
-const call = (tool_name: string, tool_input: Record<string, string>): Record<string, unknown> => ({ hook_event_name: 'PreToolUse', tool_name, tool_input });
-const shell = (command: string, tool = 'Bash'): Record<string, unknown> => call(tool, { command });
+const call = (tool_name: string, tool_input: Record<string, string>): JsonRecord => ({ hook_event_name: 'PreToolUse', tool_name, tool_input });
+const shell = (command: string, tool = 'Bash'): JsonRecord => call(tool, { command });
+
+/** The guard on a hook payload, as the shipped host reads it. */
+const passRecordReach = (payload: JsonRecord): string | undefined => reachOf(hookEventOf(payload));
+/** What the hook prints for a payload. */
+const passRecordGuardOutput = (payload: JsonRecord): string => replyText('tool-start', passRecordGuardReply(hookEventOf(payload)));
 
 describe('passRecordReach', () => {
   it('names a file tool writing in the records folder, whatever its slashes, case or root', () => {
@@ -18,6 +25,13 @@ describe('passRecordReach', () => {
     ] as const) {
       assert.match(passRecordReach(call(tool, { [field]: path })) ?? '', new RegExp(`^this ${tool} writes `), path);
     }
+  });
+
+  it('names an edit of several files when any one is in the records folder, not only the first', () => {
+    const other = { path: 'C:/work/repo/src/a.ts', texts: ['x'], change: undefined };
+    const record = { path: RECORD, texts: ['{}'], change: undefined };
+    assert.equal(reachOf(editEventOf({ tool_name: 'apply_patch' }, [other, record])), `this apply_patch writes ${RECORD}, in the folder of the trees' pass records`);
+    assert.equal(reachOf(editEventOf({ tool_name: 'apply_patch' }, [other, { ...other, path: undefined }])), undefined);
   });
 
   it('passes a file tool writing anywhere else, the code that names the folder too', () => {
@@ -52,7 +66,7 @@ describe('passRecordReach', () => {
   });
 });
 
-describe('passRecordGuardOutput', () => {
+describe('passRecordGuardReply', () => {
   it('refuses a call that reaches a record, with the reason', () => {
     const reach = `this Write writes ${RECORD}, in the folder of the trees' pass records`;
     assert.deepEqual(JSON.parse(passRecordGuardOutput(call('Write', { file_path: RECORD }))), {
@@ -60,11 +74,10 @@ describe('passRecordGuardOutput', () => {
     });
   });
 
-  it('prints nothing for a call that does not, or input that is not a payload', () => {
+  it('gives no reply for a call that does not, or an event with no call', () => {
     assert.equal(passRecordGuardOutput(shell('git status')), '');
-    for (const payload of [null, 'text', 3, []]) {
-      assert.equal(passRecordGuardOutput(payload), '', String(payload));
-    }
+    assert.equal(passRecordGuardReply(hookEventOf(shell('git status'))), undefined);
+    assert.equal(passRecordGuardReply(hookEventOf({ hook_event_name: 'PreToolUse' })), undefined);
   });
 
   it('says what to do instead and that it is not to be routed around', () => {

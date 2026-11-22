@@ -1,0 +1,364 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import { loadConnector } from '../composition/loader.ts';
+import { SecretScanner } from '../core/secrets.ts';
+import { GITHUB_REPOS_HOST } from '../issues/host.ts';
+import type { ConfigReport, ConnectorDeps, ConnectorPorts, JsonRecord, ProgramRunner, RefCodec } from '../plugin-api/index.ts';
+import { FakeCredentials, TEST_OWNERS } from '../testing/fake-credentials.ts';
+import { FakeGh } from '../testing/fake-gh.ts';
+import { FakeHttp } from '../testing/fake-http.ts';
+import { FakeIssueHost } from '../testing/fake-issue-host.ts';
+import { connectorDeclarationData } from '../testing/manifests.ts';
+import { programOverGh } from '../testing/program-over-gh.ts';
+import { SRC_DIR, sourcesUnder, underSrc } from '../testing/source-files.ts';
+import { codeHostOnly, trackerOnly } from '../testing/split-hosts.ts';
+import { hostsOf, reposOf, sectionOf, trackerOf, trackerPortsOf, type ConnectorLoader, type HostRuntime } from './issue-hosts.ts';
+import { RefusedError } from './runtime.ts';
+
+const OWN_ENV = { HOME: '/own' };
+
+/** A tracker connector's id, held here so no call below asks for a host by a name written into it. */
+const JIRA = 'jira';
+
+/** A program runner no spec here lets run: the hosts built over it are fakes. */
+const noProgram: ProgramRunner = () => Promise.reject(new Error('no program runs here'));
+
+/** The part of a CLI run a host is built from, with `run` as its runner of a connector's tool, an HTTP client of its own and a key saved for each test owner. */
+function runtimeWith(run: ProgramRunner = noProgram): HostRuntime {
+  return { run, http: new FakeHttp(), credentials: new FakeCredentials().savesTokensFor(TEST_OWNERS), env: OWN_ENV };
+}
+
+/**
+ * A loader that serves one adapter, whatever folder the loader asks for: its declaration is sound and names the id
+ * asked for, it reports `problems` of its config section, builds `ports`, and keeps the section it was handed and
+ * what it was handed to build them from. The real loader checks it, so the adapter hostsOf gets is one the loader
+ * accepted.
+ */
+function serving(
+  ports: ConnectorPorts,
+  problems: readonly (readonly [string, string])[] = [],
+): { readonly load: ConnectorLoader; readonly given: ConnectorDeps[]; readonly sections: JsonRecord[] } {
+  const given: ConnectorDeps[] = [];
+  const sections: JsonRecord[] = [];
+  const configure = (section: JsonRecord, report: ConfigReport): ((deps: ConnectorDeps) => ConnectorPorts) => {
+    sections.push(section);
+    for (const [key, problem] of problems) {
+      report(key, problem);
+    }
+    return (deps) => {
+      given.push(deps);
+      return ports;
+    };
+  };
+  return { load: (id) => loadConnector(id, () => Promise.resolve({ default: { declaration: connectorDeclarationData({ id }), configure } })), given, sections };
+}
+
+/** What `serving` was handed on its one build. */
+function onlyDeps(given: readonly ConnectorDeps[]): ConnectorDeps {
+  const [deps, ...more] = given;
+  assert.ok(deps !== undefined && more.length === 0, `the adapter built ${given.length} times`);
+  return deps;
+}
+
+function bothPorts(): Required<Pick<ConnectorPorts, 'tracker' | 'codeHost'>> {
+  const fake = new FakeIssueHost();
+  return { tracker: trackerOnly(fake), codeHost: codeHostOnly(fake) };
+}
+
+describe('hostsOf', () => {
+  it('gives the tracker and the code host its connector adapter builds', async () => {
+    const ports = bothPorts();
+    const { load } = serving(ports);
+    const hosts = await hostsOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, {}, load);
+    assert.equal(hosts.tracker, ports.tracker);
+    assert.equal(hosts.codeHost, ports.codeHost);
+  });
+
+  it("hands the adapter the run's HTTP client, saved secrets and environment, the scanner and the stamp as given", async () => {
+    for (const stamp of [true, false]) {
+      const { load, given } = serving(bothPorts());
+      const runtime = runtimeWith();
+      const scanner = new SecretScanner();
+      await hostsOf(GITHUB_REPOS_HOST, runtime, scanner, stamp, {}, load);
+      const deps = onlyDeps(given);
+      assert.equal(deps.http, runtime.http);
+      assert.equal(deps.credentials, runtime.credentials);
+      assert.equal(deps.env, runtime.env);
+      assert.equal(deps.scanner, scanner);
+      assert.equal(deps.stamp, stamp);
+    }
+  });
+
+  it("hands the adapter the run's own program runner, so each run of its tool keeps the connector limits that runner holds", async () => {
+    const { load, given } = serving(bothPorts());
+    const runtime = runtimeWith();
+    await hostsOf(GITHUB_REPOS_HOST, runtime, new SecretScanner(), true, {}, load);
+    assert.equal(onlyDeps(given).run, runtime.run);
+  });
+
+  it('fails, naming every reason, when the loader refuses the adapter', async () => {
+    const load: ConnectorLoader = (id) => Promise.resolve({ kind: 'refused', id, notices: ['it needs a name', 'its kinds must list tracker, codehost or both, each once'] });
+    await assert.rejects(hostsOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, {}, load), {
+      name: 'HostAdapterError',
+      message: 'the github connector adapter gave no host: it needs a name; its kinds must list tracker, codehost or both, each once',
+    });
+  });
+
+  it('fails as a failure and not a refusal, since no caller asked wrongly', async () => {
+    const load: ConnectorLoader = (id) => Promise.resolve({ kind: 'refused', id, notices: ['it needs a name'] });
+    await assert.rejects(hostsOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, {}, load), (error) => error instanceof Error && !(error instanceof RefusedError));
+  });
+
+  it('fails, naming each port it lacks, when the adapter builds no tracker or no code host', async () => {
+    const { tracker, codeHost } = bothPorts();
+    const cases: readonly (readonly [ConnectorPorts, string])[] = [
+      [{}, 'it builds no tracker; it builds no code host'],
+      [{ tracker }, 'it builds no code host'],
+      [{ codeHost }, 'it builds no tracker'],
+    ];
+    for (const [ports, reasons] of cases) {
+      await assert.rejects(hostsOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, {}, serving(ports).load), {
+        name: 'HostAdapterError',
+        message: `the github connector adapter gave no host: ${reasons}`,
+      });
+    }
+  });
+
+  it("refuses, naming each key by its path in the team config, when the adapter reports its config section, and builds nothing", async () => {
+    const { load, given } = serving(bothPorts(), [
+      ['site', 'must be a host name'],
+      ['projects', 'must list a project key'],
+    ]);
+    await assert.rejects(
+      hostsOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, {}, load),
+      new RefusedError('connectors.github.site must be a host name; connectors.github.projects must list a project key'),
+    );
+    assert.deepEqual(given, []);
+  });
+
+  it("hands the adapter the section the team wrote under its id, as written, and no other connector's (T4766)", async () => {
+    const own = { site: 'acme', projects: ['WEB'] };
+    const { load, sections } = serving(bothPorts());
+    await hostsOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, { other: { site: 'globex' }, [GITHUB_REPOS_HOST]: own }, load);
+    assert.deepEqual(sections, [own]);
+  });
+
+  it('hands the adapter an empty section, its defaults, when the team wrote none under its id (T4766)', async () => {
+    const { load, sections } = serving(bothPorts());
+    await hostsOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, { other: { site: 'globex' } }, load);
+    assert.deepEqual(sections, [{}]);
+  });
+
+});
+
+describe('trackerOf', () => {
+  it('gives the tracker of an adapter that builds no code host, as Jira does (T4912)', async () => {
+    const { tracker } = bothPorts();
+    const got = await trackerOf(JIRA, runtimeWith(), new SecretScanner(), true, {}, serving({ tracker }).load);
+    assert.equal(got, tracker);
+  });
+
+  it('gives the tracker of an adapter that builds both ports (T4912)', async () => {
+    const ports = bothPorts();
+    assert.equal(await trackerOf(GITHUB_REPOS_HOST, runtimeWith(), new SecretScanner(), true, {}, serving(ports).load), ports.tracker);
+  });
+
+  it('fails, naming the connector, when its adapter builds no tracker (T4912)', async () => {
+    const { codeHost } = bothPorts();
+    await assert.rejects(trackerOf(JIRA, runtimeWith(), new SecretScanner(), true, {}, serving({ codeHost }).load), {
+      name: 'HostAdapterError',
+      message: 'the jira connector adapter gave no host: it builds no tracker',
+    });
+  });
+
+  it("hands the adapter its own section and the run's parts, as hostsOf does (T4912)", async () => {
+    const own = { site: 'acme', projects: ['ENG'] };
+    const { load, given, sections } = serving(bothPorts());
+    const runtime = runtimeWith();
+    const scanner = new SecretScanner();
+    await trackerOf(JIRA, runtime, scanner, false, { github: { other: true }, jira: own }, load);
+    assert.deepEqual(sections, [own]);
+    const deps = onlyDeps(given);
+    assert.equal(deps.run, runtime.run);
+    assert.equal(deps.http, runtime.http);
+    assert.equal(deps.credentials, runtime.credentials);
+    assert.equal(deps.env, runtime.env);
+    assert.equal(deps.scanner, scanner);
+    assert.equal(deps.stamp, false);
+  });
+
+  it('refuses, naming each key by its path under the connector, and builds nothing (T4912)', async () => {
+    const { load, given } = serving(bothPorts(), [['site', 'must be a host name']]);
+    await assert.rejects(trackerOf(JIRA, runtimeWith(), new SecretScanner(), true, {}, load), new RefusedError('connectors.jira.site must be a host name'));
+    assert.deepEqual(given, []);
+  });
+
+  it('fails as a failure, naming every reason, when the loader refuses the adapter (T4912)', async () => {
+    const load: ConnectorLoader = (id) => Promise.resolve({ kind: 'refused', id, notices: ['it needs a name'] });
+    await assert.rejects(trackerOf(JIRA, runtimeWith(), new SecretScanner(), true, {}, load), (error) => error instanceof Error && error.name === 'HostAdapterError' && !(error instanceof RefusedError));
+  });
+
+  it('loads the Jira adapter teamrig ships when no loader is given (T4912)', async () => {
+    const tracker = await trackerOf(JIRA, runtimeWith(), new SecretScanner(), true, { jira: { site: 'acme' } });
+    assert.equal(tracker.name, 'Jira');
+  });
+});
+
+/** Issue refs that name no issue: trackerPortsOf only hands them on. */
+const NO_REFS: RefCodec = { refOf: () => undefined, parseRef: () => undefined, pageOf: () => undefined };
+
+describe('trackerPortsOf', () => {
+  it('gives the tracker, the places and the refs the adapter builds (T4912)', async () => {
+    const { tracker } = bothPorts();
+    const got = await trackerPortsOf(JIRA, runtimeWith(), new SecretScanner(), true, {}, serving({ tracker, targets: ['acme.atlassian.net/eng'], refs: NO_REFS }).load);
+    assert.deepEqual(got, { tracker, targets: ['acme.atlassian.net/eng'], refs: NO_REFS });
+  });
+
+  it('gives no place when the adapter names none (T4912)', async () => {
+    const { tracker } = bothPorts();
+    const got = await trackerPortsOf(JIRA, runtimeWith(), new SecretScanner(), true, {}, serving({ tracker, refs: NO_REFS }).load);
+    assert.deepEqual(got.targets, []);
+  });
+
+  it('fails, naming each missing port, when the adapter builds no tracker and gives no refs (T4912)', async () => {
+    const { codeHost } = bothPorts();
+    await assert.rejects(trackerPortsOf(JIRA, runtimeWith(), new SecretScanner(), true, {}, serving({ codeHost }).load), {
+      name: 'HostAdapterError',
+      message: 'the jira connector adapter gave no host: it builds no tracker; it gives no issue refs',
+    });
+  });
+
+  it('loads the Jira adapter teamrig ships, its places from its section (T4912)', async () => {
+    const got = await trackerPortsOf(JIRA, runtimeWith(), new SecretScanner(), true, { jira: { site: 'acme', projects: ['ENG'] } });
+    assert.equal(got.tracker.name, 'Jira');
+    assert.equal(got.targets.length, 1);
+  });
+});
+
+describe('sectionOf', () => {
+  it("gives the section written under an id, and an empty one for an id the team wrote none under (T4766)", () => {
+    const own = { site: 'acme' };
+    assert.equal(sectionOf({ tracker: own }, 'tracker'), own);
+    assert.deepEqual(sectionOf({ tracker: own }, 'other'), {});
+  });
+
+  it('reads no section for an id that only names what every object holds (T4766)', () => {
+    assert.deepEqual(sectionOf({}, 'constructor'), {});
+    assert.deepEqual(sectionOf({}, 'valueOf'), {});
+  });
+
+  it('loads the GitHub adapter teamrig ships when no loader is given', async () => {
+    const hosts = await hostsOf(GITHUB_REPOS_HOST, runtimeWith(programOverGh(new FakeGh())), new SecretScanner(), true, {});
+    assert.equal(hosts.tracker.name, 'GitHub');
+    assert.equal(hosts.codeHost.name, 'GitHub');
+    assert.equal((await hosts.tracker.reach('acme/web', 'read')).kind, 'reached');
+  });
+});
+
+describe('reposOf', () => {
+  it('reads every repository of the list, or the one asked for in any case', () => {
+    assert.deepEqual(reposOf(['acme/web', 'globex/api'], undefined), ['acme/web', 'globex/api']);
+    assert.deepEqual(reposOf(['acme/web', 'globex/api'], ' Acme/Web '), ['acme/web']);
+  });
+
+  it('refuses a repository the list does not name', () => {
+    assert.throws(() => reposOf(['acme/web'], 'acme/other'), new RefusedError('--repo acme/other is not one of github.repos (acme/web)'));
+  });
+});
+
+/**
+ * The CLI names no host: a command asks hostsOf for the host of a kind it read from the team config, and the kind's
+ * connector adapter builds it. So a second host is one more adapter and one more kind, and no command changes. Two
+ * things would undo that, and the scan below finds both: code beyond the GitHub adapter building GitHub's host itself,
+ * and a call that asks hostsOf or trackerOf for a host by a name written into it.
+ */
+
+/** The one file that builds GitHub's host, as a path under `src` with `/`. */
+const GITHUB_ADAPTER = 'adapters/connectors/github/index.ts';
+const GITHUB_HOST_CLASS = 'GitHubIssueHost';
+/** The calls that build a connector's ports from its id. */
+const PORT_BUILDERS: ReadonlySet<string> = new Set(['hostsOf', 'trackerOf', 'trackerPortsOf']);
+
+/** One place a source names a host, with its 1-based line. */
+interface HostNaming {
+  readonly line: number;
+  readonly text: string;
+}
+
+/** What `node` names of a host: a build of GitHub's own, or a hostsOf or trackerOf call whose id is a string written there. */
+function hostNamed(node: ts.Node, file: ts.SourceFile): string | undefined {
+  if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === GITHUB_HOST_CLASS) {
+    return `new ${GITHUB_HOST_CLASS}`;
+  }
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && PORT_BUILDERS.has(node.expression.text)) {
+    const [kind] = node.arguments;
+    return kind !== undefined && ts.isStringLiteralLike(kind) ? `${node.expression.text}(${kind.getText(file)})` : undefined;
+  }
+  return undefined;
+}
+
+/** The places a source names a host; a comment is no token, so an example in one is not a naming. */
+function hostNamings(fileName: string, source: string): HostNaming[] {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
+  const found: HostNaming[] = [];
+  const visit = (node: ts.Node): void => {
+    const text = hostNamed(node, file);
+    if (text !== undefined) {
+      found.push({ line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, text });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+describe('hostNamings', () => {
+  it("finds a build of GitHub's host and a hostsOf call that writes its kind as a string", () => {
+    const source = [
+      'const host = new GitHubIssueHost(gh, tokens, scanner, stamp);',
+      "const hosts = await hostsOf('github', runtime, scanner, stamp);",
+      'const more = await hostsOf(`github`, runtime, scanner, stamp);',
+      'const nested = wrap(() => new GitHubIssueHost(gh, tokens, scanner, stamp));',
+      "const tracker = await trackerOf('jira', runtime, scanner, stamp, sections);",
+    ].join('\n');
+    assert.deepEqual(hostNamings('a.ts', source), [
+      { line: 1, text: 'new GitHubIssueHost' },
+      { line: 2, text: "hostsOf('github')" },
+      { line: 3, text: 'hostsOf(`github`)' },
+      { line: 4, text: 'new GitHubIssueHost' },
+      { line: 5, text: "trackerOf('jira')" },
+    ]);
+  });
+
+  it('leaves a hostsOf call that passes its kind on, the class as a type, another build and a comment', () => {
+    const source = [
+      'const hosts = await hostsOf(GITHUB_REPOS_HOST, runtime, scanner, stamp);',
+      'const other = await hostsOf(kind, runtime, scanner, stamp);',
+      "import type { GitHubIssueHost } from '../adapters/connectors/github/host.ts';",
+      'function named(host: GitHubIssueHost): string { return host.name; }',
+      'const fake = new FakeIssueHost();',
+      "const text = 'new GitHubIssueHost(gh)';",
+      "// hostsOf('github', runtime, scanner, stamp) builds new GitHubIssueHost(...)",
+    ].join('\n');
+    assert.deepEqual(hostNamings('a.ts', source), []);
+  });
+});
+
+describe('teamrig code', () => {
+  it("builds GitHub's host in its connector adapter alone, and asks for no host by a name written into the call (T4619)", () => {
+    const files = sourcesUnder(SRC_DIR).filter((path) => underSrc(path) !== GITHUB_ADAPTER);
+    assert.ok(files.length > 100, `the scan read only ${files.length} files`);
+    const found = files.flatMap((path) => hostNamings(path, readFileSync(path, 'utf8')).map((naming) => `${underSrc(path)}:${naming.line} ${naming.text}`));
+    assert.deepEqual(found, []);
+  });
+
+  it('builds it in that adapter, so the scan above exempts a file that is there', () => {
+    const adapter = sourcesUnder(SRC_DIR).filter((path) => underSrc(path) === GITHUB_ADAPTER);
+    assert.deepEqual(
+      adapter.flatMap((path) => hostNamings(path, readFileSync(path, 'utf8')).map((naming) => naming.text)),
+      [`new ${GITHUB_HOST_CLASS}`],
+    );
+  });
+});

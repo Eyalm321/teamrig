@@ -1,9 +1,10 @@
 import { join } from 'node:path';
 import type { Files } from '../core/files.ts';
 import { isRecord, type JsonRecord } from '../core/guards.ts';
-import { appliesTo, INSTALLED_PLUGINS_FILE, installsOf, samePath } from '../core/installed-plugins.ts';
+import { appliesTo, samePath } from '../plugin-store/installs.ts';
 import type { SecretScanner } from '../core/secrets.ts';
 import { jsonObjectOf } from '../doctor/settings-env.ts';
+import type { HostPlugin } from '../ports/host/index.ts';
 import type { HookOutputs } from './scan-hook-output.ts';
 import { hookFindings, type SettingsFinding } from './scan-settings.ts';
 
@@ -11,6 +12,8 @@ import { hookFindings, type SettingsFinding } from './scan-settings.ts';
 export interface PluginHookLocations {
   readonly claudeDir: string;
   readonly project: string;
+  /** The settings files a session started in the project reads, in the order the host reads them (`sessionSettingsFiles`). */
+  readonly sessionSettings: readonly string[];
 }
 
 /** A plugin's hooks file, with the object that holds its `hooks` as a settings file holds them. */
@@ -24,16 +27,13 @@ async function jsonAt(files: Files, path: string): Promise<JsonRecord | undefine
   return text === undefined ? undefined : jsonObjectOf(text);
 }
 
-/** The settings files whose `enabledPlugins` turn a plugin on or off for the project, the one that wins last. */
-function enablingFiles(at: PluginHookLocations): string[] {
-  const project = join(at.project, '.claude');
-  return [join(at.claudeDir, 'settings.json'), join(project, 'settings.json'), join(project, 'settings.local.json')];
-}
-
-/** Each plugin the settings files turn on (true) or off (false), as the last file to name it says. */
+/**
+ * Each plugin the session's settings files turn on (true) or off (false) for the project in their `enabledPlugins`,
+ * as the last file to name it says: the one the host reads last wins.
+ */
 async function enabledPlugins(files: Files, at: PluginHookLocations): Promise<ReadonlyMap<string, boolean>> {
   const enabled = new Map<string, boolean>();
-  for (const path of enablingFiles(at)) {
+  for (const path of at.sessionSettings) {
     const listed = (await jsonAt(files, path))?.['enabledPlugins'];
     for (const [key, on] of isRecord(listed) ? Object.entries(listed) : []) {
       if (typeof on === 'boolean') {
@@ -71,19 +71,19 @@ async function hooksSources(files: Files, installPath: string): Promise<HooksSou
  * the context, each named with its plugin and the hooks file that holds it. A plugin a settings file turns off is
  * skipped; one no file names counts as on, since only a hook that ran is a finding. One command a plugin lists under
  * several matchers, or two installs of one plugin list, is one finding. No plugin list, or one of another shape, finds
- * nothing. It only reads.
+ * nothing; the host's plugin port (`plugin`) names the list and reads it. It only reads.
  */
-export async function scanPluginHooks(files: Files, at: PluginHookLocations, hooks: HookOutputs, secrets: SecretScanner): Promise<SettingsFinding[]> {
-  const text = await files.read(join(at.claudeDir, 'plugins', INSTALLED_PLUGINS_FILE));
-  const installs = (text === undefined ? undefined : installsOf(text)) ?? [];
+export async function scanPluginHooks(files: Files, plugin: Pick<HostPlugin, 'installs' | 'listFile'>, at: PluginHookLocations, hooks: HookOutputs, secrets: SecretScanner): Promise<SettingsFinding[]> {
+  const text = await files.read(join(at.claudeDir, 'plugins', plugin.listFile));
+  const installs = (text === undefined ? undefined : plugin.installs(text)) ?? [];
   const enabled = await enabledPlugins(files, at);
   const found = new Map<string, SettingsFinding>();
-  for (const { key, install } of installs) {
-    if (!appliesTo(install, at.project) || enabled.get(key) === false) {
+  for (const install of installs) {
+    if (!appliesTo(install, at.project) || enabled.get(install.key) === false) {
       continue;
     }
     for (const source of await hooksSources(files, install.installPath)) {
-      for (const finding of hookFindings(source.path, source.settings, hooks, secrets, key)) {
+      for (const finding of hookFindings(source.path, source.settings, hooks, secrets, install.key)) {
         if (!found.has(finding.what)) {
           found.set(finding.what, { ...finding, copies: 0 });
         }

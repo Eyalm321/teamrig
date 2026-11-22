@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
 import { FakePathProbe } from '../testing/fake-processes.ts';
+import { hostTelling, hostTitledBy, NO_PATHS_HOST, NO_SESSION_HOST, TEST_PROGRAM, testTitleSwitch } from '../testing/host.ts';
 import { MemoryFiles } from '../testing/memory-files.ts';
 import { APP, CliHarness, KIT, POINTER, TEAM, USER_HOME, type CliResult } from '../testing/cli-harness.ts';
 import { CONFIG_VERSION } from '../config/types.ts';
@@ -168,6 +169,25 @@ describe('teamrig team create', () => {
     assert.equal(JSON.parse((await kit.files.read(SHOP_CONFIG)) ?? '')['tabStatus'], undefined, 'a repeat leaves a kept config as it is');
   });
 
+  it("names in its tab note the switch the host's hook port names, and its program, else says tab status is on", async () => {
+    const other = await new CliHarness(null, null).run(CREATE, { probe: FOLDERS, host: hostTitledBy(testTitleSwitch('OTHER_TITLE_OFF')) });
+    assert.equal(other.code, EXIT.ok, other.stderr.join('\n'));
+    assert.match(other.stdout[2] ?? '', new RegExp(`once you add "OTHER_TITLE_OFF": "yes" to "env" in .+ and restart ${TEST_PROGRAM}, so it stops`, 'u'));
+    const untitled = await new CliHarness(null, null).run(CREATE, { probe: FOLDERS, host: hostTitledBy(undefined) });
+    assert.match(untitled.stdout[2] ?? '', /^TAB STATUS on: /u, 'a host that writes no title of its own leaves it to the hooks');
+  });
+
+  it('creates the team on a host whose folders teamrig does not know, its tab note naming the switch and no settings file', async () => {
+    const kit = new CliHarness(null, null);
+    const result = await kit.run(CREATE, { probe: FOLDERS, host: NO_PATHS_HOST });
+    assert.equal(result.code, EXIT.ok, result.stderr.join('\n'));
+    assert.deepEqual(result.stdout.slice(0, 2), [`CREATED ${SHOP_CONFIG}`, `CREATED ${SHOP_POINTER}`]);
+    assert.equal(
+      result.stdout[2],
+      "NOTE each tab of team shop shows a colored circle before its title for what its session is doing once you set CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 in the environment the team's sessions start in and restart them, so the host stops writing its own title over the circle",
+    );
+  });
+
   it("says on a repeat's dry run what it keeps, and gives a team already at work no setup task", async () => {
     const kit = new CliHarness(null, null);
     await create(kit);
@@ -192,6 +212,16 @@ describe('teamrig team create', () => {
     const fromCwd = new CliHarness(null, null);
     await create(fromCwd, ['team', 'create', 'shop', '--sessions', 'api'], { CLAUDE_PROJECT_DIR: ' ' }, SHOP);
     assert.notEqual(await fromCwd.files.read(SHOP_POINTER), undefined);
+  });
+
+  it('asks the running host for the folder the session started in, and takes the current folder on a host telling none', async () => {
+    const argv = ['team', 'create', 'shop', '--sessions', 'api'];
+    const told = new CliHarness(null, null);
+    await told.run(argv, { probe: FOLDERS, env: { CLAUDE_PROJECT_DIR: APP }, cwd: APP, host: hostTelling({ projectDir: SHOP }) });
+    assert.notEqual(await told.files.read(SHOP_POINTER), undefined);
+    const untold = new CliHarness(null, null);
+    await untold.run(argv, { probe: FOLDERS, env: { CLAUDE_PROJECT_DIR: APP }, cwd: SHOP, host: NO_SESSION_HOST });
+    assert.notEqual(await untold.files.read(SHOP_POINTER), undefined);
   });
 
   it('refuses another team of the same id, or a project tied to another team', async () => {
