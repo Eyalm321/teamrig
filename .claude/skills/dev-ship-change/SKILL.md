@@ -60,8 +60,8 @@ own on top of it.
 - With `"mergeChecks": "changed"` on the repository in `tools/ship/repos.json`, the pre-push hook and the `--merge`
   run take the short checks (scrub, DCO, size rule, commit subjects, typecheck, the changed files' specs) and
   leave the whole suite to required CI; a spec only a changed file's neighbour misses fails there, not here. A change
-  to the gate itself (hooks, workflows, `tools/ci`, `tools/ship`, the push guard, the package or a tsconfig) runs
-  every check. Run `npm run check` yourself first when
+  to the gate itself (hooks, workflows, `tools/ci`, `tools/ship`, `tools/lib`, `tools/scrub`, `tools/dco`,
+  `tools/build`, the push guard, the package or a tsconfig) runs every check. Run `npm run check` yourself first when
   the change reaches far.
 - A missing sign-off: `git commit --amend -s` for the last commit; the `commit-msg` hook from `npm run setup` catches
   it before the push.
