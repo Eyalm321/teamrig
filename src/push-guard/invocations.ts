@@ -759,14 +759,17 @@ class GitInvocationFinder {
    * {@link runsStdin}) when the command it is handed pushes, read as the bash script the other end runs; a
    * pipe that feeds one commands is a doubt on a line that names a push. Since a runner's options and host
    * come before its command, each suffix of its arguments is read, joined as written and quoted word by word.
-   * The awk and expect scripts it is handed, which are not bash, also ask when they name a push anywhere.
+   * The awk and expect scripts and the compose, stack or build file docker reads on stdin, which are not bash,
+   * also ask when they name a push anywhere.
    */
   private visitRunner(name: string, args: readonly ShellWord[], stdin: ShellWord | undefined, fedByPipe: boolean, location: Location, depth: number): void {
     const awk = AWKS.has(name);
     const expect = name === 'expect';
     const programs = awk ? args.filter((arg) => AWK_RUNS.test(arg.text)) : [];
+    // A compose, stack or build file docker or podman reads on stdin names its commands in YAML or a Dockerfile.
+    const containerFile = (name === 'docker' || name === 'podman') && stdin !== undefined && runsStdin(name, args) ? [stdin] : [];
     // Scripts in a language of the runner's own, read for the commands they start and searched for a push.
-    const scripts = expect ? [...args, ...(stdin === undefined ? [] : [stdin])] : programs;
+    const scripts = expect ? [...args, ...(stdin === undefined ? [] : [stdin])] : [...programs, ...containerFile];
     const lines: ShellWord[] = [];
     if (awk) {
       programs.forEach((program) => lines.push(...awkStrings(program.text)));

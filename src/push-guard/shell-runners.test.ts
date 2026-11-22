@@ -115,6 +115,14 @@ const HANDS_X: readonly string[] = [
   'echo X | podman build -f - .',
 ];
 
+/** Files in a language of docker's own on stdin, which name a push somewhere in their text. */
+const CONTAINER_FILES: readonly string[] = [
+  "echo 'RUN git push origin main' | docker build --ssh default -",
+  "echo 'RUN git push origin main' | docker buildx build --ssh default -",
+  "echo 'RUN git push origin main' | podman build -f - .",
+  "printf 'services:\\n  a:\\n    command: [git, push, origin, main]\\n' | docker compose -f - up",
+];
+
 /** Shapes that stay as they were: X is data, or the program runs something else. */
 const UNCHANGED: readonly (readonly [string, string])[] = [
   ['docker push registry/app:1', 'pass'],
@@ -162,6 +170,12 @@ describe('findGitInvocations: programs that run a command the guard cannot read'
   it('doubts each shape that hands such a program a push', () => {
     for (const shape of HANDS_X) {
       assert.equal(outcome(shape.replaceAll('X', X)), 'DOUBT', shape);
+    }
+  });
+
+  it('doubts a compose, stack or build file on stdin that names a push', () => {
+    for (const shape of CONTAINER_FILES) {
+      assert.equal(outcome(shape), 'DOUBT', shape);
     }
   });
 
