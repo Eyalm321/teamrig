@@ -26,7 +26,7 @@ page you point them to.
 
 1. Read it whole, with its comments, and search for one that covers it already (`gh issue list --state all
    --search "<words>"`), and whether main already did it or changed the code it names since it was written (`git
-   log origin/main -- <paths>`): one done closes with the commit that did it, one overtaken is re-scoped with a
+   log --since=<the issue's date> origin/main -- <paths>`): one done closes with the commit that did it, one overtaken is re-scoped with a
    comment saying what changed. A duplicate closes with `teamrig issue close <owner/name#n> --duplicate-of
    <owner/name#m>` and a line saying why.
 2. Labels come only from `.github/labels.json`: one type, one priority, an area. A form left half empty gets
@@ -39,9 +39,9 @@ page you point them to.
 
 ## A pull request from outside
 
-1. Still relevant first: check that main has not changed the code it touches since it was written, that no later
-   change already fixed or replaced it, and that landing it now undoes no newer work. A stale one is closed or
-   re-scoped with a comment saying what changed, never landed as written.
+1. Still relevant first: check that main has not changed the code it touches since it was written, no later change
+   already fixed or replaced it, the behaviour it changes is still wanted, and landing it now undoes no newer work.
+   A stale one is closed or re-scoped with a comment saying what changed, never landed as written.
 2. Best fix first: judge whether its fix is the best one. If a better one exists, propose it on the pull request
    (what and why) before taking it; else say in one line why theirs is best.
 3. Read its full diff before any checkout: fetch its head (`git fetch origin pull/<n>/head:pr-<n>`) and read

@@ -101,10 +101,11 @@ undone, such as a warn-only mode or a flag.
 
 ## Review a change or an issue
 
-Before reviewing a pull request, a change waiting on your approval or an issue, check that it still applies: whether
-main changed the code it touches since it was written (`git log <base>..origin/main -- <its paths>`), whether a later
-change already fixed or replaced it, and whether landing it now would undo newer work. A stale one is closed or
-re-scoped with a comment saying what changed, never landed or worked as written. Then review it on its merits.
+Before reviewing a change, yours to land or one waiting on your approval, or an issue, check that main has not changed
+the code it touches since it was written, no later change already fixed or replaced it, the behaviour it changes is
+still wanted, and landing it now undoes no newer work. A stale one is closed or re-scoped with a comment saying what
+changed, never landed as written. `git log <base>..origin/main -- <its paths>` lists what main changed under a change,
+`git log --since=<the issue's date> origin/main -- <its paths>` under an issue. Then review it on its merits.
 
 ## Close a task with proof
 
