@@ -160,6 +160,17 @@ describe('findGitInvocations: programs that run a word or the command after thei
     assert.deepEqual(dirs('systemd-run --working-directory=/srv/app git push'), [resolve('/srv/app')]);
   });
 
+  it('reads an xargs script that holds the replace string in longer text as one stdin hands it', () => {
+    const stdinShell = (command: string): boolean =>
+      findGitInvocations(command, { cwd: CWD, home: '/u', dialect: 'bash', git: unset }).doubts.some((doubt) => doubt.reason === 'a shell reads its commands from stdin');
+    for (const shape of ["xargs -I{} sh -c 'echo {}; git status'", "xargs -I % bash -c 'run % now'", "xargs -i sh -c 'cd {} && make'", "xargs --replace=@ sh -c 'x @ y'", "xargs -iQ sh -c 'a Q b'"]) {
+      assert.ok(stdinShell(shape), shape);
+    }
+    for (const shape of ["xargs -I{} sh -c 'echo done'", "xargs sh -c 'echo {} done'"]) {
+      assert.ok(!stdinShell(shape), shape);
+    }
+  });
+
   it('doubts a find that runs more than one command, and a -c command only known when it runs', () => {
     assert.equal(outcome(`find . -exec true ';' -exec sh -c ${X} ';'`), 'DOUBT');
     assert.equal(outcome('su -c "$CMD"'), 'DOUBT');

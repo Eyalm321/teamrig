@@ -80,6 +80,8 @@ interface WrapperSpec {
    * (`systemd-run --same-dir`); without one of them or a {@link chdir} option, the program's folder is unknown.
    */
   readonly sameDir?: readonly string[];
+  /** Options that set the string a script's text holds in place of what stdin hands it (`xargs -I {}`), `{}` without a value. */
+  readonly replace?: readonly string[];
   /** Options after which the wrapper runs nothing, such as `command -v`. */
   readonly inspect?: readonly string[];
   /** Options without which the wrapper runs nothing, such as `jobs -x`: with none of them it only lists. */
@@ -147,6 +149,7 @@ const WRAPPERS: ReadonlyMap<string, WrapperSpec> = new Map<string, WrapperSpec>(
     'xargs',
     {
       valued: ['-a', '-E', '-I', '-L', '-n', '-P', '-s', '-d', '--arg-file', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--delimiter', '--process-slot-var'],
+      replace: ['-I', '-i', '--replace'],
       stdinArgs: true,
     },
   ],
@@ -354,6 +357,8 @@ class LaunchReader {
   /** What the command reads on stdin from the line itself: a heredoc's body or a here-string. */
   private readonly stdin: ShellWord | undefined;
   private stdinArgs = false;
+  /** The string an `xargs -I` script holds in place of what stdin hands it; see {@link posixShell}. */
+  private replace: string | undefined;
   /** True once a word is known to name a program, so PowerShell cannot read it as an expression. */
   private called = false;
   /** True once a teamrig runner is read: what it starts runs under the host lock. */
@@ -729,6 +734,9 @@ class LaunchReader {
       if (option !== undefined && has(spec.sameDir, option)) {
         ownDir = false;
       }
+      if (option !== undefined && has(spec.replace, option)) {
+        this.replace = value === undefined || value.text === '' ? '{}' : value.text;
+      }
       if (option !== undefined && value !== undefined && has(spec.unset, option)) {
         this.unsets.push(value);
       }
@@ -776,8 +784,9 @@ class LaunchReader {
     const operand = args[index];
     if (command) {
       // Under xargs, a script that is one word without a blank, such as `{}`, is a placeholder
-      // for what stdin hands it: `echo X | xargs -I{} sh -c {}`.
-      if (this.stdinArgs && (operand === undefined || !/\s/.test(operand.text))) {
+      // for what stdin hands it: `echo X | xargs -I{} sh -c {}`; so is one that holds the replace string.
+      const replaced = this.replace !== undefined && operand !== undefined && operand.text.includes(this.replace);
+      if (this.stdinArgs && (operand === undefined || !/\s/.test(operand.text) || replaced)) {
         return STDIN_SCRIPT;
       }
       return operand === undefined ? NOTHING : this.script(operand, 'bash', false);
