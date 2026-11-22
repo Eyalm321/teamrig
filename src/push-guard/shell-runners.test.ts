@@ -99,6 +99,20 @@ const HANDS_X: readonly string[] = [
   'make --makefile /dev/stdin <<< X',
   'docker exec -i c sh <<< X',
   'echo X | podman run -i img sh',
+  // stdin by another name, or -f inside a bundle of short options
+  'echo X | make -f /dev/fd/0',
+  'echo X | make -f /proc/self/fd/0',
+  'echo X | make -sf -',
+  'echo X | make -sf/dev/stdin',
+  'echo X | make --fil=-',
+  'echo X | make -f "$F"',
+  // a compose, stack or build file on stdin names the commands docker or podman runs
+  'echo X | docker compose -f - up',
+  'echo X | podman compose -f - up',
+  'echo X | docker stack deploy -c - s',
+  'echo X | docker -H tcp://h:2375 compose -f - up',
+  'echo X | docker build -',
+  'echo X | podman build -f - .',
 ];
 
 /** Shapes that stay as they were: X is data, or the program runs something else. */
@@ -136,6 +150,12 @@ const UNCHANGED: readonly (readonly [string, string])[] = [
   ['cat image.tar | docker load', 'pass'],
   ['echo X | docker login --password-stdin registry', 'pass'],
   ['echo X | podman load', 'pass'],
+  ['cat image.tar | docker image load', 'pass'],
+  ['cat image.tar | docker --context prod load', 'pass'],
+  ['tar c . | docker cp - c:/app', 'pass'],
+  ['echo X | docker secret create s -', 'pass'],
+  ['echo X | make -C sub', 'pass'],
+  ['echo X | make -sf Makefile', 'pass'],
 ];
 
 describe('findGitInvocations: programs that run a command the guard cannot read', () => {
