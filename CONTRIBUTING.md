@@ -216,7 +216,8 @@ dependency review, which reads GitHub's dependency graph ([Security checks](#sec
   and the docs checks. GitHub CI is the full gate: the whole suite with its coverage gate, the dist checks and the
   fresh install run there, on every OS, before anything lands. The build writes the dist the plugin's tests load,
   which main does not track, so it leaves the checkout clean. A light pass is recorded apart
-  (`local-ci/light/<tree>.json`), never taken for a full or a short one; a full pass counts as a light one. A push
+  (`local-ci/light/<tree>.json`), never taken for a full or a short one; a full pass counts as a light one. A change
+  to the gate itself (the paths listed under the short checks) runs every check instead, as it does there. A push
   to `main`, and a repository with the `local` gate, run every check as above.
 - **Short checks** (off by default): when the repository's entry in `tools/ship/repos.json` says
   `"mergeChecks": "changed"`, which needs the `ci` gate, a push to any branch but `main` runs only the short checks:
