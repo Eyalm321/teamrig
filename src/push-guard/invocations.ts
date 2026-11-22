@@ -299,22 +299,77 @@ const AWKS: ReadonlySet<string> = new Set(['awk', 'gawk', 'mawk', 'nawk']);
 const TCL_RUNS = /(?:^|[;\n[{])\s*(?:spawn|exec|system)\s+(?:-\S+\s+)*([^;\n\]}]*)/g;
 /** Programs that run commands they read on stdin; `make`, `docker` and `podman` only in some forms (see {@link runsStdin}). */
 const STDIN_RUNNERS: ReadonlySet<string> = new Set(['ssh', 'at', 'batch', 'crontab', 'parallel', 'kubectl']);
-/** A `make` option that names its makefile, alone or with the file attached. */
-const MAKEFILE_OPTION: ReadonlySet<string> = new Set(['-f', '--file', '--makefile']);
-const MAKEFILE_FROM_STDIN = /^(?:-f|--file=|--makefile=)(?:-|\/dev\/stdin)$/;
-const STDIN_FILE: ReadonlySet<string> = new Set(['-', '/dev/stdin']);
+/** A file name that is the program's own stdin. */
+const STDIN_PATH = /^(?:-|\/dev\/stdin|\/dev\/fd\/0|\/proc\/(?:self|thread-self|\d+)\/fd\/0)$/;
+/** GNU make's short options that take a value (`C:E:f:I:o:W:`) and those whose value can only be attached (`j::l::O::`). */
+const MAKE_VALUED_LETTERS = 'CEfIoW';
+const MAKE_ATTACHED_LETTERS = 'jlO';
+/** `--file` and `--makefile`, and the prefixes getopt_long takes for them. */
+const MAKE_FILE_OPTION = /^--(?:fi|fil|file|makef|makefi|makefil|makefile)(?:=(.*))?$/s;
+/**
+ * The makefiles a `make` line names: `-f F`, `-fF`, `-sf F` (a bundle of short options, as getopt reads it),
+ * `--file F`, `--file=F` and their prefixes. A word with a variable in it stands for its unknown value.
+ */
+function makefileWords(args: readonly ShellWord[]): ShellWord[] {
+  const files: ShellWord[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index] ?? staticWord('');
+    const long = MAKE_FILE_OPTION.exec(word.text);
+    if (long !== null) {
+      const value = long[1] === undefined ? args[(index += 1)] : { text: long[1], dynamic: word.dynamic };
+      if (value !== undefined) files.push(value);
+      continue;
+    }
+    if (!/^-[^-]/.test(word.text)) continue;
+    for (let at = 1; at < word.text.length; at += 1) {
+      const letter = word.text[at] ?? '';
+      if (MAKE_ATTACHED_LETTERS.includes(letter)) break;
+      if (!MAKE_VALUED_LETTERS.includes(letter)) continue;
+      const rest = word.text.slice(at + 1);
+      const value = rest === '' ? args[(index += 1)] : { text: rest, dynamic: word.dynamic };
+      if (letter === 'f' && value !== undefined) files.push(value);
+      break;
+    }
+  }
+  return files;
+}
+
+/** docker and podman options before the subcommand that take a value as the next word. */
+const CONTAINER_GLOBAL_VALUED: ReadonlySet<string> = new Set([
+  ...['--config', '-c', '--context', '-H', '--host', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey'],
+  ...['--connection', '--url', '--identity', '--root', '--runroot', '--storage-driver', '--storage-opt', '--runtime'],
+  ...['--cgroup-manager', '--tmpdir', '--events-backend', '--hooks-dir', '--module', '--network-cmd-path', '--conmon'],
+  ...['--imagestore', '--ssh', '--volumepath', '--out', '--db-backend', '--cni-config-dir', '--remote'],
+]);
+/**
+ * docker and podman commands that read stdin as data only: an image or tar stream, a password, a secret's or
+ * config's value. Every other command may read code there (a compose, stack or build file names commands to run).
+ */
+const CONTAINER_DATA_COMMANDS = /^(?:load|import|cp|login|(?:image|container) (?:load|import|cp)|(?:secret|config) create)(?: |$)/;
+
+/** The subcommand words of a docker or podman line, after its global options. */
+function containerCommand(args: readonly ShellWord[]): string {
+  let index = 0;
+  while (index < args.length && (args[index]?.text ?? '').startsWith('-')) {
+    index += CONTAINER_GLOBAL_VALUED.has(args[index]?.text ?? '') ? 2 : 1;
+  }
+  return args
+    .slice(index, index + 2)
+    .map((arg) => (arg.dynamic ? '$' : arg.text))
+    .join(' ');
+}
 
 /**
  * True when `name` runs what it reads on stdin as commands: a {@link STDIN_RUNNERS} program, `make` given its
- * makefile on stdin (`-f -`, `--file=/dev/stdin`), and `docker` or `podman` in a command that runs a program in a
- * container (`exec`, `run`), so `| docker load` or `| make` reads no code.
+ * makefile on stdin (`-f -`, `-sf /dev/fd/0`, a makefile word with a variable in it), and `docker` or `podman`
+ * in any command but a data-only one ({@link CONTAINER_DATA_COMMANDS}), so `| docker load` or `| make` reads no code.
  */
 function runsStdin(name: string, args: readonly ShellWord[]): boolean {
   if (name === 'make') {
-    return args.some((arg, index) => MAKEFILE_FROM_STDIN.test(arg.text) || (MAKEFILE_OPTION.has(arg.text) && STDIN_FILE.has(args[index + 1]?.text ?? '')));
+    return makefileWords(args).some((file) => file.dynamic || STDIN_PATH.test(file.text));
   }
   if (name === 'docker' || name === 'podman') {
-    return args.some((arg) => CONTAINER_COMMANDS.has(arg.text));
+    return !CONTAINER_DATA_COMMANDS.test(containerCommand(args));
   }
   return STDIN_RUNNERS.has(name);
 }
