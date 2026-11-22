@@ -95,8 +95,8 @@ The injected context holds:
    first, tagged `(team <id>)`. `teamrig rules scan` lists the lines to settle.
 6. **After a refresh**: `You were refreshed after T2; read your handover first: <path>`, once, at the first
    fresh start (the automatic restart, a `/clear` or a new start) after the handover was written. A compact or resume keeps the old context, so the
-   note waits. It then lists what the old session leaves: its scheduled jobs (`CronCreate`; after a `/clear`
-   they are still scheduled and the note says so, after a new process it lists them to make again), a pending
+   note waits. It then lists what the old session leaves: its scheduled jobs (`CronCreate`, listed to make
+   again when CronList does not show them, since a new process ends them and a `/clear` may too), a pending
    wake-up to make again (`ScheduleWakeup`), its scratchpad and its plan file, and, when the owner typed in it, a pointer to
    `<handover dir>/<id>.owner.md`: the owner's own prompts from the old transcript, oldest first (the newest 40 prompts
    within 16,000 characters), those typed after the handover was last written marked, so a decision the handover
