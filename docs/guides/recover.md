@@ -161,9 +161,9 @@ sequenceDiagram
   Claude Code process it refreshed in (for 24 hours).
 - The session-start note lists what the old session leaves, read from the last 64 MB of its transcript: its
   scheduled jobs (CronCreate), a pending wake-up (ScheduleWakeup) to make again, its scratchpad and its plan
-  file. A `/clear` keeps the process and so its jobs: the note says they are still scheduled, and lists them to
-  make again only after a new process. A job made before the last compaction is missed, and a wake-up can fire
-  twice after a `/clear`.
+  file. It lists the jobs to check with CronList and make again only when CronList does not show them: a new
+  process ends them, and a `/clear` may too, depending on the Claude Code version. A job made before the last
+  compaction is missed, and a wake-up can fire twice after a `/clear`.
 - `refresh.enabled: false` turns it off, `refresh.tabTitle: false` leaves the tab title alone and
   `refresh.handoverDir` moves the handovers. With `tabStatus.enabled`, the tab's state circle goes before that
   title ([tab status](../../plugins/teamrig/skills/teamrig-guide/hooks.md#every-event-tab-status)).
