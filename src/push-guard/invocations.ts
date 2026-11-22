@@ -297,8 +297,27 @@ const AWKS: ReadonlySet<string> = new Set(['awk', 'gawk', 'mawk', 'nawk']);
  * words up to the end of the Tcl command are read as a bash line.
  */
 const TCL_RUNS = /(?:^|[;\n[{])\s*(?:spawn|exec|system)\s+(?:-\S+\s+)*([^;\n\]}]*)/g;
-/** Programs that run commands they read on stdin. */
-const STDIN_RUNNERS: ReadonlySet<string> = new Set(['ssh', 'at', 'batch', 'crontab', 'parallel', 'make', 'docker', 'podman', 'kubectl']);
+/** Programs that run commands they read on stdin; `make`, `docker` and `podman` only in some forms (see {@link runsStdin}). */
+const STDIN_RUNNERS: ReadonlySet<string> = new Set(['ssh', 'at', 'batch', 'crontab', 'parallel', 'kubectl']);
+/** A `make` option that names its makefile, alone or with the file attached. */
+const MAKEFILE_OPTION: ReadonlySet<string> = new Set(['-f', '--file', '--makefile']);
+const MAKEFILE_FROM_STDIN = /^(?:-f|--file=|--makefile=)(?:-|\/dev\/stdin)$/;
+const STDIN_FILE: ReadonlySet<string> = new Set(['-', '/dev/stdin']);
+
+/**
+ * True when `name` runs what it reads on stdin as commands: a {@link STDIN_RUNNERS} program, `make` given its
+ * makefile on stdin (`-f -`, `--file=/dev/stdin`), and `docker` or `podman` in a command that runs a program in a
+ * container (`exec`, `run`), so `| docker load` or `| make` reads no code.
+ */
+function runsStdin(name: string, args: readonly ShellWord[]): boolean {
+  if (name === 'make') {
+    return args.some((arg, index) => MAKEFILE_FROM_STDIN.test(arg.text) || (MAKEFILE_OPTION.has(arg.text) && STDIN_FILE.has(args[index + 1]?.text ?? '')));
+  }
+  if (name === 'docker' || name === 'podman') {
+    return args.some((arg) => CONTAINER_COMMANDS.has(arg.text));
+  }
+  return STDIN_RUNNERS.has(name);
+}
 /**
  * The OpenSSH programs that take `-o` config lines, with the option letters each takes a value for (from each
  * program's getopt string). A config line can name a command the user's shell runs on this host
@@ -682,7 +701,7 @@ class GitInvocationFinder {
 
   /**
    * Doubts a program that runs a command the guard cannot follow (see {@link ARGUMENT_RUNNERS},
-   * {@link STDIN_RUNNERS}) when the command it is handed pushes, read as the bash script the other end runs; a
+   * {@link runsStdin}) when the command it is handed pushes, read as the bash script the other end runs; a
    * pipe that feeds one commands is a doubt on a line that names a push. Since a runner's options and host
    * come before its command, each suffix of its arguments is read, joined as written and quoted word by word.
    * The awk and expect scripts it is handed, which are not bash, also ask when they name a push anywhere.
@@ -710,7 +729,7 @@ class GitInvocationFinder {
       lines.push(...sshOptionCommands(args, sshLetters));
     }
     // awk running a command it builds (`system($0)`) runs what it reads; expect reads its script there.
-    const readsStdin = STDIN_RUNNERS.has(name) || programs.length > 0 || expect;
+    const readsStdin = runsStdin(name, args) || programs.length > 0 || expect;
     if (readsStdin && stdin !== undefined && !expect) {
       lines.push(name === 'crontab' ? cronCommands(stdin) : stdin);
     }

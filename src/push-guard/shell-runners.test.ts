@@ -92,6 +92,12 @@ const HANDS_X: readonly string[] = [
   'echo X > .husky/pre-push',
   'echo X > ~/.config/fish/functions/git.fish',
   'echo X > /srv/repo.git/hooks/post-receive',
+  // make reads a makefile from stdin only by -f -, docker and podman run stdin only in a container command
+  'make -f - <<< X',
+  'echo X | make --file=-',
+  'make --makefile /dev/stdin <<< X',
+  'docker exec -i c sh <<< X',
+  'echo X | podman run -i img sh',
 ];
 
 /** Shapes that stay as they were: X is data, or the program runs something else. */
@@ -122,6 +128,11 @@ const UNCHANGED: readonly (readonly [string, string])[] = [
   ["echo uptime | ssh localhost", 'pass'],
   // a project's own hooks folder is data
   ["cat > src/hooks/x.test.ts <<'EOF'\ngit push origin main\nEOF", 'pass'],
+  // a pipe into make, or into docker or podman outside a container command, runs no stdin
+  ['echo X | make', 'pass'],
+  ['cat image.tar | docker load', 'pass'],
+  ['echo X | docker login --password-stdin registry', 'pass'],
+  ['echo X | podman load', 'pass'],
 ];
 
 describe('findGitInvocations: programs that run a command the guard cannot read', () => {
