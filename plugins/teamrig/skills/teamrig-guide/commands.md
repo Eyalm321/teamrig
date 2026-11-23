@@ -4404,7 +4404,9 @@ first. Claude Code starts without the credential variables (see [teamrig queue](
 (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`) and those [delivery.passEnv] names, as the
 session's tools run the team's code. Each plugin folder the team config names [pluginDirs] loads with
 `--plugin-dir`, for a teamrig or a plugin beside it that the host has not installed; launch refuses to start while
-one holds no `.claude-plugin/plugin.json`.
+one holds no `.claude-plugin/plugin.json`. Their hooks, guards among them, run in every session, so name only a
+folder no session can write, never one in a working tree a session edits: launch refuses one inside the team's or a
+session's project folder.
 
 Flags:
 

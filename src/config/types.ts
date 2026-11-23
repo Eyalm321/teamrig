@@ -1850,7 +1850,9 @@ export interface KitConfig {
   readonly ownerGates: readonly string[];
   /**
    * Plugin folders each session's Claude Code loads (`claude --plugin-dir`), absolute paths: a teamrig, or a plugin beside
-   * it, that runs from a copy Claude Code has not installed, such as one bundled with another app or a checkout. Read
+   * it, that runs from a copy Claude Code has not installed, such as one bundled with another app or a checkout no
+   * session works in. Their hooks, guards among them, run in every session, so never a folder a session can write:
+   * launch refuses one inside the team's or a session's project folder (src/cli/commands/open.ts `pluginDirsOf`). Read
    * from the team's config, never the environment, so nothing a session's caller sets chooses the hooks every session
    * runs; owner-gated (the config guard refuses a session's edit). Empty, the installed plugins only.
    */
