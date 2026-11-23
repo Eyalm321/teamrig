@@ -128,7 +128,7 @@ test('reads the newest runs\' latest jobs and the commit statuses of the sha', (
     if (path === `repos/${REPO}/commits/${SHA}/status`) return JSON.stringify({ statuses: [{ context: 'ext/ci', state: 'success' }] });
     throw new Error(`unexpected ${path}`);
   });
-  assert.deepEqual(readChecks(gh, REPO, SHA, 'dev', { names: ['gates', 'ext/ci'], summary: null, flaky: [], conditional: [] }).map(({ state }) => state), ['passed', 'passed']);
+  assert.deepEqual(readChecks(gh, REPO, SHA, 'dev', { names: ['gates', 'ext/ci'], summary: null, flaky: [], conditional: [], checkMinutes: 30 }).map(({ state }) => state), ['passed', 'passed']);
   assert.equal(gh.mock.callCount(), 3);
 });
 
@@ -154,7 +154,7 @@ test('reads only the runs of the merged branch, so a cancelled run of the same s
     if (jobs === undefined) throw new Error(`unexpected ${path}`);
     return jobs;
   };
-  const required = { names: ['windows'], summary: null, flaky: [], conditional: [] };
+  const required = { names: ['windows'], summary: null, flaky: [], conditional: [], checkMinutes: 30 };
   const before = readChecks(ghFor(false), REPO, SHA, 't2657-b', required);
   assert.deepEqual(before.map(({ state }) => state), ['missing']);
   assert.equal(verdictOf(before), 'waiting');
@@ -252,5 +252,5 @@ test('readChecks settles the jobs it reads at the time given (#1341)', () => {
     if (path === `repos/${REPO}/commits/${SHA}/status`) return '{"statuses":[]}';
     throw new Error(`unexpected ${path}`);
   });
-  assert.deepEqual(readChecks(gh, REPO, SHA, 'dev', { names: ['gates', 'test'], summary: null, flaky: [], conditional: [] }, T0).map(({ state }) => state), ['passed', 'failed']);
+  assert.deepEqual(readChecks(gh, REPO, SHA, 'dev', { names: ['gates', 'test'], summary: null, flaky: [], conditional: [], checkMinutes: 30 }, T0).map(({ state }) => state), ['passed', 'failed']);
 });

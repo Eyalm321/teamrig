@@ -140,7 +140,7 @@ const request = (overrides: Partial<MergeRequest> = {}): MergeRequest => ({
 });
 
 const POLLING = { timeoutMs: 10 * MINUTE, intervalMs: MINUTE };
-const CHECKS: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: [], conditional: [] };
+const CHECKS: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: [], conditional: [], checkMinutes: 30 };
 
 /** mergeThroughPull on the `ci` gate: checks gates and test on GitHub. */
 const mergeOnCi = (gh: Gh, main: MainBranch, log: (line: string) => void, lacks: string | null = null, supersede: Supersede = () => undefined): Promise<MergeResult> =>
@@ -365,7 +365,7 @@ test('a re-run GitHub refuses fails the unstarted check with its error; one stil
 });
 
 test('the summary job failing beside an unstarted leg is re-run with it; failing again on the next attempt refuses (T2675)', async () => {
-  const withSummary: RequiredChecks = { names: ['gates', 'test', 'all'], summary: 'all', flaky: [], conditional: [] };
+  const withSummary: RequiredChecks = { names: ['gates', 'test', 'all'], summary: 'all', flaky: [], conditional: [], checkMinutes: 30 };
   const echo: readonly JobState[] = [['gates', 'completed', 'success'], macosUnstarted, ['all', 'completed', 'failure']];
   const recovers = fakeGitHub({ rounds: [echo, [...green, ['all', 'completed', 'success']]] });
   const passed = await waitForChecks(recovers.gh, REPO, SHA, HEAD, withSummary,fakeWaiter(), POLLING);
@@ -1454,7 +1454,7 @@ test('a branch whose task links no issue opens no pull request and says how to l
   assert.deepEqual(ghWrites, []);
 });
 
-const FLAKY: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: ['test'], conditional: [] };
+const FLAKY: RequiredChecks = { names: ['gates', 'test'], summary: null, flaky: ['test'], conditional: [], checkMinutes: 30 };
 const testFails: readonly JobState[] = [
   ['gates', 'completed', 'success'],
   ['test', 'completed', 'failure'],

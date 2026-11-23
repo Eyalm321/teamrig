@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { CHECK_MINUTES_DEFAULT } from './github.ts';
 
 /**
  * Each repo ship merges, keyed by its GitHub slug (not a local path, so moving a checkout changes nothing
@@ -99,6 +98,9 @@ export interface RepoProfile {
 }
 
 export const PROFILES_PATH = new URL('./repos.json', import.meta.url);
+
+/** The minutes a check may stay queued or running when repos.json gives no `checkMinutes` (#1341). */
+export const CHECK_MINUTES_DEFAULT = 30;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isNameList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim() !== '');
