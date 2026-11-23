@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readEvents } from '../register/snapshot.ts';
-import { APP, CLAUDE_SESSION, CliHarness, EVENTS_PATH, TEAM_HOME, type CliResult, type RunOptions } from '../testing/cli-harness.ts';
+import { formatConfig } from '../config/load.ts';
+import { APP, CLAUDE_SESSION, CliHarness, CONFIG_PATH, EVENTS_PATH, TEAM, TEAM_HOME, type CliResult, type RunOptions } from '../testing/cli-harness.ts';
 import { ok } from '../testing/hired-team.ts';
 import { NO_MARK_HOST, NO_SESSION_HOST } from '../testing/host.ts';
 import { teamEventsOf, teamHomeOf, teamInboxOf, treeHarness } from '../testing/team-tree.ts';
@@ -195,6 +196,21 @@ describe('teamrig owner decide (T4078)', () => {
     for (const answer of [[], ['--approve', '--decline'], ['--option', '1', '--approve'], ['--option', 'two'], ['--option', '-1']]) {
       assert.equal((await kit.run(['owner', 'decide', 'T1', ...answer])).code, EXIT.usage, answer.join(' '));
     }
+  });
+});
+
+describe('teamrig owner decide: a security card needs its current verdict (#1517)', () => {
+  it('refuses a card whose gate became a security gate while it sat on the owner, writing nothing', async () => {
+    const kit = await cards();
+    // budget is no security gate by default, so the card reached the owner with no verdict; the team then names it one.
+    await kit.files.write(CONFIG_PATH, formatConfig({ ...TEAM, securityGates: ['budget'] }));
+    const before = kit.files.get(EVENTS_PATH);
+    assertRefused(
+      await kit.run(['owner', 'decide', 'T1', '--option', '1']),
+      /^REFUSED T1's card asks owner about budget, a security gate \[securityGates\], and has no security verdict: owner answers it only with one \(core rule 9\)/,
+    );
+    assert.equal(kit.files.get(EVENTS_PATH), before);
+    assert.deepEqual(await asksOf(kit, 'alpha'), []);
   });
 });
 

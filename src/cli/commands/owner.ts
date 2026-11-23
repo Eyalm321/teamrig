@@ -211,7 +211,7 @@ function untilOf(text: string, times: TypedTimes): string {
  * (T4078). It is kept in the task's history as the owner's Decided, naming the option chosen or yes or no, which drops
  * the task's waits on the owner, and wakes the task's session to go on from it. Refused on a task that waits on no
  * decision or approval of the owner, on an option the card lacks, on yes or no to a decision or an option to an
- * approval, and under CLAUDECODE.
+ * approval, on a security-related card without its current verdict, and under CLAUDECODE.
  */
 export async function ownerDecide(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   refuseUnlessOwner(runtime, 'decide');

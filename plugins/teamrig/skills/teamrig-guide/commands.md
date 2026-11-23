@@ -4354,8 +4354,11 @@ The owner answers a card from the pane's Decisions tab (`teamrig owner decide <[
 task waiting on the owner's approval takes yes or no. The answer is kept in the task's history as the owner's
 decision, naming the option chosen in full, so the meeting asks it no more; the task's waits on the owner end, and
 its session is woken to go on from the answer. It refuses a task that waits on no decision or approval of the owner,
-an option the card does not have, yes or no to a decision and an option to an approval. It writes as the owner, so
-the exec guard refuses it from an agent's tool call, and it refuses itself under `$CLAUDECODE`, as `owner note` does.
+an option the card does not have, yes or no to a decision and an option to an approval. A card on a security gate or
+marked `--security` is held to the rule its move to the owner follows, as it can change while it sits on the owner:
+it is refused while its security verdict is missing or was given on another question, options or recommendation. It
+writes as the owner, so the exec guard refuses it from an agent's tool call, and it refuses itself under
+`$CLAUDECODE`, as `owner note` does.
 
 Flags:
 

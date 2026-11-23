@@ -56,7 +56,8 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       kept in the task's history as the owner's decision, naming the option chosen or yes or no, which
       ends the task's wait on the owner and wakes its session to go on from it; refused on a task that
       waits on no decision or approval of the owner, an option its card lacks, yes or no to a decision,
-      an option to an approval, and where Claude Code sets $CLAUDECODE
+      an option to an approval, a security card without its current verdict, and where Claude Code
+      sets $CLAUDECODE
   owner later <[team/]T<id>> --until in-<n>h|tomorrow|monday|<time>   the owner puts a card off from
       the pane: to n hours from now, 09:00 on the team's clock tomorrow or next Monday, or a time; kept
       in the task's history as the owner's, the session told with no wake; refused on a task that
