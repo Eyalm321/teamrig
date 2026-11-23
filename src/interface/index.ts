@@ -4,6 +4,23 @@
  * built-ins, and `interface/index.test.ts` fails if anything reachable from here imports one. The command
  * (src/cli/commands/read.ts) gathers through the ports and calls these.
  */
+export {
+  budgetBody,
+  type BudgetBody,
+  type BudgetClassInput,
+  type BudgetInput,
+  type BudgetPaceState,
+  type BudgetRateSource,
+  type BudgetTeamInput,
+  type BudgetWeekInput,
+  type FiveHourInput,
+  type ServedBudgetTeam,
+  type ServedBudgetToday,
+  type ServedBudgetWeek,
+  type ServedClass,
+  type ServedFiveHour,
+  type ServedWeekForecast,
+} from './budget.ts';
 export { servedCard, type ServedCard } from './card.ts';
 export {
   configBody,
