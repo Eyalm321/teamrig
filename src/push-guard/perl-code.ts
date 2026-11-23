@@ -46,9 +46,11 @@ const SUFFIXED = /^-[A-Za-z]*i[A-Za-z]/;
 /**
  * Code inside an interpolating string or a pattern: `@{[ ]}`, `${\ }`, `$#{ }`, a subscript such as `$h{...}` or
  * `$a[...]`, or a pattern's code block, `(?{ })`, `(??{ })` or `(*{ })`. A subscript may follow any variable name:
- * a word, a caret name such as `$^W` or one punctuation character such as `$-` or `@+`; perl runs it as code.
+ * a word, one with the old `'` package separator (`$x'y` is `$x::y`), a caret name such as `$^W` or one punctuation
+ * character such as `$-` or `@+`; perl runs it as code. So may any `->` after a name: a postfix dereference such as
+ * `$x->@[...]` interpolates under `-E`.
  */
-const STRING_CODE = /[$@]\s*\{(?!\^?\w+\})|\$#\{|[$@](?:\^\w|[^\w\s]|[\w:]+)\s*(?:\[|\{|->\s*[[{])|\((?:\?\??|\*)\{/;
+const STRING_CODE = /[$@]\s*\{(?!\^?\w+\})|\$#\{|[$@](?:\^\w|[^\w\s]|[\w:']+)\s*(?:\[|\{|->)|\((?:\?\??|\*)\{/;
 
 /**
  * The inline code a perl call runs and what it may run, or undefined for any other call and for perl code read

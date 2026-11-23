@@ -130,6 +130,12 @@ describe('perlCodeOf', () => {
       'print "$-->[`x`]"',
       'print qq{$-[`x`]}',
       'print if /$+{`x`}/',
+      'say "$x->@[`x`]"',
+      'say qq{$x->@[`x`]}',
+      'say "$x->%{`x`}"',
+      'print if /$x->@[`x`]/',
+      'print "$x\'y[`x`]"',
+      'print qq{$x\'y[`x`]}',
     ]);
   });
 
