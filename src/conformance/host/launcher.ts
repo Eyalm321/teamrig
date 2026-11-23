@@ -44,10 +44,18 @@ const PARTS = ['projectDir', 'startedAs', 'sessionKind', 'sessionId', 'forcedEff
 
 const NONE: SessionIdentity = { projectDir: undefined, startedAs: undefined, sessionKind: undefined, sessionId: undefined, forcedEffort: undefined };
 
-/** A start that sets every part, the prompt with spaces in it. */
-const FULL: SessionStart = { name: 'tr-dev', model: 'model-one', effort: 'high', resume: 'session-7f3a', settingsFile: '/home/me/settings.json', prompt: 'read your handover' };
+/** A start that sets every part, the prompt and a plugin folder with spaces in them. */
+const FULL: SessionStart = {
+  name: 'tr-dev',
+  model: 'model-one',
+  effort: 'high',
+  resume: 'session-7f3a',
+  settingsFile: '/home/me/settings.json',
+  pluginDirs: ['/opt/plugins/one', '/opt/plugin folders/two'],
+  prompt: 'read your handover',
+};
 
-const EMPTY: SessionStart = { name: undefined, model: undefined, effort: undefined, resume: undefined, settingsFile: undefined, prompt: undefined };
+const EMPTY: SessionStart = { name: undefined, model: undefined, effort: undefined, resume: undefined, settingsFile: undefined, pluginDirs: [], prompt: undefined };
 
 /** Processes of the system's own and of other programs, a runtime among them running a script of no host. */
 const STRANGERS: readonly RunningProgram[] = [
@@ -123,17 +131,23 @@ const CASES: readonly LauncherCase[] = [
   },
   {
     id: 'launcher.launch-args',
-    title: 'starts a session on the model, at the effort, resumed and prompted as asked, and passes nothing it was not asked',
+    title: 'starts a session on the model, at the effort, resumed, with its plugin folders and prompted as asked, and passes nothing it was not asked',
     features: ['sessions.open', 'sessions.resume'],
     run: ({ port }) => {
-      const { launchArgs } = port({});
+      const { launchArgs, pluginManifest } = port({});
       const full = launchArgs(FULL);
       for (const part of ['model', 'effort', 'resume'] as const) {
         assert.ok(full.includes(FULL[part] ?? ''), `the ${part} ${FULL[part]} is not one argument of ${JSON.stringify(full)}`);
       }
       assert.ok(full.includes(FULL.prompt ?? ''), 'the prompt is not handed whole, as one argument');
+      // A host with no plugin manifest loads no plugin folder: a start naming one is refused before it runs.
+      if (pluginManifest !== undefined) {
+        for (const dir of FULL.pluginDirs) {
+          assert.ok(full.includes(dir), `the plugin folder ${dir} is not one argument of ${JSON.stringify(full)}`);
+        }
+      }
       const empty = launchArgs(EMPTY);
-      const asked = Object.values(FULL).filter((value) => value !== undefined);
+      const asked = Object.values(FULL).flat().filter((value) => value !== undefined);
       assert.ok(empty.every((word) => !asked.includes(word)), `a start that asks nothing passes ${JSON.stringify(empty)}`);
       assert.notDeepEqual(launchArgs({ ...EMPTY, model: 'model-two' }), launchArgs({ ...EMPTY, model: FULL.model }), 'two models start alike');
     },
@@ -208,7 +222,7 @@ const CHILD_ENV = { session: [], parked: [], login: [] } as const;
 export function nothingLauncher(): LauncherSubject {
   return {
     world: WORLD,
-    port: () => ({ programName: '', program: '', launchArgs: () => [], variables: VARIABLES, childEnv: CHILD_ENV, identity: () => NONE, isSessionProcess: () => false, isForkOf: () => false, backgroundJobSession: () => undefined, sessionPlaceOf: () => undefined }),
+    port: () => ({ programName: '', program: '', pluginManifest: undefined, launchArgs: () => [], variables: VARIABLES, childEnv: CHILD_ENV, identity: () => NONE, isSessionProcess: () => false, isForkOf: () => false, backgroundJobSession: () => undefined, sessionPlaceOf: () => undefined }),
   };
 }
 
@@ -220,6 +234,7 @@ export function yesLauncher(): LauncherSubject {
     port: () => ({
       programName: 'Host',
       program: 'host',
+      pluginManifest: 'plugin.json',
       launchArgs: () => ['--yes'],
       variables: { marks: ['HOST'], identity: ['HOST'] },
       childEnv: { session: ['HOST'], parked: ['HOST'], login: [] },

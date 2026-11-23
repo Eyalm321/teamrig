@@ -55,7 +55,7 @@ describe('the launcher liars', () => {
     const { port, world } = nothingLauncher();
     const launcher = port(world.env({ sessionId: 'session-one', forcedEffort: 'high' }));
     assert.deepEqual([launcher.programName, launcher.program], ['', '']);
-    assert.deepEqual(launcher.launchArgs({ name: 'n', model: 'm', effort: 'e', resume: 'r', settingsFile: 's', prompt: 'p' }), []);
+    assert.deepEqual(launcher.launchArgs({ name: 'n', model: 'm', effort: 'e', resume: 'r', settingsFile: 's', pluginDirs: ['d'], prompt: 'p' }), []);
     assert.deepEqual(Object.values(launcher.identity()), [undefined, undefined, undefined, undefined, undefined]);
     assert.deepEqual([launcher.variables.marks, launcher.variables.identity, launcher.childEnv.session], [[], [], []]);
     assert.equal(launcher.isSessionProcess(world.sessionProcess), false);
@@ -67,7 +67,7 @@ describe('the launcher liars', () => {
     const { port, world } = yesLauncher();
     assert.deepEqual(port(world.env({ sessionId: 'session-one' })).identity(), port({}).identity());
     const launcher = port({});
-    assert.deepEqual(launcher.launchArgs({ name: undefined, model: 'one', effort: undefined, resume: undefined, settingsFile: undefined, prompt: undefined }), launcher.launchArgs({ name: undefined, model: 'two', effort: undefined, resume: undefined, settingsFile: undefined, prompt: undefined }));
+    assert.deepEqual(launcher.launchArgs({ name: undefined, model: 'one', effort: undefined, resume: undefined, settingsFile: undefined, pluginDirs: [], prompt: undefined }), launcher.launchArgs({ name: undefined, model: 'two', effort: undefined, resume: undefined, settingsFile: undefined, pluginDirs: [], prompt: undefined }));
     assert.equal(launcher.isSessionProcess({ name: 'anything', commandLine: '' }), true);
     assert.equal(launcher.isForkOf('', 'session-one'), true);
     assert.equal(launcher.backgroundJobSession([]), launcher.backgroundJobSession(world.backgroundJob('session-one')));
