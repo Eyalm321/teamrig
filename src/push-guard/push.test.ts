@@ -328,6 +328,7 @@ describe('evaluatePushes: where a push hides', () => {
       ["perl -ne 'print \"$+{`git push origin main`}\"' f", 'ask', 'doubt'],
       ["perl -E 'say \"$x->@[`git push origin main`]\"'", 'ask', 'doubt'],
       ["perl -E 'say qq{$x->@[`git push origin main`]}'", 'ask', 'doubt'],
+      ["perl -e 'print $`, `git push origin main #`'", 'ask', 'doubt'],
     ]);
   });
 
