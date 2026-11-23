@@ -96,8 +96,9 @@ function askContextOf(runtime: CliRuntime, scope: SessionScope, store: RefreshSt
  * threshold (`decideMidTurn`), so a long turn refreshes before Claude Code compacts it. The ask is recorded
  * before it is answered, so the turn's end asks again only when the handover is not written by then. The
  * running work, which takes the transcript's last 8 MiB, is read only once the context is past the size.
- * stdin: `{session_id, cwd, tokens}`, `tokens` the context the last reply read. One threshold holds for every window
- * (T4083), so a `window` an older mod still sends is not read.
+ * stdin: `{session_id, cwd, tokens, window?}`, `tokens` the context the last reply read, `window` the context window
+ * reported with it. The window is kept in the session's state file, since the turn end is never told it: a session's
+ * own refresh limit is checked against it there too (#1543). A mod that sends none leaves the one kept.
  */
 export async function refreshMid(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);
@@ -112,6 +113,10 @@ export async function refreshMid(args: ParsedArgs, runtime: CliRuntime): Promise
     return answer(runtime, OFF);
   }
   const store = new RefreshStore(runtime.files, scope.kit.paths);
+  const window = countOf(fields, 'window');
+  if (window !== undefined && window > 0 && (await store.window(scope.id)).window !== window) {
+    await store.setWindow(scope.id, { window });
+  }
   const state = await store.state(scope.id);
   const context = askContextOf(runtime, scope, store);
   const meeting = await inMeetingNow(runtime, scope);
