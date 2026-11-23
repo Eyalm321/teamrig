@@ -58,10 +58,11 @@ export interface SplitWarnings {
 export type UnownedFinding = ContextFinding | AllowFinding | DenyFinding;
 
 /**
- * The budgets that total many files: every CLAUDE.md, every skill folder. A task names one of those files for its own
- * reasons ("add a rule to CLAUDE.md", any task about one skill), so only the config key covers such a warning (#814).
+ * The budgets on one file, the memory index: a task naming that file covers its warning. The other budgets total many
+ * files (every instructions file, every skill folder), which a task names for its own reasons ("add a rule to" one,
+ * any task about one skill), so only the config key covers such a warning (#814).
  */
-const TOTAL_BUDGETS: ReadonlySet<string> = new Set(['maxClaudeMdChars', 'maxSkillListingChars']);
+const ONE_FILE_BUDGETS: ReadonlySet<string> = new Set(['maxMemoryIndexChars']);
 
 function findingWarning(finding: UnownedFinding): UnownedWarning {
   const text = formatFinding(finding);
@@ -75,7 +76,7 @@ function findingWarning(finding: UnownedFinding): UnownedWarning {
         key: `context ${finding.budget}`,
         source: `the context check [contextFiles.${finding.budget}]`,
         text,
-        names: [`contextFiles.${finding.budget}`, ...(TOTAL_BUDGETS.has(finding.budget) ? [] : (finding.paths ?? []))],
+        names: [`contextFiles.${finding.budget}`, ...(ONE_FILE_BUDGETS.has(finding.budget) ? (finding.paths ?? []) : [])],
       };
   }
 }
