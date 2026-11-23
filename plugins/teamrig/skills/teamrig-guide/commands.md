@@ -2821,13 +2821,15 @@ every team's under it; a team under the root is served only its own and its team
   each in its plan order), `overdue` (asked in an earlier batch and now past due), `weekly` (held for the
   Improvements day, as they free only Improvements work; empty on that day, when they are in `pending`), `dedicated`
   (a session `decisions.dedicatedOwners` names, asked in its own meeting with the owner, never in a batch) and
-  `later` (put off by the owner, asked again once their time passed).
+  `later` (put off by the owner, asked again once their time passed). A dedicated session's wait the owner put off is
+  in neither `dedicated` nor `later` until its time passes.
 - `cuts`: as `{ "id", "field", "shape" }`, `id` a wait's `key`.
 
 Each wait holds:
 
 - `key`: how the batch names it, `T5` for the reader's own register, `web/T5` for a team's under it; `id`, and `team`:
-  the team whose register holds it, `null` for the reader's own.
+  the team whose register holds it, `null` for the reader's own. A wait carries no title: a tool names it by joining
+  `id` with `tasks`.
 - `owner`, `status`, and `waits` as `tasks` serves them.
 - `due`: the date it works to, `{ "due", "at", "from" }` as `plan` serves one: its own due, or the earlier one of a
   task that needs it (`from` that task's id); `null` with neither.
