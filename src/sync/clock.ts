@@ -249,13 +249,18 @@ function waitedHours(clock: Pick<Clock, 'since'>, now: number): number {
   return Math.floor((now - clock.since) / HOUR_MS);
 }
 
+/** The ask an owner's line ends with: answer `what` (one thread, or each of several) in words on the thread by `by`. */
+function answerBy(what: 'it' | 'each', by: string): string {
+  return `answer ${what} in words on GitHub by ${by}`;
+}
+
 /** The owner's unwoken reminder at REMIND_SHARE of the target. */
 export function reminderText(clock: Clock, now: number, zone: TimeZone, ownerFirst: OwnerFirst): string {
   const due = new Date(clock.since + targetMs(clock.kind));
   const after = ownerFirst(clock.owner) ? `GH-LATE goes to you, and to the lead from ${zone.shortMinute(new Date(leadTurnAt(clock, ownerFirst)))}` : 'GH-LATE goes to the lead';
   return (
     `GitHub ${clock.ref} (${clock.kind}) has waited ${waitedHours(clock, now)} h for an answer of ours, since ${zone.shortMinute(new Date(clock.since))}; ` +
-    `answer it in words on GitHub by ${zone.shortMinute(due)}, its ${ANSWER_TARGET_HOURS[clock.kind]} h target, or ${after}`
+    `${answerBy('it', zone.shortMinute(due))}, its ${ANSWER_TARGET_HOURS[clock.kind]} h target, or ${after}`
   );
 }
 
@@ -263,7 +268,7 @@ export function reminderText(clock: Clock, now: number, zone: TimeZone, ownerFir
 export function toldText(clock: Clock, now: number, zone: TimeZone, ownerFirst: OwnerFirst): string {
   return (
     `GH-LATE ${clock.ref} (${clock.kind}) has waited ${waitedHours(clock, now)} h for an answer of ours since ${zone.shortMinute(new Date(clock.since))}, ` +
-    `past its ${ANSWER_TARGET_HOURS[clock.kind]} h target: answer it in words on GitHub by ${zone.shortMinute(new Date(leadTurnAt(clock, ownerFirst)))}, or it goes to the lead`
+    `past its ${ANSWER_TARGET_HOURS[clock.kind]} h target: ${answerBy('it', zone.shortMinute(new Date(leadTurnAt(clock, ownerFirst))))}, or it goes to the lead`
   );
 }
 
@@ -303,7 +308,7 @@ export function remindersText(clocks: readonly Clock[], now: number, zone: TimeZ
   const after = only !== undefined && ownerFirst(only.owner) ? 'GH-LATE goes to you, and to the lead a second window later' : 'GH-LATE goes to the lead';
   return (
     `${clocks.length} GitHub threads wait for an answer of ours: ${namedRefs(byDue, (clock) => `${clock.ref} (${clock.kind}, by ${zone.shortMinute(new Date(dueAt(clock)))})`)}; ` +
-    `answer each in words on GitHub by its target, or ${after}`
+    `${answerBy('each', 'its target')}, or ${after}`
   );
 }
 
@@ -320,7 +325,7 @@ export function toldsText(clocks: readonly Clock[], now: number, zone: TimeZone,
   const byTurn = [...clocks].sort((a, b) => turn(a) - turn(b));
   return (
     `GH-LATE ${clocks.length} GitHub threads waited past their answer target for an answer of ours: ` +
-    `${namedRefs(byTurn, (clock) => `${clock.ref} (${clock.kind}, by ${zone.shortMinute(new Date(turn(clock)))})`)}; answer each in words on GitHub by then, or it goes to the lead`
+    `${namedRefs(byTurn, (clock) => `${clock.ref} (${clock.kind}, by ${zone.shortMinute(new Date(turn(clock)))})`)}; ${answerBy('each', 'then')}, or it goes to the lead`
   );
 }
 

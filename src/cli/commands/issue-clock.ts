@@ -32,7 +32,7 @@ import { inboxDepsOf } from './inbox.ts';
  * The response clock's part of a sync that writes (T3028, sync/clock.ts): from each repository it read, the open
  * threads (issues and pull requests) and who answers each, then the clocks kept in their own file under the sync's lock, and one unwoken inbox
  * line to each owner whose thread reached 75% of its answer target, and one GH-LATE line at 100% to an owner told
- * before the lead. The lead's GH-LATE is `check`'s (src/cli/github-late-check.ts).
+ * before the lead. The lead's GH-LATE is `check`'s, read from the same clocks file.
  */
 
 /**
@@ -84,24 +84,26 @@ export function teamOwnerFirst(config: KitConfig): OwnerFirst {
 export async function recordClocks(runtime: CliRuntime, kit: Kit, config: KitConfig, read: ReadonlySet<string>, threads: readonly Thread[]): Promise<string[]> {
   const now = runtime.clock.now();
   const ownerFirst = teamOwnerFirst(config);
+  const file = kit.paths.githubClocks;
   const step = await fileLockOf(runtime, kit.paths.githubSyncLock, config.lock).run(async (): Promise<ClockStep> => {
-    const text = await runtime.files.read(kit.paths.githubClocks);
-    writableObject(kit.paths.githubClocks, text, CLOCK_STATE_FORMAT);
+    const text = await runtime.files.read(file);
+    writableObject(file, text, CLOCK_STATE_FORMAT);
     const next = stepClocks(parseClocks(text ?? ''), read, threads, now, ownerFirst);
-    await runtime.files.write(kit.paths.githubClocks, formatClocks(next.clocks));
+    await runtime.files.write(file, formatClocks(next.clocks));
     return next;
   });
   const inboxes = inboxDepsOf(runtime, kit.paths).inboxes;
   const secrets = new SecretScanner(config.register.secretPatterns);
   const zone = teamZone(config, runtime);
+  const post = (owner: string, text: string): Promise<string | undefined> => postLine(inboxes, secrets, { to: owner, from: GITHUB_ACTOR, text, now: new Date(now) });
   const lines: string[] = [];
   for (const [owner, clocks] of byOwner(step.remind)) {
-    const problem = await postLine(inboxes, secrets, { to: owner, from: GITHUB_ACTOR, text: remindersText(clocks, now, zone, ownerFirst), now: new Date(now) });
+    const problem = await post(owner, remindersText(clocks, now, zone, ownerFirst));
     const what = clocks.length === 1 ? `${clocks[0]?.ref} waits` : `${clocks.length} GitHub threads wait`;
     lines.push(problem === undefined ? `REMINDED ${owner}: ${what} on an answer` : `INBOX ${owner}: not posted: ${problem}`);
   }
   for (const [owner, clocks] of byOwner(step.tell)) {
-    const problem = await postLine(inboxes, secrets, { to: owner, from: GITHUB_ACTOR, text: toldsText(clocks, now, zone, ownerFirst), now: new Date(now) });
+    const problem = await post(owner, toldsText(clocks, now, zone, ownerFirst));
     const what = clocks.length === 1 ? `${clocks[0]?.ref} is past its` : `${clocks.length} GitHub threads are past their`;
     lines.push(problem === undefined ? `TOLD ${owner}: ${what} answer target` : `INBOX ${owner}: not posted: ${problem}`);
   }
