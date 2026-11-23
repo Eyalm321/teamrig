@@ -136,9 +136,6 @@ function timesOf(job: Record<string, unknown>): Pick<Job, 'jobAttempt' | 'create
   return { ...(typeof attempt === 'number' ? { jobAttempt: attempt } : {}), ...(created === undefined ? {} : { createdAt: created }), ...(started === undefined ? {} : { startedAt: started }), ...(completed === undefined ? {} : { completedAt: completed }) };
 }
 
-/** The minutes a check may stay queued or running when repos.json gives no `checkMinutes` (#1341). */
-export const CHECK_MINUTES_DEFAULT = 30;
-
 /** A GitHub time in ms since the epoch; undefined for none or text that is no time. */
 function msOf(text: string | undefined): number | undefined {
   if (text === undefined) return undefined;
@@ -201,8 +198,8 @@ export interface RequiredChecks {
   readonly summary: string | null;
   /** Checks a failure of which is re-run once before it fails the merge (repos.ts `flaky`). */
   readonly flaky: readonly string[];
-  /** The minutes a check may stay queued or running before it counts failed (repos.ts `checkMinutes`); unset, CHECK_MINUTES_DEFAULT. */
-  readonly checkMinutes?: number;
+  /** The minutes a check may stay queued or running before it counts failed (repos.ts `checkMinutes`, which fills in the default). */
+  readonly checkMinutes: number;
   /** Checks the summary's run makes only for some changes, not waited for once the summary passed without them (repos.ts `conditional`). */
   readonly conditional: readonly string[];
 }
@@ -311,7 +308,7 @@ export function rerunFailedJobs(gh: Gh, repo: string, runId: number): void {
 export function readChecks(gh: Gh, repo: string, sha: string, branch: string, required: RequiredChecks, now?: number): CheckOutcome[] {
   const runs = newestRuns(parseRuns(gh(['api', `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`])).filter(run => run.branch === branch));
   const listed = runs.flatMap(run => parseJobs(gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`]), run));
-  const jobs = settleJobs(listed, runs, now, required.checkMinutes ?? CHECK_MINUTES_DEFAULT);
+  const jobs = settleJobs(listed, runs, now, required.checkMinutes);
   const statuses = parseStatuses(gh(['api', `repos/${repo}/commits/${sha}/status`]));
   return plannedOut(evaluate(required.names, jobs, statuses, required.summary, required.flaky), required.summary, required.conditional);
 }
