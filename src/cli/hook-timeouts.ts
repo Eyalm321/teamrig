@@ -50,7 +50,7 @@ export const HOOK_TIMEOUT_MS: Readonly<Record<string, number | null>> = {
   'refresh-mid': 15_000,
   'compact-check': 15_000,
   'slash-command': 180_000,
-  // The mod's hand watch runs it with HAND_TRACE_TIMEOUT_MS (plugins/teamrig/hooks/register.ts).
+  // The mod's hand watch runs it with HAND_TRACE_TIMEOUT_MS (src/mod/hand-watch.ts).
   'hand-trace': 10_000,
 };
 

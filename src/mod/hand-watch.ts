@@ -13,6 +13,8 @@
 
 /** How long a tick may stay unsettled, by default, before the hand's next run traces it as stalled; most hands' CLI runs stop by 30 s. */
 export const STALL_MS = 60_000;
+/** How long the CLI may take to log one hand trace. */
+export const HAND_TRACE_TIMEOUT_MS = 10_000;
 /** The least time between two traces of the same hand and kind. */
 export const TRACE_EVERY_MS = 10 * 60_000;
 /** The most of an error's text a trace carries. */
