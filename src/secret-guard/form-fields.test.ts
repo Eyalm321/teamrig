@@ -53,12 +53,19 @@ describe('FormFields', () => {
     assert.deepEqual(redacted(text).stdout, 'a { opens here\n{"type":"password","attrs":{"a":1},"value":"[redacted value of a password field]"}');
   });
 
-  it('reads a long result full of open braces in about two passes', () => {
-    // The work, not the time: a time bound fails under a loaded host or coverage. One resume per stray brace read 33 times the length.
+  it('walks a nested password-field object after 3 and after 32 stray braces that never close', () => {
+    for (const count of [3, 32]) {
+      const text = join('log {start\n'.repeat(count), '{"type":"password","attrs":{"a":1},"value":"', PASSWORD, '"}');
+      assert.deepEqual(values(text), [PASSWORD], `${count} strays`);
+    }
+  });
+
+  it('reads a long result full of open braces at most 33 times its length', () => {
+    // The work, not the time: a time bound fails under a loaded host or coverage. Each of the 32 resumes reads on to the end.
     for (const text of ['{'.repeat(1_000_000), '{"a":'.repeat(200_000), '{"'.repeat(500_000)]) {
       const cost = { scanned: 0 };
       assert.deepEqual(objectSpans(text, cost), []);
-      assert.ok(cost.scanned <= 3 * text.length, `${text.slice(0, 5)}: read ${cost.scanned} of ${text.length}`);
+      assert.ok(cost.scanned <= 33 * text.length, `${text.slice(0, 5)}: read ${cost.scanned} of ${text.length}`);
       assert.deepEqual(values(text), []);
     }
   });

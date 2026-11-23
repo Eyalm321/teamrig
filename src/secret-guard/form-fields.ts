@@ -177,23 +177,25 @@ function marksPassword(record: JsonRecord): boolean {
   return [record['name'], record['id']].some((name) => typeof name === 'string' && isPasswordName(name));
 }
 
-/** How often the brace scan starts over past a `{` that never closes before the flat patterns read the rest. */
+/**
+ * How often the brace scan starts over past a `{` that never closes before the flat patterns read the rest. Each resume
+ * reads on to the end of the text, so the scan reads at most 33 times its length.
+ */
 const MAX_RESUMES = 32;
-/** How many times the text's length the brace scan reads in all, its resumes included. */
-const MAX_SCAN_PASSES = 2;
 
 /**
  * The start and end of each outermost balanced `{...}` of `text`, a brace inside a JSON string not counted. A `{` left
  * open at the end is not a span: the scan starts over just after it, so objects after a stray brace are still walked.
- * It starts over at most `MAX_RESUMES` times and reads at most `MAX_SCAN_PASSES` times the text's length in all, so a
- * long result full of open braces (a cut-off nested dump) costs about two passes; the flat patterns read what is left.
+ * It starts over at most `MAX_RESUMES` times, so objects after up to that many stray braces are still walked and a
+ * long result full of open braces (a cut-off nested dump) costs at most `MAX_RESUMES + 1` passes; the flat patterns
+ * read what is left.
  * `cost`, when given, gets the characters the scan read, so a test bounds the work rather than the time it took.
  */
 export function objectSpans(text: string, cost?: { scanned: number }): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
   let from = 0;
   let scanned = 0;
-  for (let resumes = 0; resumes <= MAX_RESUMES && scanned < MAX_SCAN_PASSES * text.length; resumes += 1) {
+  for (let resumes = 0; resumes <= MAX_RESUMES; resumes += 1) {
     const open = scanSpans(text, from, spans);
     scanned += text.length - from;
     if (open === undefined) break;
