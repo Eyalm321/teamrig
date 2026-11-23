@@ -45,9 +45,10 @@ const LOADS = /^-[A-Za-z]*[Mmdx]/;
 const SUFFIXED = /^-[A-Za-z]*i[A-Za-z]/;
 /**
  * Code inside an interpolating string or a pattern: `@{[ ]}`, `${\ }`, `$#{ }`, a subscript such as `$h{...}` or
- * `$a[...]`, or a pattern's code block, `(?{ })`, `(??{ })` or `(*{ })`.
+ * `$a[...]`, or a pattern's code block, `(?{ })`, `(??{ })` or `(*{ })`. A subscript may follow any variable name:
+ * a word, a caret name such as `$^W` or one punctuation character such as `$-` or `@+`; perl runs it as code.
  */
-const STRING_CODE = /[$@]\s*\{(?!\^?\w+\})|\$#\{|[$@][\w:]+\s*(?:\[|\{|->\s*[[{])|\((?:\?\??|\*)\{/;
+const STRING_CODE = /[$@]\s*\{(?!\^?\w+\})|\$#\{|[$@](?:\^\w|[^\w\s]|[\w:]+)\s*(?:\[|\{|->\s*[[{])|\((?:\?\??|\*)\{/;
 
 /**
  * The inline code a perl call runs and what it may run, or undefined for any other call and for perl code read
@@ -177,12 +178,20 @@ class PerlReader {
       this.expect = 'term';
       return undefined;
     }
+    if ((sigil === '%' || sigil === '*') && this.expect === 'either') {
+      // After a bare word or a `}` perl may read `%` and `*` as modulo and multiply: `time % 2`, `$h{a} * 3`.
+      return 'unknown';
+    }
     // perl allows blanks after a sigil: `@ {...}` is `@{...}`.
     const rest = this.code.slice(this.index + 1).trimStart();
     if (sigil === '&' || rest.startsWith('{') || /^\$[\w{$:]/.test(rest) || (sigil === '$' && /^#[{$]/.test(rest))) {
       return 'runs';
     }
     const name = /^(?:#?(?:\^\w|[\w:]+)|.)/s.exec(rest)?.[0] ?? '';
+    if (sigil !== '$' && /^[`'"]/.test(name)) {
+      // Only `$` takes a backtick or a quote as its name (`$``, `$'`); the reading guesses none for another sigil.
+      return 'unknown';
+    }
     this.index = this.code.length - rest.length + name.length;
     this.expect = 'operator';
     return this.oldSeparator() ? 'unknown' : /\bARGV\b/.test(name) ? 'runs' : undefined;

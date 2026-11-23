@@ -319,6 +319,16 @@ describe('evaluatePushes: where a push hides', () => {
     ]);
   });
 
+  it('asks about a perl one-liner whose backticks follow modulo, multiply or a punctuation subscript (#1426)', () => {
+    expectRows([
+      ["perl -e 'print time % `git push origin main #`'", 'ask', 'doubt'],
+      ["perl -e 'print $x{a} *`git push origin main #`'", 'ask', 'doubt'],
+      ["perl -e 'print \"$-[`git push origin main`]\"'", 'ask', 'doubt'],
+      ["perl -e 'print \"$^W[`git push origin main`]\"'", 'ask', 'doubt'],
+      ["perl -ne 'print \"$+{`git push origin main`}\"' f", 'ask', 'doubt'],
+    ]);
+  });
+
   it('allows quoted text whose backticks never close, as bash runs nothing there (T2764)', () => {
     expectRows([
       ["printf '%s' 'then `\\`' ; git push origin t1-x", 'allow'],

@@ -98,6 +98,41 @@ describe('readPerl', () => {
 });
 
 describe('perlCodeOf', () => {
+  it('cannot tell modulo or multiply after a bare word or a subscript from a sigil', () => {
+    expectReadings('unknown', [
+      'print time % `x #`',
+      'print time *`x #`',
+      'print wantarray % `x #`',
+      'print __LINE__ %`x #`',
+      'print __FILE__ %`x #`',
+      'print $x{a} %`x #`',
+      'print $a->{x} *`x #`',
+      'print %`x #`',
+      'print *`x #`',
+    ]);
+  });
+
+  it('reads a subscript after a punctuation or caret variable in a string or pattern as code', () => {
+    expectReadings('unknown', [
+      'print "$-[`x`]"',
+      'print "$+[`x`]"',
+      'print "$+{`x`}"',
+      'print "$-{`x`}"',
+      'print "$![`x`]"',
+      'print "$$[`x`]"',
+      'print "$&[`x`]"',
+      'print "@-[`x`]"',
+      'print "$^W[`x`]"',
+      'print "$;[`x`]"',
+      'print "$,[`x`]"',
+      'print "$.[`x`]"',
+      'print "$/[`x`]"',
+      'print "$-->[`x`]"',
+      'print qq{$-[`x`]}',
+      'print if /$+{`x`}/',
+    ]);
+  });
+
   it('reads every -e and -E word of a perl call as one program', () => {
     assert.equal(readingOf("perl -ne 'print if /`x`/' f"), 'none');
     assert.equal(readingOf("perl -e '# `x`' -e 'print 1'"), 'none');
