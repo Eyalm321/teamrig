@@ -106,4 +106,14 @@ describe('decisionsBody', () => {
     assert.deepEqual(body.cuts, [{ id: 'web/T8', field: 'card.question', shape }]);
     assert.doesNotMatch(JSON.stringify(body), /someone|steps[\\/]/, 'no part of a run path but its file name is served');
   });
+
+  it("serves the sha256 of the run file's own audit, never another file's audit on the task", () => {
+    const run = '/home/someone/steps/grant.sh';
+    const own = { path: run, sha256: 'ab'.repeat(32), by: 'security', at: '2030-01-08T08:00:00.000Z' };
+    const other = { path: '/home/someone/steps/revoke.sh', sha256: 'cd'.repeat(32), by: 'security', at: '2030-01-08T08:30:00.000Z' };
+    const both = ownerWait('T7', '2030-01-08T09:00:00.000Z', { card: { ...TEST_OWNER_CARD, run }, audits: [own, other] });
+    const otherOnly = ownerWait('T8', '2030-01-08T09:00:00.000Z', { card: { ...TEST_OWNER_CARD, run }, audits: [other] });
+    const runs = bodyOf(batchOf([registerOf([both, otherOnly])])).pending.map((row) => row.card?.run);
+    assert.deepEqual(runs, [{ file: 'grant.sh', sha256: own.sha256 }, { file: 'grant.sh', sha256: null }]);
+  });
 });

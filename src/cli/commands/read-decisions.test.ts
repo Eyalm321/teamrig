@@ -10,6 +10,7 @@ import { EXIT } from '../runtime.ts';
 
 const READ_DECISIONS = ['read', 'decisions', '--json'] as const;
 const AS_WEB: RunOptions = { env: { TEAMRIG_TEAM: 'web' } };
+const AS_OPS: RunOptions = { env: { TEAMRIG_TEAM: 'ops' } };
 
 async function ok(kit: CliHarness, argv: readonly string[], options: RunOptions = {}): Promise<readonly string[]> {
   const result = await kit.run(argv, options);
@@ -72,5 +73,15 @@ describe('read decisions', () => {
     assert.notEqual(web['askedBy'], null, "the root's lead asks the owner web's waits");
     const root = served(await kit.run(READ_DECISIONS));
     assert.deepEqual([keysOf(root, 'pending'), root['askedBy']], [['web/T1'], null]);
+  });
+
+  it("serves a team under the root no sibling team's put-off waits, and the root every team's", async () => {
+    const kit = await treeHarness();
+    await add(kit, 'Pick the region', 'back', AS_WEB);
+    await waitOnOwner(kit, 'T1', 'back', ',time:2030-01-09 12:00', AS_WEB);
+    await add(kit, 'Pick the host', 'run', AS_OPS);
+    await waitOnOwner(kit, 'T2', 'run', ',time:2030-01-09 12:00', AS_OPS);
+    assert.deepEqual(keysOf(served(await kit.run(READ_DECISIONS, AS_WEB)), 'later'), ['web/T1']);
+    assert.deepEqual(keysOf(served(await kit.run(READ_DECISIONS)), 'later').sort(), ['ops/T2', 'web/T1']);
   });
 });
