@@ -190,7 +190,7 @@ export function shortArgument(table: OptionTable, letter: string): OptionArgumen
 
 /** The long option `name` (without `--` or `=value`) as getopt reads it: an exact name, else a unique prefix of one. */
 export function longOption(table: OptionTable, name: string): LongOption {
-  const entries = table.long.split(' ').map((entry) => {
+  const entries = table.long.split(' ').map((entry): { readonly name: string; readonly argument: OptionArgument } => {
     const last = entry.charAt(entry.length - 1);
     return last === '=' || last === '?' ? { name: entry.slice(0, -1), argument: last === '=' ? 'required' : 'optional' } : { name: entry, argument: 'none' };
   });
@@ -200,5 +200,5 @@ export function longOption(table: OptionTable, name: string): LongOption {
   if (match === undefined) {
     return { kind: 'unknown' };
   }
-  return matches.length > 1 ? { kind: 'ambiguous' } : { kind: 'known', name: match.name, argument: match.argument as OptionArgument };
+  return matches.length > 1 ? { kind: 'ambiguous' } : { kind: 'known', name: match.name, argument: match.argument };
 }
