@@ -486,6 +486,15 @@ describe('config.schema.json', () => {
     assert.deepEqual([label['minLength'], label['maxLength'], label['pattern']], [1, GITHUB_LABEL_MAX_LENGTH, '^[^\\r\\n]+$']);
   });
 
+  it('takes the plugin folders the parser takes: an absolute path on one line', async () => {
+    const items = nodeAt(await loadSchema(), 'pluginDirs')['items'];
+    assert.ok(isRecord(items) && typeof items['pattern'] === 'string');
+    const pattern = new RegExp(items['pattern']);
+    for (const path of ['/opt/app/teamrig', 'C:/app/plugins/pane', 'C:\\app\\pane', 'plugins/teamrig', '/opt/a\nb', 'C:app']) {
+      assert.equal(pattern.test(path), parseConfig({ ...ROSTER, pluginDirs: [path] }).issues.length === 0, path);
+    }
+  });
+
   it('takes the github area labels the parser takes', async () => {
     const names = nodeAt(await loadSchema(), 'github.areaOwners')['propertyNames'];
     assert.ok(isRecord(names));

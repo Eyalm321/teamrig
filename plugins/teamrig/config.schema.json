@@ -96,7 +96,7 @@
       "description": "Plugin folders each session's Claude Code loads with --plugin-dir: a teamrig, or a plugin beside it, that runs from a copy Claude Code has not installed, such as one bundled with another app or a checkout no session works in. Their hooks run in every session, guards among them, so name only a folder no session can write, never one in a working tree a session edits: teamrig launch refuses one inside the team's or a session's project folder. Each is an absolute folder holding .claude-plugin/plugin.json; teamrig launch refuses to start while one does not. Set only here, never from the environment, so nothing a session's caller sets chooses the hooks every session runs; owner-gated: the config guard refuses a session's own edit of it, the owner sets it. Empty: the installed plugins only.",
       "type": "array",
       "maxItems": 8,
-      "items": { "type": "string" },
+      "items": { "type": "string", "maxLength": 260, "pattern": "^(?:[A-Za-z]:)?[\\\\/][^\\r\\n]*$" },
       "default": []
     },
     "securityGates": {

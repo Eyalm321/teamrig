@@ -594,7 +594,7 @@ export function parseConfig(raw: JsonRecord, above?: AccountBudget): ConfigParse
     },
     leads,
     ownerGates,
-    pluginDirs: read.stringList(raw, 'pluginDirs', '', DEFAULT_PLUGIN_DIRS, isAbsoluteFolder, CONFIG_LIMITS.pluginDirs.maxItems),
+    pluginDirs: read.stringList(raw, 'pluginDirs', '', DEFAULT_PLUGIN_DIRS, shortLine(CONFIG_LIMITS.pluginDirs.maxLength, isAbsoluteFolder), CONFIG_LIMITS.pluginDirs.maxItems),
     securityGates: readSecurityGates(read, raw, ownerGates),
     hosts: readHosts(read, raw),
     ruleConflicts: read.list(

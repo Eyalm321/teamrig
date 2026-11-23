@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_BUDGET, DEFAULT_BURST, DEFAULT_RUSH, DEFAULT_CHECK_TIMEOUT_SECONDS, DEFAULT_FREEZES, DEFAULT_COMMITS, DEFAULT_FOCUS, DEFAULT_ISSUE_FIELDS, DEFAULT_QUEUE, DEFAULT_HIRING, DEFAULT_IDLE, DEFAULT_OPEN, DEFAULT_PERMISSIONS, DEFAULT_REFRESH, DEFAULT_REGISTER, DEFAULT_STATUS_LINE, DEFAULT_WAKE, DEFAULT_STABLE_PERIODS, DEFAULT_MEETING, DEFAULT_BRANCHES, DEFAULT_SYNC } from './defaults.ts';
 import { HIRE_CAP_DROPPED, IDLE_RETIRE_DROPPED, LARGE_WINDOW_DROPPED } from './migrate.ts';
 import { ADAPTER_ID } from '../plugin-api/index.ts';
-import { CONNECTOR_LIMITS, GITHUB_LABEL_MAX_LENGTH } from './limits.ts';
+import { CONFIG_LIMITS, CONNECTOR_LIMITS, GITHUB_LABEL_MAX_LENGTH } from './limits.ts';
 import { parseConfig } from './parse.ts';
 import { CONFIG_VERSION, type AccountBudget, type BudgetConfig } from './types.ts';
 import type { ConfigIssue } from './reader.ts';
@@ -2026,6 +2026,8 @@ describe('parseConfig', () => {
     assert.match(bad.issues[0]?.message ?? '', /expected an absolute folder path on one line/);
     assert.deepEqual(bad.config.pluginDirs, ['/opt/app/teamrig']);
     assert.deepEqual(paths(parseConfig({ ...ROSTER, pluginDirs: '/opt/app/teamrig' }).issues), ['pluginDirs']);
+    const long = `/${'p'.repeat(CONFIG_LIMITS.pluginDirs.maxLength)}`;
+    assert.deepEqual(paths(parseConfig({ ...ROSTER, pluginDirs: [long] }).issues), ['pluginDirs[0]']);
   });
 
   it('reads whether the idle pass runs and the sessions it keeps open, refusing a mode it does not know or a session not on the team', () => {
