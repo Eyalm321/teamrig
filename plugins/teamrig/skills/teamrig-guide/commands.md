@@ -7743,8 +7743,9 @@ the team's `state/usage/cuts.jsonl`. A session of a team under the lead's own is
 A plain cut holds nothing while the session's part is unspent, so it cannot keep a session closed from the day's
 start. To stop one, give `--stop`: the session is held whatever its use, from its first W, so it wakes and is
 reopened for p0 work only, and the stop lasts until `--until` or the week's reset. `teamrig budget` names a stopped
-session still within its part on a line of its own: `Stopped by a leader, held whatever their use: api.` A lift of
-the session given after the stop ends it, as it ends a cut.
+session still within its part on a line of its own: `Stopped by a leader, held whatever their use: api.` Under
+`budget.overAction` `warn` a stop holds nothing either, and the line reads `Stopped by a leader, only warned under
+budget.overAction warn: api.` A lift of the session given after the stop ends it, as it ends a cut.
 
 Flags:
 
