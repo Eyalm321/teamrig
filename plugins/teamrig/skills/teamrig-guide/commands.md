@@ -2401,8 +2401,8 @@ pin approved last, its path and hash read anew on each call; with none approved,
 refused, naming the path, hash prefix and version found and expected. Before approving, the reviewer checks the hash
 against the release's `SHASUMS256.txt` on nodejs.org (`exec status P<n>` names the link), or a distro build's
 package manager verifies the file. The security reviewer settles another session's pin and the owner any; a pin is
-never escalated. After a Node.js upgrade, the owner runs it again from their own terminal and the reviewer approves
-the new pin.
+never escalated. Any session on the team or the owner files a pin; after a Node.js upgrade, one runs it again and the
+security reviewer or the owner approves the new pin.
 
 Flags:
 

@@ -315,7 +315,7 @@ async function tellFirstReviewer(runtime: CliRuntime, team: ExecTeam, id: string
 /**
  * `exec node-pin`: files the Node.js runtime this client runs under (its real path, the SHA-256 of its binary and its
  * version) as the next P<n> for review (#870). Once approved, dry runs and runs start only under it; after a Node.js
- * upgrade the owner files the new one from their own terminal.
+ * upgrade any session on the team or the owner files the new one, and the security reviewer or the owner approves it.
  */
 export async function nodePin(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   noPositionals(args);

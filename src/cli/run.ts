@@ -748,8 +748,8 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       --team <child>: a request of a team below yours, whose roles.securityReviewer names you as <team>/<id>
   exec run R<n>        runs an approved request once, before its approval expires
   exec node-pin        files the Node.js runtime this client runs under (real path, SHA-256 of its binary,
-      version) as P<n>; once approved, dry runs and runs start only under it. After a Node.js upgrade the owner
-      runs it again from their own terminal
+      version) as P<n>; once approved, dry runs and runs start only under it. Any session or the owner files
+      it, again after a Node.js upgrade; the security reviewer or the owner approves it
   who [<id|name|role|team/id>] the name to message a session by (no argument: every session of yours)
   read <document>... --json [--session <id|name>] [--conversation <id>] [--team <id>] [--owner <id|name>]
       [--task T<id>] [--range 7d|30d|90d|180d|1y|all] [--since <hours>]

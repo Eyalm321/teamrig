@@ -37,14 +37,14 @@ describe('runtimeRefusal (#870)', () => {
   });
 
   it('refuses every runtime while no pin is approved, naming the step that files one', () => {
-    assert.match(runtimeRefusal(RUNNING, undefined, 'linux') ?? '', /none is approved: file the runtime to use with teamrig exec node-pin \(in your own terminal\) and have the security reviewer approve it\.$/u);
+    assert.match(runtimeRefusal(RUNNING, undefined, 'linux') ?? '', /none is approved: file the runtime to use with teamrig exec node-pin and have the security reviewer or the owner approve it\.$/u);
   });
 
   it('refuses another binary at the pinned path, naming the path, hash prefix and version found and expected', () => {
     const refusal = runtimeRefusal({ ...RUNNING, sha256: OTHER, version: 'v22.12.0' }, PIN, 'linux') ?? '';
     assert.equal(
       refusal,
-      'the client runs under /usr/local/bin/node (bbbbbbbbbbbb, v22.12.0), not the approved /usr/local/bin/node (aaaaaaaaaaaa, v22.11.0) of P1. After a Node.js upgrade, file the runtime to use with teamrig exec node-pin (in your own terminal) and have the security reviewer approve it.',
+      'the client runs under /usr/local/bin/node (bbbbbbbbbbbb, v22.12.0), not the approved /usr/local/bin/node (aaaaaaaaaaaa, v22.11.0) of P1. After a Node.js upgrade, file the runtime to use with teamrig exec node-pin and have the security reviewer or the owner approve it.',
     );
   });
 

@@ -311,8 +311,8 @@ audit log, and the security reviewer approves it like a request, after checking 
 only under the pin approved last: the file at the runtime's real path is hashed on each call (on Linux it must also
 hash the same as the image actually running), and a runtime at another path, or another binary at the pinned path,
 is refused with the path, hash prefix and version found and expected. A bare `node` in a request starts that same
-real path, the file checked, never a PATH lookup. After a Node.js
-upgrade, run `teamrig exec node-pin` again in your own terminal and have the new pin approved. A check a runtime
+real path, the file checked, never a PATH lookup. You or any session on the team files a pin, and after a Node.js
+upgrade files it again; the security reviewer or you approve it. A check a runtime
 runs on itself cannot hold against a hostile runtime, which can answer any check it runs: like the client pin and
 the option list, the runtime pin catches a wrong `node` (a PATH order, a version-manager switch, an unofficial
 build), and phase 2's read-only install is what holds against a deliberate swap. The pin lives in the hash-chained

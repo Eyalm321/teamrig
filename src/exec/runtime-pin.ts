@@ -104,7 +104,7 @@ function samePath(left: string, right: string, platform: NodeJS.Platform): boole
  * pin names one install.
  */
 export function runtimeRefusal(found: RuntimeImage, pin: RuntimePin | undefined, platform: NodeJS.Platform): string | undefined {
-  const upgrade = 'file the runtime to use with teamrig exec node-pin (in your own terminal) and have the security reviewer approve it';
+  const upgrade = 'file the runtime to use with teamrig exec node-pin and have the security reviewer or the owner approve it';
   if (pin === undefined) {
     return `teamrig exec starts a privileged command only under a Node.js runtime the security reviewer approved, and none is approved: ${upgrade}.`;
   }

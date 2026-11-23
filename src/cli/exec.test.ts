@@ -519,7 +519,7 @@ describe('runCli: exec node-pin, the runtime a privileged command starts under (
 
   it('starts no dry run or run until a pin is approved: none filed, one waiting, one refused', async () => {
     const team = await unpinned();
-    const none = /starts a privileged command only under a Node\.js runtime the security reviewer approved, and none is approved: file the runtime to use with teamrig exec node-pin \(in your own terminal\)/;
+    const none = /starts a privileged command only under a Node\.js runtime the security reviewer approved, and none is approved: file the runtime to use with teamrig exec node-pin and have the security reviewer or the owner approve it/;
     assertRefused(await team.run('dry-run', 'R1'), none);
     assertOk(await team.run('node-pin', '--session', 'alpha'));
     assertRefused(await team.run('dry-run', 'R1'), none);
