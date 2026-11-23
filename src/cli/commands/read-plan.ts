@@ -111,7 +111,7 @@ function segmentNameOf(loaded: KitTree, path: string): string {
 }
 
 /** What moves when a register of the tree does: its snapshot, its events after it, and its archive's segments by name. */
-async function registerStampsOf(runtime: CliRuntime, teams: readonly TreeTeam[]): Promise<(string | null)[]> {
+export async function registerStampsOf(runtime: CliRuntime, teams: readonly TreeTeam[]): Promise<(string | null)[]> {
   const stamps: (string | null)[] = [];
   for (const { kit } of teams) {
     const layout = layoutPaths(kit.paths.events);
@@ -121,7 +121,7 @@ async function registerStampsOf(runtime: CliRuntime, teams: readonly TreeTeam[])
 }
 
 /** Each folder's stamps, as {@link folderStampsOf} takes them, one folder after another. */
-async function foldersStampsOf(runtime: CliRuntime, folders: readonly string[]): Promise<(string | null)[]> {
+export async function foldersStampsOf(runtime: CliRuntime, folders: readonly string[]): Promise<(string | null)[]> {
   const stamps: (string | null)[] = [];
   for (const folder of folders) {
     stamps.push(...(await folderStampsOf(runtime, folder)));
@@ -130,7 +130,7 @@ async function foldersStampsOf(runtime: CliRuntime, folders: readonly string[]):
 }
 
 /** A folder's entries by name, then each one's stamp: a file added, removed or written moves it. */
-async function folderStampsOf(runtime: CliRuntime, folder: string): Promise<(string | null)[]> {
+export async function folderStampsOf(runtime: CliRuntime, folder: string): Promise<(string | null)[]> {
   const names = (await runtime.files.list(folder)).sort();
   return [names.join(','), ...(await stampsOf(runtime, names.map((name) => join(folder, name))))];
 }
