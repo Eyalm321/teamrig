@@ -47,7 +47,7 @@ describe('HOOK_TIMEOUT_MS (#737)', () => {
   });
 
   it("holds the limit the plugin's mod gives the hooks its hands run", () => {
-    const hands: Readonly<Record<string, number | null>> = {
+    const hands: Readonly<Record<string, number>> = {
       'wake-check': WAKE_TIMEOUT_MS,
       'wake-dropped': WAKE_TIMEOUT_MS,
       'meeting-due': MEETING_TIMEOUT_MS,
