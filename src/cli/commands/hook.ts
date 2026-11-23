@@ -212,17 +212,28 @@ async function titleOutcome(runtime: CliRuntime, kit: Kit, config: KitConfig, ho
  */
 async function restartWaits(runtime: CliRuntime, kit: Kit, id: string): Promise<boolean> {
   const store = new RefreshStore(runtime.files, kit.paths);
-  return (await store.parked(id)) !== undefined || (await store.restart(id))?.phase === 'pending';
+  try {
+    return (await store.parked(id)) !== undefined || (await store.restart(id))?.phase === 'pending';
+  } catch {
+    return false;
+  }
 }
 
-/** Whether the prompt a UserPromptSubmit hook sees (`seen`) was fired by one of the session's live scheduled jobs. */
+/**
+ * Whether the prompt a UserPromptSubmit hook sees (`seen`) was fired by one of the session's live scheduled jobs; a
+ * transcript or store that does not read counts as typed, so the prompt still cancels the restart.
+ */
 async function scheduledPrompt(runtime: CliRuntime, kit: Kit, id: string, seen: PromptSeen): Promise<boolean> {
   const reader = transcriptsIfKept(runtime);
   if (reader === undefined) {
     return false;
   }
-  const inherited = await inheritedCrons(new RefreshStore(runtime.files, kit.paths), id, seen.transcript);
-  return firedBySchedule(reader, runtime.files, seen, inherited, runtime.clock.now());
+  try {
+    const inherited = await inheritedCrons(new RefreshStore(runtime.files, kit.paths), id, seen.transcript);
+    return await firedBySchedule(reader, runtime.files, seen, inherited, runtime.clock.now());
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -305,8 +316,8 @@ export async function inboxReminder(args: ParsedArgs, runtime: CliRuntime): Prom
     await noteLastTyped(runtime, kit.paths, session, sent).catch(() => undefined);
   }
   // A scheduled job's prompt is no one typing: it leaves the restart armed, which waits for the turn it starts to end.
-  const waits = session !== undefined && (await restartWaits(runtime, kit, session).catch(() => false));
-  const scheduled = session !== undefined && waits && (await scheduledPrompt(runtime, kit, session, { transcript: event.transcript, prompt: event.prompt }).catch(() => false));
+  const waits = session !== undefined && (await restartWaits(runtime, kit, session));
+  const scheduled = session !== undefined && waits && (await scheduledPrompt(runtime, kit, session, { transcript: event.transcript, prompt: event.prompt }));
   const cancelled = session === undefined || !waits || scheduled ? undefined : await cancelledRestartLine(runtime, kit, session, sessionRefreshOf(config, session)).catch(() => undefined);
   const budgetLine = session === undefined ? undefined : await promptBudgetLine(runtime, { kit, config, roster: own.roster, id: session }).catch(() => undefined);
   // Like the inbox lines below, reading the digest moves its cursor, so it is read late; only a leader gets one.
