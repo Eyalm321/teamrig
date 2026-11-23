@@ -109,4 +109,26 @@ describe('read budget', () => {
     assert.deepEqual((web?.['week'] as JsonRecord | null)?.['usedPct'], 5);
     assert.equal(web?.['elapsedPct'], ((now - start) / (RESET - start)) * 100);
   });
+
+  it('changes no file: the period, the meter log and every store stay as the status line left them', async () => {
+    const kit = new CliHarness(BUDGET_ON);
+    await add(kit, 'Ship the page', 'alpha');
+    await ok(kit, ['statusline'], { stdin: statusInput(30, 40, kit.clock.now() + 2 * MS_PER_HOUR) });
+    const before = new Map(kit.files.paths().map((path) => [path, kit.files.get(path)]));
+    served(await kit.run(READ_BUDGET));
+    const after = new Map(kit.files.paths().map((path) => [path, kit.files.get(path)]));
+    assert.deepEqual([...after.keys()].filter((path) => !before.has(path)), [], 'no file written');
+    assert.deepEqual([...after].filter(([path, text]) => before.get(path) !== text).map(([path]) => path), [], 'no file changed');
+  });
+
+  it("moves its revision on a new status line reading, and serves the new numbers", async () => {
+    const kit = new CliHarness(BUDGET_ON);
+    await ok(kit, ['statusline'], { stdin: statusInput(30, 40, kit.clock.now() + 2 * MS_PER_HOUR) });
+    const held = String(served(await kit.run(READ_BUDGET))['revision']);
+    kit.clock.advance(60_000);
+    await ok(kit, ['statusline'], { stdin: statusInput(55, 45, kit.clock.now() + 2 * MS_PER_HOUR) });
+    const moved = served(await kit.run([...READ_BUDGET, '--unless', `budget=${held}`]));
+    assert.equal(moved['unchanged'], undefined);
+    assert.deepEqual([(moved['week'] as JsonRecord)['usedPct'], (moved['fiveHour'] as JsonRecord)['usedPct']], [55, 45]);
+  });
 });
