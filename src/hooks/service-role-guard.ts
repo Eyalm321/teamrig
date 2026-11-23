@@ -74,6 +74,9 @@ const EXEC_LOG_BARE = /(?<![\w.-])audit(?:\.jsonl|~\d+\.jso)(?![\w-]|\.+[\w-])/i
 /** A team's exec folder, on a path in its compare form. */
 const EXEC_FOLDER = /(?:^|\/)teams\/+[^/]+\/+exec$/i;
 
+/** A team's exec folder named in a shell line, either slash, a trailing one too, but no folder inside it. */
+const EXEC_FOLDER_WORD = /(?<![\w.-])teams[\\/]+[^\\/\s'"`;&|]+[\\/]+exec(?![\w.-]|[\\/]+[\w.-])/i;
+
 /** True when the words run `roles grant` or `roles revoke`, or a `roles` command only known when it runs. */
 function startsRoleChange(words: readonly ShellWord[]): boolean {
   const [group, action] = words;
@@ -166,9 +169,13 @@ async function isExecLog(path: string, cwd: string, env: ServiceRoleGuardEnv): P
   return real !== undefined && EXEC_LOG_FILE.test(samePathKey(real, cwd, env.platform));
 }
 
-/** True when a shell line names a team's exec audit log: `exec/audit.jsonl`, or `audit.jsonl` run from a team's exec folder. */
+/**
+ * True when a shell line names a team's exec audit log: `exec/audit.jsonl`, or `audit.jsonl` run from a team's exec
+ * folder or on a line that names one, as a line that changes into it first does.
+ */
 function namesExecLog(command: string, cwd: string, env: ServiceRoleGuardEnv): boolean {
-  return EXEC_LOG_WORD.test(command) || (EXEC_FOLDER.test(samePathKey(cwd, env.cwd, env.platform)) && EXEC_LOG_BARE.test(command));
+  const inExecFolder = EXEC_FOLDER.test(samePathKey(cwd, env.cwd, env.platform)) || EXEC_FOLDER_WORD.test(command);
+  return EXEC_LOG_WORD.test(command) || (inExecFolder && EXEC_LOG_BARE.test(command));
 }
 
 function execLogRefusalOf(reach: string): string {

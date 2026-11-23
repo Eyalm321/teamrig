@@ -367,6 +367,15 @@ describe('exec log guard: the exec audit log a runtime pin and every approval li
     assert.match(await reasonOf(call('PowerShell', { command: 'Add-Content audit.jsonl x' }, 'C:/u/.teamrig/teams/shop/exec')), /this PowerShell line names/);
   });
 
+  it("refuses a shell line that names a team's exec folder and the log's bare name, as one that changes into it first", async () => {
+    for (const command of ['cd C:/u/.teamrig/teams/shop/exec && echo {} >> audit.jsonl', 'pushd /srv/u/.teamrig/teams/shop/exec/ ; cat AUDIT~1.JSO']) {
+      assert.match(await reasonOf(call('Bash', { command })), /^teamrig exec log guard: this Bash line names a team's exec audit log/, command);
+    }
+    assert.match(await reasonOf(call('PowerShell', { command: 'Set-Location "C:\\u\\.teamrig\\teams\\shop\\exec"; Add-Content audit.jsonl x' })), /this PowerShell line names/);
+    assert.equal(await decide(call('Bash', { command: 'cd C:/u/.teamrig/teams/shop/exec/out && cat audit.jsonl' })), undefined, 'the output folder holds no log');
+    assert.equal(await decide(call('Bash', { command: 'cd C:/u/.teamrig/teams/shop/exec-notes && cat audit.jsonl' })), undefined);
+  });
+
   it('passes other files and lines: an audit.jsonl elsewhere, the exec output folder, teamrig exec status', async () => {
     assert.equal(await decide(call('Write', { file_path: 'C:/w/audit.jsonl', content: '' })), undefined);
     assert.equal(await decide(call('Write', { file_path: 'C:/u/.teamrig/teams/shop/exec/out/R1-dry.log', content: '' })), undefined);

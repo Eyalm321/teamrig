@@ -945,8 +945,8 @@ does the Read tool. The reason names the keys the call changes: "teamrig config 
 It holds each team's exec audit log (`teams/<team>/exec/audit.jsonl`) the same way: the log carries every privileged
 command's approval and the runtime pin's ([exec node-pin](commands.md#teamrig-exec-node-pin)), so a session's Write,
 Edit or MultiEdit of it, by any spelling of its path (a link and the 8.3 short name `AUDIT~1.JSO` included), and a
-shell line naming it (`exec/audit.jsonl`, or `audit.jsonl` run from a team's exec folder) are refused: "teamrig exec
-log guard: ... only teamrig exec appends to it". `teamrig exec status` and the Read tool read it.
+shell line naming it (`exec/audit.jsonl`, or `audit.jsonl` run from a team's exec folder or on a line that names
+one, as `cd` into it first) are refused: "teamrig exec log guard: ... only teamrig exec appends to it". `teamrig exec status` and the Read tool read it.
 
 It has no setting, and a broken config keeps it on: the file is found and read again at each call. Like the
 pass-record guard it reads only the call, so it cannot see a script the line starts that writes the file: while
