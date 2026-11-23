@@ -569,7 +569,7 @@ describe('teamrig launch', () => {
     }
   });
 
-  it('reads no plugin folder from the environment: a variable a caller sets never chooses the hooks a session runs', async () => {
+  it('guards against a future environment read: no variable a caller sets chooses the plugin folders, so the hooks, a session runs', async () => {
     const processes = new FakeProcesses();
     await launch(processes, [], { env: { PATH: '/usr/local/bin', TEAMRIG_PLUGIN_DIR: '/opt/app/teamrig' } });
     assert.equal(processes.ran[0]?.args.includes('--plugin-dir'), false);
