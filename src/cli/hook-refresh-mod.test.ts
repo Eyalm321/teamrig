@@ -134,6 +134,21 @@ describe('runCli: hook refresh-mid', () => {
     }
   });
 
+  it("caps a session's own limit at 80% of the window the mod reports, or of 200k before one is (#1543)", async () => {
+    const team = { ...TEAM, refresh: { tabTitle: false, sessionContextTokens: { alpha: 500_000 } } };
+    const large = new Tab(team);
+    await large.transcript('{}\n');
+    assert.deepEqual(answerOf(await large.run('refresh-mid', { tokens: 300_000, window: 1_000_000 })), { kind: 'wait', nextAt: 500_000 });
+    assert.deepEqual(await large.mid(400_000), { kind: 'wait', nextAt: 500_000 }, 'on the window kept when the mod sends none');
+    assert.equal(((await large.mid(500_000)) as { kind: string }).kind, 'ask');
+    const small = new Tab(team);
+    await small.transcript('{}\n');
+    assert.deepEqual(answerOf(await small.run('refresh-mid', { tokens: 100_000, window: 200_000 })), { kind: 'wait', nextAt: 160_000 });
+    const unreported = new Tab(team);
+    await unreported.transcript('{}\n');
+    assert.deepEqual(await unreported.mid(100_000), { kind: 'wait', nextAt: 160_000 });
+  });
+
   it('records the window the mod reports, before any phase too, and keeps it when a mod sends none (#1543)', async () => {
     const tab = new Tab();
     await tab.transcript('{}\n');

@@ -1423,7 +1423,8 @@ export interface RefreshConfig {
   readonly contextTokens: number;
   /**
    * A session's own refresh limit by its id, in place of `contextTokens` (#1543): a higher one for the lead, say, or for
-   * a session on a 1M window.
+   * a session on a 1M window. It is capped at 80% of the context window the plugin's mod last reported for the session,
+   * one not reported counting as 200k, so it stays under where that window compacts (src/refresh/window.ts).
    */
   readonly sessionContextTokens: Readonly<Record<string, number>>;
   /**

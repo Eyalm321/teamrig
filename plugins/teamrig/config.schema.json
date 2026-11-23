@@ -2207,7 +2207,7 @@
         },
         "sessionContextTokens": {
           "x-teamrig-served": "value",
-          "description": "A session's own refresh limit, in tokens, by its id, in place of contextTokens: a higher one for the lead, say, or for a session on a 1M window.",
+          "description": "A session's own refresh limit, in tokens, by its id, in place of contextTokens: a higher one for the lead, say, or for a session on a 1M window. It is checked against the context window the plugin's mod last reported for the session, one not reported counting as 200,000 tokens: a limit past 80% of that window refreshes at 80% instead, under where the window compacts, and the user is told so once per window.",
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/sessionName" },
           "additionalProperties": {
