@@ -2,6 +2,7 @@ import { packagedStartOf, type PackagedStart } from '../package-guard/packaged.t
 import { isAssignmentWord, LineCommands, rereadingCommands } from './held-reread.ts';
 import { isAssignment, launch, programName, staticWord, type Assignment, type Launch, type ProgramLaunch, type ScriptLaunch } from './launchers.ts';
 import { bashNativeWord, Location, resolveDir } from './location.ts';
+import { perlCodeOf } from './perl-code.ts';
 import { splitGitAlias } from './program-split.ts';
 import { redirectsInput, stdinUse } from './stdin.ts';
 import { parseHeldText, parseShell, type ShellCommand, type ShellDialect, type ShellParse, type ShellWord } from './tokenizer.ts';
@@ -363,7 +364,7 @@ class GitInvocationFinder {
       }
       location.enter(command.subshells);
       const launched = this.visitCommand(command.words, dialect, location, depth, stdin);
-      this.visitHeld(command, launched, rereading[index] ?? true, location, depth);
+      this.visitHeld(command, launched, stdin, rereading[index] ?? true, location, depth);
       if (stdin !== undefined) {
         const use = launched === undefined ? 'read' : stdinUse(command, launched);
         if (use !== 'stored') {
@@ -391,31 +392,42 @@ class GitInvocationFinder {
    * with no stdin, a git command built at run time) count only in an assignment word and where bash may read it again,
    * `rereads` (see {@link rereadingCommands}): a plain argument of another program, such as a perl or sed regex, is
    * data (#1471). Text that only never closes, such as a grep pattern's escaped backtick, still shows every
-   * substitution bash runs there (see {@link parseHeldText}).
+   * substitution bash runs there (see {@link parseHeldText}). A perl one-liner's code is read as perl (see
+   * {@link perlCodeOf}): when it runs no command, a push held in it is data unless bash may read it again (#1426).
    */
-  private visitHeld(command: ShellCommand, launched: Launch | undefined, rereads: boolean, location: Location, depth: number): void {
+  private visitHeld(
+    command: ShellCommand,
+    launched: Launch | undefined,
+    stdin: ShellWord | undefined,
+    rereads: boolean,
+    location: Location,
+    depth: number,
+  ): void {
     const script = launched?.kind === 'script' ? launched : undefined;
+    const perl = launched?.kind === 'program' ? perlCodeOf(launched, stdin) : undefined;
+    const plainText = perl?.reading === 'none' ? perl.words : [];
     for (const word of command.words) {
       // A shell that runs a word as a script reads its substitutions as commands already; the variables set for it
       // (`PS4='...' bash -xc`) are values it may read again.
       if (word.held === undefined || (script !== undefined && !setsFor(script, word))) {
         continue;
       }
-      this.readHeld(word.held, rereads || isAssignmentWord(word.text), location, depth);
+      this.readHeld(word.held, rereads || isAssignmentWord(word.text), !plainText.includes(word), location, depth);
     }
   }
 
   /**
    * Reads one word's held text; see {@link visitHeld}. A push in it always asks, ungated, as it may come through an
-   * alias (`'$(git p)'`) where no word of the line says push.
+   * alias (`'$(git p)'`) where no word of the line says push, unless the word is code that runs no command
+   * (`runs` false) and bash never reads it again.
    */
-  private readHeld(text: string, rereads: boolean, location: Location, depth: number): void {
+  private readHeld(text: string, rereads: boolean, runs: boolean, location: Location, depth: number): void {
     const parsed = parseHeldText(text);
     const unread = parsed.skipped ? 'it holds quoted text the guard cannot read for the commands bash runs if an expansion reads it again' : undefined;
     const held = new GitInvocationFinder(this.context);
     held.visitParsed(parsed, text, unread, 'bash', location.child(), depth + 1);
     this.doubts.push(...held.doubts.filter((doubt) => rereads || !doubt.gated));
-    if (held.invocations.some((invocation) => invocation.subcommand === 'push')) {
+    if ((runs || rereads) && held.invocations.some((invocation) => invocation.subcommand === 'push')) {
       this.doubt('it holds a quoted command substitution that pushes, which bash runs if an expansion reads it again', false);
     }
   }

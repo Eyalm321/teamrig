@@ -278,6 +278,33 @@ describe('evaluatePushes: where a push hides', () => {
     expectRows([["x='a[$(git p)]'; echo $((x))", 'ask', 'doubt']], { config: { 'alias.p': 'push origin main' } });
   });
 
+  it("reads a perl one-liner's code as perl: backticks in its strings, patterns and comments are text (#1426)", () => {
+    expectRows([
+      ["perl -ne 'print if /`git push origin main`/' docs/x.md", 'allow'],
+      ["perl -0777 -ne 'print $1 while /`(git push [^`]+)`/g' docs/x.md", 'allow'],
+      ["perl -pe 's{`git push`}{`git push -u`}' docs/x.md", 'allow'],
+      ["perl -E 'say q{`git push origin main`}'", 'allow'],
+      ["perl -e 'my $s = \"`git push`\"; print $s'", 'allow'],
+      ["perl -e '# `git push origin main`' -e 'print 1'", 'allow'],
+    ]);
+    expectRows([
+      // Backticks perl runs as a command, or code inside a string or a replacement, still ask.
+      ["perl -e 'print `git push origin main`'", 'ask', 'doubt'],
+      ["perl -e 'print \"@{[`git push origin main`]}\"'", 'ask', 'doubt'],
+      ["perl -pe 's/x/`git push origin main`/e' f", 'ask', 'doubt'],
+      // Text written for a later line: an in-place edit, an output redirection.
+      ["perl -pi -e 's/`git push`/`git push -u`/' docs/x.md", 'ask', 'doubt'],
+      ["perl -ne 'print if /`git push`/' f > run.sh", 'ask', 'doubt'],
+      // Code it cannot read: built at run time, a module, a word perl takes as a file or an argument, an alias.
+      ["perl -e \"$CODE\" '`git push origin main`'", 'ask', 'doubt'],
+      ["perl -Mx -e 'print \"`git push origin main`\"'", 'ask', 'doubt'],
+      ["perl -pie 'print \"`git push origin main`\"' f", 'ask', 'doubt'],
+      ["perl -ne 'print' '`git push origin main` |'", 'ask', 'doubt'],
+      ["perl -e 1 f -e '\"`git push origin main`\"'", 'ask', 'doubt'],
+      ["alias perl=eval\nperl -e '\"`git push origin main`\"'", 'ask', 'doubt'],
+    ]);
+  });
+
   it('allows quoted text whose backticks never close, as bash runs nothing there (T2764)', () => {
     expectRows([
       ["printf '%s' 'then `\\`' ; git push origin t1-x", 'allow'],

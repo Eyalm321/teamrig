@@ -46,6 +46,8 @@ export interface InlineCode {
   readonly code: string;
   readonly printOption: boolean;
   readonly argv: readonly string[];
+  /** The place in the arguments of each word read as code, in order; empty for code read on stdin. */
+  readonly codeArgs: readonly number[];
 }
 
 /** The interpreter a program name starts, or undefined when it is none the guards read. */
@@ -59,6 +61,7 @@ export function inlineCode(run: InlineRun, interpreter: Interpreter): InlineCode
   let printOption = false;
   let code: string | undefined;
   const argv: string[] = [];
+  const codeArgs: number[] = [];
   let index = run.name === 'deno' ? texts.indexOf('eval') + 1 : 0;
   if (run.name === 'deno' && index === 0) {
     return undefined;
@@ -71,23 +74,28 @@ export function inlineCode(run: InlineRun, interpreter: Interpreter): InlineCode
       argv.push(text);
     } else if (valued !== null) {
       code = valued[2];
+      codeArgs.push(index);
       printOption ||= interpreter.print.includes(valued[1] ?? '');
     } else if (interpreter.code.includes(text) || (cluster !== undefined && interpreter.code.some((option) => cluster.endsWith(option.slice(1))))) {
       printOption ||= interpreter.print.includes(text) || (cluster?.includes('p') ?? false);
       code = texts[index + 1];
+      codeArgs.push(index + 1);
       index += 1;
     } else if (interpreter.print.includes(text) || (cluster?.includes('p') ?? false)) {
       printOption = true;
     } else if (run.name === 'deno' && code === undefined && !text.startsWith('-')) {
       code = text;
+      codeArgs.push(index);
     } else if (!text.startsWith('-') || text === '-') {
-      return text === '-' && run.stdin !== undefined ? { code: run.stdin.text, printOption, argv: texts.slice(index + 1) } : undefined;
+      const stdin = text === '-' ? run.stdin : undefined;
+      const after = texts.slice(index + 1);
+      return stdin === undefined ? undefined : { code: stdin.text, printOption, argv: after, codeArgs: [] };
     }
   }
   if (code === undefined) {
-    return run.stdin === undefined ? undefined : { code: run.stdin.text, printOption, argv };
+    return run.stdin === undefined ? undefined : { code: run.stdin.text, printOption, argv, codeArgs: [] };
   }
-  return { code, printOption, argv };
+  return { code, printOption, argv, codeArgs };
 }
 
 /** The option letters of a cluster: up to and with the first one whose value is the rest of the word. */
