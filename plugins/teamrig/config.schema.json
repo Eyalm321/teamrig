@@ -2205,6 +2205,18 @@
           "maximum": 10000000,
           "default": 120000
         },
+        "sessionContextTokens": {
+          "x-teamrig-served": "value",
+          "description": "A session's own refresh limit, in tokens, by its id, in place of contextTokens: a higher one for the lead, say, or for a session on a 1M window.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/sessionName" },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 10000,
+            "maximum": 10000000
+          },
+          "default": {}
+        },
         "everyTasks": {
           "description": "Also refresh once this many tasks were finished since the context was last fresh (a /clear, a new process or a compaction); 0 turns it off.",
           "type": "integer",
