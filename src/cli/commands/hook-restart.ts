@@ -10,7 +10,7 @@ import { parkRulesOf } from '../../register/park.ts';
 import { startableTasks } from '../../wake/day-start.ts';
 import { identityOf, transcriptsIfKept } from '../host.ts';
 import { teamZone } from '../kit.ts';
-import { isHandedOffJob, isLiveRunOwn, liveRunOf } from '../live-run.ts';
+import { isForkedWorker, isHandedOffJob, liveRunOf } from '../live-run.ts';
 import type { CliRuntime } from '../runtime.ts';
 import { hostSessionAbove } from '../session-process.ts';
 import { teamRegister } from '../team-register.ts';
@@ -52,8 +52,11 @@ export interface RestartScope {
  * (`--fork-session --resume <the tab's session>`). A restart armed there would carry the worker's session and
  * transcript, so the runner would judge quiet on the worker's transcript and post its /clear ask under a session the
  * tab's mod never answers; signalling the worker's pid would end the worker and leave the tab. Nothing is armed or
- * noticed there: the tab's own Stop hook gives the notice and arms its own restart. False for the background job the tab
- * handed its conversation to (`isHandedOffJob`): the job runs the session itself.
+ * noticed there: the tab's own Stop hook gives the notice and arms its own restart. That relies on the tab ending a
+ * turn of its own after the worker's, as it did where this was seen (Claude Code 2.1.322: the worker's /clear ran under
+ * `--fork-session --resume <the tab's session>` outside the tab's tree, and the tab's turn then ended in the tab); a
+ * tab that ends no turn after it arms no restart at all, which is safer than arming the worker. False for the
+ * background job the tab handed its conversation to (`isHandedOffJob`): the job runs the session itself.
  */
 export async function forkedOutsideTab(runtime: CliRuntime, paths: Pick<TeamPaths, 'sessions'>, ids: readonly string[], id: string, claude: number | undefined): Promise<boolean> {
   if (claude === undefined) {
@@ -63,7 +66,7 @@ export async function forkedOutsideTab(runtime: CliRuntime, paths: Pick<TeamPath
   if (live === undefined || live.tree.has(claude) || (await isHandedOffJob(runtime, live, claude))) {
     return false;
   }
-  return isLiveRunOwn(runtime, live, claude);
+  return isForkedWorker(runtime, live, claude);
 }
 
 /** Starts `restart` hidden for the request recorded at `at`, to wait until the session is idle; whether it started. */
