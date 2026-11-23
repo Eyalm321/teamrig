@@ -317,7 +317,9 @@ runs on itself cannot hold against a hostile runtime, which can answer any check
 the option list, the runtime pin catches a wrong `node` (a PATH order, a version-manager switch, an unofficial
 build), and phase 2's read-only install is what holds against a deliberate swap. The pin lives in the hash-chained
 exec log, never in the plugin folder or a repository, and the service-role guard refuses a session's own write of
-that log.
+that log. Updating to the release that brings the pin is a breaking change for a team that already uses
+`teamrig exec`: every `exec dry-run` and `exec run` is refused until a pin is approved, so run `teamrig exec node-pin`
+once, then the security reviewer (or you) runs `teamrig exec approve P<n>` on it.
 
 ## Hand steps you run yourself
 
