@@ -302,10 +302,10 @@ export function rerunFailedJobs(gh: Gh, repo: string, runId: number): void {
  * Every listed check of a commit on `branch`, read from the Actions jobs and the commit statuses. Only the runs of
  * that branch count: the same sha re-shipped under a new branch name (the route after a cancelled job) still carries
  * the old branch's runs, and before the new branch's run exists those were all there was, so its cancel failed the
- * merge (T2749). The new branch's checks are missing until its run starts, and missing waits. With `now`, the jobs are
- * settled first (`settleJobs`): one listed running after its run completed, or past the time limit, is read as done.
+ * merge (T2749). The new branch's checks are missing until its run starts, and missing waits. The jobs are settled at
+ * `now` first (`settleJobs`): one listed running after its run completed, or past the time limit, is read as done.
  */
-export function readChecks(gh: Gh, repo: string, sha: string, branch: string, required: RequiredChecks, now?: number): CheckOutcome[] {
+export function readChecks(gh: Gh, repo: string, sha: string, branch: string, required: RequiredChecks, now: number): CheckOutcome[] {
   const runs = newestRuns(parseRuns(gh(['api', `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`])).filter(run => run.branch === branch));
   const listed = runs.flatMap(run => parseJobs(gh(['api', `repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`]), run));
   const jobs = settleJobs(listed, runs, now, required.checkMinutes);
