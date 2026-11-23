@@ -498,6 +498,24 @@ describe('runCli: context refresh', () => {
     assert.ok(cancels(await stale.kit.run(['hook', 'inbox-reminder'], { env, stdin: promptOf('check the inbox') })));
   });
 
+  it('reads no transcript for a scheduled prompt while no restart waits', async () => {
+    const env = { TEAMRIG_SESSION: 'lead', CLAUDE_PROJECT_DIR: APP };
+    const kit = new CliHarness(AUTO_RESTART_TEAM);
+    const store = await handoverWritten(kit, 'lead');
+    const fire = { type: 'system', subtype: 'scheduled_task_fire', content: 'Running scheduled task', taskId: 'job1', prompt: 'check the inbox' };
+    await kit.files.write(TRANSCRIPT, `${(await kit.files.read(TRANSCRIPT)) ?? ''}${JSON.stringify(fire)}\n`);
+    const tails: string[] = [];
+    const readTail = kit.files.readTail.bind(kit.files);
+    kit.files.readTail = async (path: string, maxBytes: number): Promise<string | undefined> => {
+      tails.push(path);
+      return readTail(path, maxBytes);
+    };
+    const prompt = JSON.stringify({ session_id: CLAUDE_SESSION, cwd: APP, transcript_path: TRANSCRIPT, prompt: 'check the inbox', session_title: 'app-lead' });
+    await kit.run(['hook', 'inbox-reminder'], { env, stdin: prompt });
+    assert.deepEqual([await store.parked('lead'), await store.restart('lead')], [undefined, undefined], 'no restart waits');
+    assert.deepEqual(tails, [], 'the transcript is read only when a restart waits on the prompt');
+  });
+
   it('cancels the armed restart when the user types, keeping the context until a later task end or more growth', async () => {
     const kit = new CliHarness(AUTO_RESTART_TEAM);
     const store = await handoverWritten(kit);

@@ -206,6 +206,15 @@ async function titleOutcome(runtime: CliRuntime, kit: Kit, config: KitConfig, ho
   }
 }
 
+/**
+ * Whether an automatic restart waits on the session's next prompt: armed and pending, or held back until a wake brings
+ * it work (T1383). Read first, so a prompt with nothing to cancel reads no transcript.
+ */
+async function restartWaits(runtime: CliRuntime, kit: Kit, id: string): Promise<boolean> {
+  const store = new RefreshStore(runtime.files, kit.paths);
+  return (await store.parked(id)) !== undefined || (await store.restart(id))?.phase === 'pending';
+}
+
 /** Whether the prompt a UserPromptSubmit hook sees (`seen`) was fired by one of the session's live scheduled jobs. */
 async function scheduledPrompt(runtime: CliRuntime, kit: Kit, id: string, seen: PromptSeen): Promise<boolean> {
   const reader = transcriptsIfKept(runtime);
@@ -296,8 +305,9 @@ export async function inboxReminder(args: ParsedArgs, runtime: CliRuntime): Prom
     await noteLastTyped(runtime, kit.paths, session, sent).catch(() => undefined);
   }
   // A scheduled job's prompt is no one typing: it leaves the restart armed, which waits for the turn it starts to end.
-  const scheduled = session !== undefined && (await scheduledPrompt(runtime, kit, session, { transcript: event.transcript, prompt: event.prompt }).catch(() => false));
-  const cancelled = session === undefined || scheduled ? undefined : await cancelledRestartLine(runtime, kit, session, sessionRefreshOf(config, session)).catch(() => undefined);
+  const waits = session !== undefined && (await restartWaits(runtime, kit, session).catch(() => false));
+  const scheduled = session !== undefined && waits && (await scheduledPrompt(runtime, kit, session, { transcript: event.transcript, prompt: event.prompt }).catch(() => false));
+  const cancelled = session === undefined || !waits || scheduled ? undefined : await cancelledRestartLine(runtime, kit, session, sessionRefreshOf(config, session)).catch(() => undefined);
   const budgetLine = session === undefined ? undefined : await promptBudgetLine(runtime, { kit, config, roster: own.roster, id: session }).catch(() => undefined);
   // Like the inbox lines below, reading the digest moves its cursor, so it is read late; only a leader gets one.
   const digest = session === undefined ? undefined : await leaderDigestText(runtime, kit.paths, config, session).catch(() => undefined);
