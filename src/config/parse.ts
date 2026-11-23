@@ -47,6 +47,7 @@ import {
   DEFAULT_IDLE,
   DEFAULT_OPEN,
   DEFAULT_OWNER_GATES,
+  DEFAULT_PLUGIN_DIRS,
   DEFAULT_SECURITY_GATES,
   DEFAULT_HOSTS,
   DEFAULT_COMMIT_GUARD,
@@ -593,6 +594,7 @@ export function parseConfig(raw: JsonRecord, above?: AccountBudget): ConfigParse
     },
     leads,
     ownerGates,
+    pluginDirs: read.stringList(raw, 'pluginDirs', '', DEFAULT_PLUGIN_DIRS, isAbsoluteFolder, CONFIG_LIMITS.pluginDirs.maxItems),
     securityGates: readSecurityGates(read, raw, ownerGates),
     hosts: readHosts(read, raw),
     ruleConflicts: read.list(
