@@ -296,9 +296,10 @@ The runtime is pinned too. The plugin's launchers start the first `node` the PAT
 files the Node.js runtime the client runs under (its real path, the SHA-256 of its binary and its version) in the exec
 audit log, and the security reviewer approves it like a request, after checking the hash against the release's
 `SHASUMS256.txt` on nodejs.org or a distro package manager's own verify. `exec dry-run` and `exec run` then start
-only under the pin approved last: the binary is hashed on each call (on Linux the image actually running), and a
-runtime at another path, or another binary at the pinned path, is refused with the path, hash prefix and version
-found and expected. A bare `node` in a request starts that same runtime, never a PATH lookup. After a Node.js
+only under the pin approved last: the file at the runtime's real path is hashed on each call (on Linux it must also
+hash the same as the image actually running), and a runtime at another path, or another binary at the pinned path,
+is refused with the path, hash prefix and version found and expected. A bare `node` in a request starts that same
+real path, the file checked, never a PATH lookup. After a Node.js
 upgrade, run `teamrig exec node-pin` again in your own terminal and have the new pin approved. A check a runtime
 runs on itself cannot hold against a hostile runtime, which can answer any check it runs: like the client pin and
 the option list, the runtime pin catches a wrong `node` (a PATH order, a version-manager switch, an unofficial

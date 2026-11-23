@@ -14,6 +14,11 @@ export class FakeRuntimeProbe implements RuntimeProbe {
     this.image = image;
   }
 
+  /** The image's path; it reads no hash, so it counts no read and throws no error. */
+  async path(): Promise<string> {
+    return this.image.path;
+  }
+
   async current(): Promise<RuntimeImage> {
     this.reads += 1;
     if (this.error !== undefined) {

@@ -1,10 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileSha256, imageFileOf, pinSha256, processRuntimeProbe, readStoredPin, runtimeRefusal, shasumsUrl, type RuntimeImage, type RuntimePin } from './runtime-pin.ts';
+import { fileSha256, pinSha256, processRuntimeProbe, readStoredPin, runningImageOf, RuntimeImageMismatchError, runtimeRefusal, shasumsUrl, type RuntimeImage, type RuntimePin } from './runtime-pin.ts';
 
 const HASH = 'a'.repeat(64);
 const OTHER = 'b'.repeat(64);
@@ -60,10 +60,38 @@ describe('runtimeRefusal (#870)', () => {
 });
 
 describe('the running runtime (#870)', () => {
-  it('hashes the image the kernel runs on Linux, and the real path elsewhere', () => {
-    assert.equal(imageFileOf('linux', '/usr/bin/node'), '/proc/self/exe');
-    assert.equal(imageFileOf('darwin', '/opt/homebrew/bin/node'), '/opt/homebrew/bin/node');
-    assert.equal(imageFileOf('win32', 'C:\\nodejs\\node.exe'), 'C:\\nodejs\\node.exe');
+  it('also holds the file to the image the kernel runs on Linux, and has no such image elsewhere', () => {
+    assert.equal(runningImageOf('linux'), '/proc/self/exe');
+    assert.equal(runningImageOf('darwin'), undefined);
+    assert.equal(runningImageOf('win32'), undefined);
+  });
+
+  it('hashes the file a child will start, the real path, and refuses it when the running image hashes otherwise', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'runtime-pin-'));
+    try {
+      const file = join(dir, 'node');
+      const link = join(dir, 'node-link');
+      const image = join(dir, 'image');
+      await writeFile(file, 'the file at the path');
+      await symlink(file, link);
+      await writeFile(image, 'the file at the path');
+      const real = await realpath(file);
+      const sha256 = await fileSha256(file);
+      const probe = processRuntimeProbe('linux', link, 'v22.11.0', image);
+      assert.equal(await probe.path(), real, 'a bare node starts the real path');
+      assert.deepEqual(await probe.current(), { path: real, sha256, version: 'v22.11.0' });
+      await writeFile(image, 'the image that was started');
+      const running = await fileSha256(image);
+      await assert.rejects(probe.current(), (error: unknown) => {
+        assert.ok(error instanceof RuntimeImageMismatchError);
+        const expected = `the running Node.js image ${image} (${running.slice(0, 12)}) is not ${real} (${sha256.slice(0, 12)}), the file a bare node starts: it changed after this client started; start teamrig again`;
+        assert.equal(error.message, expected);
+        return true;
+      });
+      assert.deepEqual(await processRuntimeProbe('darwin', link, 'v22.11.0').current(), { path: real, sha256, version: 'v22.11.0' }, 'no running image to hold it to off Linux');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("streams a file's SHA-256", async () => {

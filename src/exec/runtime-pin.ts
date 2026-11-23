@@ -44,7 +44,18 @@ export interface RuntimePin extends RuntimeImage {
 
 /** Reads the running runtime. It hashes the binary on every call: a cache keyed by what a writer controls could go stale. */
 export interface RuntimeProbe {
+  /** The runtime a bare `node` starts: its real path, the file `current` hashes, without hashing it. */
+  path(): Promise<string>;
+  /** The runtime at `path`, its file hashed now; it rejects with a RuntimeImageMismatchError where the running image hashes otherwise. */
   current(): Promise<RuntimeImage>;
+}
+
+/** The running image is not the file at the runtime's real path: that file changed after the client started. */
+export class RuntimeImageMismatchError extends Error {
+  constructor(image: string, imageSha256: string, path: string, sha256: string) {
+    super(`the running Node.js image ${image} (${imageSha256.slice(0, HASH_PREFIX)}) is not ${path} (${sha256.slice(0, HASH_PREFIX)}), the file a bare node starts: it changed after this client started; start teamrig again`);
+    this.name = 'RuntimeImageMismatchError';
+  }
 }
 
 /** The SHA-256 of a pin as filed: what its review binds, so an approval names exactly one path, hash and version. */
@@ -103,9 +114,9 @@ export function runtimeRefusal(found: RuntimeImage, pin: RuntimePin | undefined,
   return `the client runs under ${described(found)}, not the approved ${described(pin)} of ${pin.id}. After a Node.js upgrade, ${upgrade}.`;
 }
 
-/** The file whose bytes are the running runtime: on Linux the image the kernel runs, so a rename after start cannot point the hash at another file. */
-export function imageFileOf(platform: NodeJS.Platform, realPath: string): string {
-  return platform === 'linux' ? '/proc/self/exe' : realPath;
+/** The image the kernel runs, readable as a file: Linux's /proc/self/exe; undefined where the system offers none. */
+export function runningImageOf(platform: NodeJS.Platform): string | undefined {
+  return platform === 'linux' ? '/proc/self/exe' : undefined;
 }
 
 /** The SHA-256 of a file's bytes, streamed: a node binary is about 100 MB. */
@@ -119,12 +130,25 @@ export async function fileSha256(path: string): Promise<string> {
   return hash.digest('hex');
 }
 
-/** The running process's runtime: `process.execPath` with symlinks resolved, its binary hashed on each call, and `process.version`. */
-export function processRuntimeProbe(platform: NodeJS.Platform, execPath: string, version: string): RuntimeProbe {
+/**
+ * The running process's runtime: `process.execPath` with symlinks resolved, the file a bare `node` starts, hashed on
+ * each call, and `process.version`. The hash is of that file on every platform, so the file checked is the file a
+ * child starts; where the system shows the running image (`image`, Linux's /proc/self/exe), it must hash the same, or
+ * the file was replaced or a link on the way to it retargeted after the client started.
+ */
+export function processRuntimeProbe(platform: NodeJS.Platform, execPath: string, version: string, image: string | undefined = runningImageOf(platform)): RuntimeProbe {
   return {
+    path: () => realpath(execPath),
     async current() {
       const path = await realpath(execPath);
-      return { path, sha256: await fileSha256(imageFileOf(platform, path)), version };
+      const sha256 = await fileSha256(path);
+      if (image !== undefined) {
+        const imageSha256 = await fileSha256(image);
+        if (imageSha256 !== sha256) {
+          throw new RuntimeImageMismatchError(image, imageSha256, path, sha256);
+        }
+      }
+      return { path, sha256, version };
     },
   };
 }

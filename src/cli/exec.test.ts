@@ -10,7 +10,7 @@ import { FakeExecSpawner } from '../testing/fake-exec-spawner.ts';
 import { FakeRuntimeProbe } from '../testing/fake-runtime-probe.ts';
 import { InlineMutex } from '../testing/inline-mutex.ts';
 import { AuditLog } from '../exec/audit.ts';
-import { pinSha256, type RuntimeImage } from '../exec/runtime-pin.ts';
+import { pinSha256, RuntimeImageMismatchError, type RuntimeImage } from '../exec/runtime-pin.ts';
 import { FakeWebhook } from '../testing/fake-webhook.ts';
 import { quietWorld } from '../testing/quiet-world.ts';
 import { teamConfigOf } from '../testing/team-tree.ts';
@@ -37,6 +37,8 @@ interface ExecTeamOptions {
   readonly execArgv?: readonly string[];
   /** Whether the owner files and approves the running runtime as P1 before the first dry run or run (#870); default yes. */
   readonly pinned?: boolean;
+  /** The path the client was started by (`process.execPath`); default the runtime's real path. */
+  readonly execPath?: string;
 }
 
 /** A team whose exec PATH holds node, run on Windows with both database variables set, over one fake spawner and webhook. */
@@ -48,12 +50,12 @@ class ExecTeam {
   private readonly options: RunOptions;
   private pinned: boolean;
 
-  constructor(config: JsonRecord = EXEC_TEAM, { env = {}, webhook = new FakeWebhook(), execArgv = [], pinned = true }: ExecTeamOptions = {}) {
+  constructor(config: JsonRecord = EXEC_TEAM, { env = {}, webhook = new FakeWebhook(), execArgv = [], pinned = true, execPath = NODE_RUNTIME.path }: ExecTeamOptions = {}) {
     this.kit = new CliHarness(config);
     this.webhook = webhook;
     this.pinned = !pinned;
     this.options = {
-      self: { ...quietWorld().self, node: NODE_RUNTIME.path, execArgv },
+      self: { ...quietWorld().self, node: execPath, execArgv },
       platform: 'win32',
       probe: probeOf('C:/nodejs/node.exe'),
       exec: { spawner: this.spawner, checkout: new FakeCheckout(), runtime: this.runtime },
@@ -160,6 +162,14 @@ describe('runCli: exec request, a privileged command asked for review (T755)', (
     assertOk(await team.request());
     assert.match(outputOf(await team.run('status', 'R1')), /run: \["node","tools\/fix-models.ts","--apply"\] \(starts C:\\nodejs\\node\.exe\)/);
     assert.match(outputOf(await team.run('status', 'R1')), /dry run: \["node","tools\/fix-models.ts"\] \(starts C:\\nodejs\\node\.exe\)/);
+    assertOk(await team.run('dry-run', 'R1'));
+    assert.equal(team.spawner.asks[0]?.program, 'C:\\nodejs\\node.exe');
+  });
+
+  it('starts a bare node from the real path the runtime pin hashed, never the path the client was started by (#870)', async () => {
+    const team = new ExecTeam({ ...EXEC_TEAM, exec: { path: ['C:/other'] } }, { execPath: 'C:\\links\\node.exe' });
+    assertOk(await team.request());
+    assert.match(outputOf(await team.run('status', 'R1')), /run: \["node","tools\/fix-models.ts","--apply"\] \(starts C:\\nodejs\\node\.exe\)/);
     assertOk(await team.run('dry-run', 'R1'));
     assert.equal(team.spawner.asks[0]?.program, 'C:\\nodejs\\node.exe');
   });
@@ -543,6 +553,16 @@ describe('runCli: exec node-pin, the runtime a privileged command starts under (
     assert.equal(team.spawner.asks.length, 1, 'only the dry run ran');
     team.runtime.image = { ...NODE_RUNTIME, path: 'c:/NODEJS/node.exe' };
     assertOk(await team.run('run', 'R1'));
+  });
+
+  it('refuses a dry run and a run while the running image is not the file a bare node starts, and starts nothing', async () => {
+    const team = await dryRun();
+    assertOk(await team.run('approve', 'R1', '--session', 'bravo'));
+    team.runtime.error = new RuntimeImageMismatchError('/proc/self/exe', 'b'.repeat(64), '/usr/bin/node', 'a'.repeat(64));
+    const swapped = /^REFUSED the running Node\.js image \/proc\/self\/exe \(bbbbbbbbbbbb\) is not \/usr\/bin\/node \(aaaaaaaaaaaa\), the file a bare node starts: it changed after this client started; start teamrig again$/m;
+    assertRefused(await team.run('run', 'R1'), swapped);
+    assertRefused(await team.run('dry-run', 'R1'), swapped);
+    assert.equal(team.spawner.asks.length, 1, 'only the first dry run ran');
   });
 
   it('refuses when the runtime cannot be read, and files nothing', async () => {

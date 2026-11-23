@@ -29,7 +29,7 @@ import { nodeLaunchRefusal } from '../../exec/node-launch.ts';
 import { parseDraft, type CodeBinding, type ExecRequest } from '../../exec/request.ts';
 import { decidePinReview, decideReview, pinSignatureValid, RANDOM_NONCES, UnsignedReviews, type ReviewAsk, type ReviewKit } from '../../exec/review.ts';
 import { baseEnvironment, environmentCredentials, Executor, type ExecResult } from '../../exec/runner.ts';
-import { HASH_PREFIX, PIN_ID, runtimeRefusal, shasumsUrl, type RuntimeImage, type RuntimePin } from '../../exec/runtime-pin.ts';
+import { HASH_PREFIX, PIN_ID, RuntimeImageMismatchError, runtimeRefusal, shasumsUrl, type RuntimeImage, type RuntimePin } from '../../exec/runtime-pin.ts';
 import { noPositionals, onePositional, requiredFlag, UsageError, type ParsedArgs } from '../args.ts';
 import { postToHolder, sessionNameOn, type OpenTeam } from '../holder-team.ts';
 import { callerOf } from '../inputs.ts';
@@ -46,8 +46,6 @@ interface ExecTeam {
   /** The folders reviewed programs come from (exec.path), joined as a PATH value. */
   readonly execPath: string;
   readonly search: PathSearchDeps;
-  /** The Node.js program this client runs under, which a request's bare `node` starts (#870). */
-  readonly node: string;
   readonly scanner: SecretScanner;
 }
 
@@ -75,7 +73,6 @@ function execTeamOf(runtime: CliRuntime, kit: Kit, config: KitConfig): ExecTeam 
     audit: new AuditLog(kit.paths.execAudit, files, lock, clock),
     execPath,
     search: { env: { PATH: execPath }, platform, probe: runtime.probe },
-    node: runtime.self.node,
     scanner: new SecretScanner(config.register.secretPatterns),
   };
 }
@@ -194,28 +191,44 @@ function reviewIdOf(text: string): string {
   return text;
 }
 
-/** The runtime this client runs under; one it cannot read refuses, as nothing can be checked. */
+/** The runtime this client runs under; one it cannot read, or whose running image is not its file, refuses, as nothing can be checked. */
 async function currentRuntime(runtime: CliRuntime): Promise<RuntimeImage> {
   try {
     return await runtime.exec.runtime.current();
   } catch (error) {
-    throw new RefusedError(`teamrig exec cannot read the Node.js runtime it runs under: ${errorMessage(error)}`);
+    throw runtimeReadRefusal(error);
+  }
+}
+
+function runtimeReadRefusal(error: unknown): RefusedError {
+  return new RefusedError(error instanceof RuntimeImageMismatchError ? error.message : `teamrig exec cannot read the Node.js runtime it runs under: ${errorMessage(error)}`);
+}
+
+/** The file a request's bare `node` starts: the real path of the runtime this client runs under (#870). */
+async function runtimeFile(runtime: CliRuntime): Promise<string> {
+  try {
+    return await runtime.exec.runtime.path();
+  } catch (error) {
+    throw runtimeReadRefusal(error);
   }
 }
 
 /**
  * Refuses a dry run or a run unless this client runs under the runtime of the latest approved pin (#870): its real
- * path and the SHA-256 of its binary, read anew on each call.
+ * path and the SHA-256 of its binary, read anew on each call. Returns that real path, the file a bare `node` starts,
+ * so the file checked is the file started.
  */
-async function refuseUnpinnedRuntime(runtime: CliRuntime, team: ExecTeam): Promise<void> {
+async function refuseUnpinnedRuntime(runtime: CliRuntime, team: ExecTeam): Promise<string> {
   const pinned = activePin(await stateOf(team));
   if (pinned?.review !== undefined && !pinSignatureValid(pinned.review, new UnsignedReviews())) {
     throw new RefusedError(`${pinned.pin.id}'s approval signature is not valid for what it binds`);
   }
-  const refusal = runtimeRefusal(await currentRuntime(runtime), pinned?.pin, runtime.platform);
+  const image = await currentRuntime(runtime);
+  const refusal = runtimeRefusal(image, pinned?.pin, runtime.platform);
   if (refusal !== undefined) {
     throw new RefusedError(refusal);
   }
+  return image.path;
 }
 
 async function requestFileJson(runtime: CliRuntime, path: string): Promise<unknown> {
@@ -232,9 +245,9 @@ async function requestFileJson(runtime: CliRuntime, path: string): Promise<unkno
 }
 
 /** The file `argv[0]` starts, found on the exec PATH; a refusal names the folders searched. */
-async function programOf(field: string, argv: readonly string[], team: ExecTeam): Promise<string> {
+async function programOf(field: string, argv: readonly string[], team: ExecTeam, node: string): Promise<string> {
   const [argv0 = ''] = argv;
-  const program = await resolveProgram(argv0, team.search, team.node);
+  const program = await resolveProgram(argv0, team.search, node);
   if (program === undefined) {
     const folders = team.config.exec.path.length === 0 ? 'exec.path names no folder' : `exec.path: ${team.config.exec.path.join(', ')}`;
     throw new RefusedError(`${field}[0] "${argv0}" is not a file on the exec PATH (${folders})`);
@@ -256,8 +269,9 @@ export async function request(args: ParsedArgs, runtime: CliRuntime): Promise<Ex
     throw new RefusedError(`${path}: ${parsed.problems.join('; ')}`);
   }
   const { draft } = parsed;
-  const program = await programOf('argv', draft.argv, team);
-  const dryRunProgram = draft.dryRunArgv === null ? null : await programOf('dryRunArgv', draft.dryRunArgv, team);
+  const node = await runtimeFile(runtime);
+  const program = await programOf('argv', draft.argv, team, node);
+  const dryRunProgram = draft.dryRunArgv === null ? null : await programOf('dryRunArgv', draft.dryRunArgv, team, node);
   const createdAt = new Date(runtime.clock.now()).toISOString();
   const line = await appendOrRefuse(team.audit, (state) => ({
     type: 'request',
@@ -316,10 +330,11 @@ export async function nodePin(args: ParsedArgs, runtime: CliRuntime): Promise<Ex
   return EXIT.ok;
 }
 
-function executorOf(team: ExecTeam, runtime: CliRuntime): Executor {
+/** The executor of a dry run or a run, whose bare `node` starts `node`, the runtime file the pin check hashed. */
+function executorOf(team: ExecTeam, runtime: CliRuntime, node: string): Executor {
   return new Executor({
     audit: team.audit,
-    binding: { checkout: runtime.exec.checkout, search: team.search, node: team.node },
+    binding: { checkout: runtime.exec.checkout, search: team.search, node },
     spawner: runtime.exec.spawner,
     credentials: environmentCredentials(runtime.env, runtime.platform),
     verifier: new UnsignedReviews(),
@@ -363,8 +378,8 @@ function printOutcome(runtime: CliRuntime, head: string, outcome: RunOutcome, ne
 export async function dryRun(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const id = requestIdOf(onePositional(args, 'id'));
   const team = await openExec(runtime, 'write');
-  await refuseUnpinnedRuntime(runtime, team);
-  const outcome = startedOutcome(await onSoundLog(() => executorOf(team, runtime).dryRun(id)));
+  const node = await refuseUnpinnedRuntime(runtime, team);
+  const outcome = startedOutcome(await onSoundLog(() => executorOf(team, runtime, node).dryRun(id)));
   return printOutcome(runtime, `DRY RUN ${id}`, outcome, `the reviewer reads it (teamrig exec status ${id}), then approves, refuses or escalates it`);
 }
 
@@ -372,8 +387,8 @@ export async function dryRun(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
 export async function run(args: ParsedArgs, runtime: CliRuntime): Promise<ExitCode> {
   const id = requestIdOf(onePositional(args, 'id'));
   const team = await openExec(runtime, 'write');
-  await refuseUnpinnedRuntime(runtime, team);
-  const outcome = startedOutcome(await onSoundLog(() => executorOf(team, runtime).run(id)));
+  const node = await refuseUnpinnedRuntime(runtime, team);
+  const outcome = startedOutcome(await onSoundLog(() => executorOf(team, runtime, node).run(id)));
   const code = printOutcome(runtime, `RAN ${id}`, outcome, undefined);
   await announce(runtime, team, id, `RAN ${id}: ${endOf(outcome)}; output SHA-256 ${outcome.outputSha256}`);
   return code;
