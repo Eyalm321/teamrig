@@ -22,7 +22,7 @@ export interface MeetingTab {
 
 /**
  * When the owner last prompted in the meeting's tab: the latest stamp of any tab the meeting's session ran in (a
- * context refresh or a reopen in a fresh Claude Code session is the same meeting tab), and of the caller's own tab
+ * context refresh or a reopen in a fresh host session is the same meeting tab), and of the caller's own tab
  * when it is that session, though its entry names no session (a tab bound by hand). Undefined when none has one.
  */
 export function ownerPromptAtOf(entries: readonly RestoreEntry[], caller: RestoreEntry | undefined, tab: MeetingTab): number | undefined {
@@ -46,15 +46,15 @@ export function ownerStillInMinutes(caller: RestoreEntry | undefined, ownerPromp
 }
 
 /**
- * The minutes since the owner prompted in the meeting's tab when the turn of `claudeSession` (the caller's tab,
- * `$CLAUDE_CODE_SESSION_ID`) may not end the meeting; undefined when it may, or when the call runs in no tab.
+ * The minutes since the owner prompted in the meeting's tab when the turn of `tabSession` (the caller's tab, as the
+ * host names its session) may not end the meeting; undefined when it may, or when the call runs in no tab.
  */
-export async function ownerStillIn(files: Files, kitHome: string, claudeSession: string | undefined, tab: MeetingTab, now: number, ownerLeftMinutes: number): Promise<number | undefined> {
-  if (ownerLeftMinutes === 0 || claudeSession === undefined || !CLAUDE_SESSION_ID.test(claudeSession)) {
+export async function ownerStillIn(files: Files, kitHome: string, tabSession: string | undefined, tab: MeetingTab, now: number, ownerLeftMinutes: number): Promise<number | undefined> {
+  if (ownerLeftMinutes === 0 || tabSession === undefined || !CLAUDE_SESSION_ID.test(tabSession)) {
     return undefined;
   }
   const registry = new RestoreRegistry(files, restoreSessionsDir(kitHome));
-  const caller = await registry.read(claudeSession);
+  const caller = await registry.read(tabSession);
   if (caller?.lastPromptByKit !== true) {
     return undefined;
   }

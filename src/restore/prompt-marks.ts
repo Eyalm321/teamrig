@@ -17,8 +17,8 @@ import { sessionFileIn } from './registry.ts';
 export const PROMPT_MARK_FORMAT = 1;
 
 /**
- * Whom a mark is kept for: one Claude Code session (`tab`) when the submitter knows it (a wake, a resume), else the
- * team session a fresh `launch` starts, whose Claude Code session gets its id only once it runs.
+ * Whom a mark is kept for: one host session (`tab`) when the submitter knows it (a wake, a resume), else the team
+ * session a fresh `launch` starts, whose host session gets its id only once it runs.
  */
 export type PromptMarkKey = { readonly tab: string } | { readonly team: string; readonly session: string };
 
@@ -30,7 +30,7 @@ export function promptMarksDir(kitHome: string): string {
 /**
  * One small file per key, holding the text teamrig submitted last and when, kept until a prompt in that tab or
  * session matches it. The match is exact, outer white space aside: a submitted text the person edited is theirs.
- * Only a Claude Code session id or two checked ids name a file, so no payload text reaches a path.
+ * Only a host session id or two checked ids name a file, so no payload text reaches a path.
  */
 export class PromptMarks {
   private readonly files: Files;
@@ -78,7 +78,7 @@ export class PromptMarks {
     if (!ID_PATTERN.test(key.team) || !ID_PATTERN.test(key.session)) {
       throw new Error(`${JSON.stringify(`${key.team}/${key.session}`)} is not a team session`);
     }
-    // A dot is in neither an id nor a Claude Code session id, so the two kinds of name never meet.
+    // A dot is in neither an id nor a host session id, so the two kinds of name never meet.
     return join(this.dir, `${key.team}.${key.session}.json`);
   }
 }

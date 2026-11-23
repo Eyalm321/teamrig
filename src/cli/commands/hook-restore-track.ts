@@ -109,8 +109,8 @@ async function promptEvent(prompt: string | undefined, event: TrackEvent, facts:
   if (event.kind !== 'working' || prompt === undefined) {
     return event;
   }
-  const { claudeSession, team, session } = facts;
-  const keys: PromptMarkKey[] = [{ tab: claudeSession }, ...(team === undefined || session === undefined ? [] : [{ team, session }])];
+  const { team, session } = facts;
+  const keys: PromptMarkKey[] = [{ tab: facts.claudeSession }, ...(team === undefined || session === undefined ? [] : [{ team, session }])];
   const marked = await new PromptMarks(runtime.files, promptMarksDir(kitHome)).take(keys, prompt).catch(() => false);
   const by: PromptBy = marked ? 'teamrig' : 'owner';
   return { kind: 'working', by };
@@ -129,7 +129,7 @@ function loginEventOf(event: TrackEvent, facts: TrackFacts): LoginEvent | undefi
   }
 }
 
-/** How the restore log names a tab: its team and session when `teamrig launch` started it, and its Claude session. */
+/** How the restore log names a tab: its team and session when `teamrig launch` started it, and its host session. */
 function tabLabelOf(facts: TrackFacts): string {
   return facts.team === undefined || facts.session === undefined ? facts.claudeSession : `${facts.team}/${facts.session} (${facts.claudeSession})`;
 }
@@ -223,7 +223,7 @@ function addRecorded(userPath: UserPath, added: string[]): UserPath {
 /**
  * At a session start, brings what a restore install and the status line install left on the machine up to date with
  * this plugin version (src/restore/launcher-refresh.ts): the logon entry and the shortcuts are run by this hook's Node,
- * the stable program Claude Code starts its hooks with. Returns the note saying this start put teamrig on the user's
+ * the stable program the host starts its hooks with. Returns the note saying this start put teamrig on the user's
  * PATH, only on the start that did: a later one finds the folder there and adds nothing.
  */
 async function trackLaunchers(event: TrackEvent, facts: TrackFacts, runtime: CliRuntime, kitHome: string): Promise<string | undefined> {
@@ -273,7 +273,7 @@ export async function trackRestore(hook: HookEvent, runtime: CliRuntime): Promis
     transcriptPath: present(hook.transcript),
     entrypoint: told.startedAs,
     sessionKind: told.sessionKind,
-    // Claude Code starts its hooks itself (exec form, no shell), so the hook's parent is the session's Claude Code.
+    // The host starts its hooks itself (exec form, no shell), so the hook's parent is the session's host process.
     pid: runtime.sessionProcesses.parentPid,
     team: envId(runtime, ENV.team),
     session: envId(runtime, ENV.session),
