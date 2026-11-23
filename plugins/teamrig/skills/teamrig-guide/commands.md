@@ -4313,21 +4313,25 @@ NEXT T14 open, p2, pinned, owner web, from lead | Saved carts survive a logout
 ### teamrig owner decide
 
 The owner answers a card from the pane's Decisions tab (`teamrig owner decide <[team/]T<id>> --option <n>`, or
-`--approve` or `--decline`): a task waiting on the owner's decision takes one of its card's options by number, a
-task waiting on the owner's approval takes yes or no. The answer is kept in the task's history as the owner's
-decision, naming the option chosen in full, so the meeting asks it no more; the task's waits on the owner end, and
-its session is woken to go on from the answer. It refuses a task that waits on no decision or approval of the owner,
-an option the card does not have, yes or no to a decision and an option to an approval. A card on a security gate or
-marked `--security` is held to the rule its move to the owner follows, as it can change while it sits on the owner:
-it is refused while its security verdict is missing or was given on another question, options or recommendation. It
-writes as the owner, so the exec guard refuses it from an agent's tool call, and it refuses itself under
-`$CLAUDECODE`, as `owner note` does.
+`--approve` or `--decline`, and optionally `--read <digest>`): a task waiting on the owner's decision takes one of
+its card's options by number, a task waiting on the owner's approval takes yes or no. The answer is kept in the
+task's history as the owner's decision, naming the option chosen in full, so the meeting asks it no more; the task's
+waits on the owner end, and its session is woken to go on from the answer. It refuses a task that waits on no
+decision or approval of the owner, an option the card does not have, yes or no to a decision, an option to an
+approval and a `--read` digest the card no longer has, so an option number never picks an option of a card edited
+since it was read. A card on a security gate or marked `--security` is held to the rule its move to the owner
+follows, as it can change while it sits on the owner: it is refused while its security verdict is missing or was
+given on another question, options or recommendation. It writes as the owner, so the exec guard refuses it from an
+agent's tool call, and it refuses itself under `$CLAUDECODE`, as `owner note` does.
 
 Flags:
 
 - `--option <n>`: the number of the card's option the owner chose, from 1.
 - `--approve`: yes to an approval.
 - `--decline`: no to an approval.
+- `--read <digest>`: the digest of the card the owner read, so the answer lands only on that card: SHA-256, in hex,
+  over `JSON.stringify([question, options, recommend])`; the pane computes it with `cardDigest` from teamrig's read
+  entry. An edit to the question, an option or the recommendation since the read is refused.
 
 Example:
 
