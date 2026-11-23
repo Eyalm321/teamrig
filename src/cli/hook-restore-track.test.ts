@@ -131,29 +131,38 @@ describe('hook restore-track', () => {
     assert.equal('host' in entry, false);
   });
 
-  it('records the team and session of a tab opened by hand, as the tab title finds them, and none for a tab no session read its inbox from (#820)', async () => {
+  it('names a tab opened by hand in its log lines by the session that read its inbox there, and keeps that out of its entry (#820)', async () => {
     const kit = new CliHarness();
     const byHand: Env = { CLAUDE_PROJECT_DIR: APP, CLAUDE_CODE_ENTRYPOINT: 'cli' };
-    await track(kit, payload('UserPromptSubmit'), byHand);
-    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], [undefined, undefined], 'no session read its inbox from this tab yet');
     const read = await kit.run(['inbox', 'read', '--session', 'lead'], { env: { CLAUDE_CODE_SESSION_ID: CLAUDE_SESSION } });
     assert.equal(read.code, EXIT.ok, read.stderr.join('\n'));
-    await track(kit, payload('Stop', { stop_hook_active: false }), byHand);
-    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'lead']);
-    await track(kit, payload('Stop', { stop_hook_active: false }));
-    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'alpha'], "a launched tab's environment wins");
-  });
-
-  it('still records a tab opened by hand, with no team or session, when finding them fails (#820)', async () => {
-    const kit = new CliHarness();
-    const files = new FaultyFiles(kit.files).fail('read', join(TEAM_HOME, 'state', 'inbox-marks.jsonl'), systemError('EACCES'));
-    const result = await kit.run(['hook', 'restore-track'], { stdin: payload('UserPromptSubmit'), env: { CLAUDE_PROJECT_DIR: APP, CLAUDE_CODE_ENTRYPOINT: 'cli' }, files });
-    assert.deepEqual([result.code, result.stdout, result.stderr], [0, [], []], 'a tracker never fails a turn');
+    await track(kit, payload('StopFailure', { error: 'server_error' }), byHand);
+    const failed = await entryOf(kit);
+    assert.ok(failed?.apiError !== undefined, 'the failed turn records its error');
+    await new RestoreRegistry(kit.files, restoreSessionsDir(KIT)).write({ ...failed, apiError: { ...failed.apiError, retries: 3, retriedAt: kit.clock.now() } });
+    kit.clock.advance(MS_PER_HOUR);
+    await track(kit, payload('StopFailure', { error: 'server_error' }), byHand);
+    assert.deepEqual(await apiErrorLines(kit), [`api-error: gave up on app/lead (${CLAUDE_SESSION}): its turn ended on server_error after 3 retries`]);
     const entry = await entryOf(kit);
-    assert.deepEqual([entry?.state, entry?.team, entry?.session], ['working', undefined, undefined]);
+    assert.deepEqual([entry?.team, entry?.session], [undefined, undefined], 'its entry names no launch, so a restore resumes it as it ran');
   });
 
-  it("looks for a hand-opened tab's team only when its entry is written with none, never at a tool end that writes nothing (#820)", async () => {
+  it('still logs a tab opened by hand, by its Claude session alone, when finding its session fails (#820)', async () => {
+    const kit = new CliHarness();
+    const byHand: Env = { CLAUDE_PROJECT_DIR: APP, CLAUDE_CODE_ENTRYPOINT: 'cli' };
+    await track(kit, payload('StopFailure', { error: 'server_error' }), byHand);
+    const failed = await entryOf(kit);
+    assert.ok(failed?.apiError !== undefined, 'the failed turn records its error');
+    await new RestoreRegistry(kit.files, restoreSessionsDir(KIT)).write({ ...failed, apiError: { ...failed.apiError, retries: 3, retriedAt: kit.clock.now() } });
+    kit.clock.advance(MS_PER_HOUR);
+    const files = new FaultyFiles(kit.files).fail('read', join(TEAM_HOME, 'state', 'inbox-marks.jsonl'), systemError('EACCES'));
+    const result = await kit.run(['hook', 'restore-track'], { stdin: payload('StopFailure', { error: 'server_error' }), env: byHand, files });
+    assert.deepEqual([result.code, result.stdout, result.stderr], [0, [], []], 'a tracker never fails a turn');
+    assert.deepEqual(await apiErrorLines(kit), [`api-error: gave up on ${CLAUDE_SESSION}: its turn ended on server_error after 3 retries`]);
+    assert.equal((await entryOf(kit))?.apiError?.failedAt, kit.clock.now(), 'its entry is written');
+  });
+
+  it("looks for a hand-opened tab's team only when a log line or a login page needs it, never to write its entry (#820)", async () => {
     const kit = new CliHarness();
     const byHand: Env = { CLAUDE_PROJECT_DIR: APP, CLAUDE_CODE_ENTRYPOINT: 'cli' };
     const marks = join(TEAM_HOME, 'state', 'inbox-marks.jsonl');
@@ -164,17 +173,10 @@ describe('hook restore-track', () => {
       const ended = kit.run(['hook', 'restore-track'], { stdin, env: byHand, files, sessionProcesses: new FakeSessionProcesses(7000) }).then(() => false);
       return Promise.race([looked, ended]);
     };
-    const toolEnd = payload('PostToolUse', { tool_name: 'Bash' });
-    assert.equal(await looks(payload('UserPromptSubmit')), true, 'a first entry of no team looks');
-    await track(kit, payload('UserPromptSubmit'), byHand);
-    assert.equal(await looks(toolEnd), false, 'a tool end inside TOOL_END_WRITE_MS writes nothing, and looks for nothing');
-    const read = await kit.run(['inbox', 'read', '--session', 'lead'], { env: { CLAUDE_CODE_SESSION_ID: CLAUDE_SESSION } });
-    assert.equal(read.code, EXIT.ok, read.stderr.join('\n'));
-    await track(kit, payload('Stop', { stop_hook_active: false }), byHand);
-    assert.deepEqual([(await entryOf(kit))?.team, (await entryOf(kit))?.session], ['app', 'lead']);
-    kit.clock.advance(MS_PER_HOUR);
-    assert.equal(await looks(toolEnd), false, 'an entry that names its team keeps it, and looks for nothing');
-    assert.deepEqual([(await entryOf(kit))?.updatedAt, (await entryOf(kit))?.team], [kit.clock.now(), 'app']);
+    assert.equal(await looks(payload('UserPromptSubmit')), false, 'a first entry looks for nothing');
+    assert.equal(await looks(payload('Stop', { stop_hook_active: false })), false, 'a turn end that logs nothing looks for nothing');
+    assert.equal(await looks(payload('PostToolUse', { tool_name: 'Bash' })), false, 'a tool end looks for nothing');
+    assert.equal(await looks(payload('StopFailure', { error: AUTH_FAILED })), true, 'an expired login looks for the team to page');
   });
 
   it("leaves a session in a turn as it was at a compaction's start, which comes mid-turn", async () => {
@@ -531,6 +533,9 @@ describe("hook restore-track: the owner's page", () => {
     const webhook = new FakeWebhook();
     await failTurn(kit, webhook, { env: { CLAUDE_PROJECT_DIR: APP } });
     assert.match(webhook.posts[0]?.content ?? '', /^Claude login expired: app\/lead ended its turn on Login expired/);
+    assert.match((await loginLines(kit)).join('\n'), new RegExp(`app/lead \\(${CLAUDE_SESSION}\\)`), 'its login log line names it too');
+    const entry = await entryOf(kit);
+    assert.deepEqual([entry?.team, entry?.session], [undefined, undefined], 'its entry names no launch');
   });
 
   it('names a tab its launch gave no session as a tab of its team', async () => {

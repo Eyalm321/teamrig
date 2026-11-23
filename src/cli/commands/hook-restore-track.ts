@@ -74,10 +74,10 @@ type TeamLookup = () => Promise<TeamSession>;
 
 /**
  * For a tab a person opened by hand, the team and session the tab title hook finds for it (its project's team, and
- * the session that read its inbox from this tab), so its entry names it and its login failure tells its team (#820);
- * neither is set unless both are found. It reads the team's files, so it runs once at most, and only when an entry
- * that names no team is about to be written or a turn end's login needs the tab's team: never at a tool end that
- * writes nothing, the most frequent hook event.
+ * the session that read its inbox from this tab), so its log lines name it and its login failure pages its team
+ * (#820); neither is set unless both are found. Only the page and the labels use them: the entry keeps the tab's own
+ * `$TEAMRIG_TEAM`/`$TEAMRIG_SESSION`, as a restore reopens an entry naming both through `teamrig launch`. It reads
+ * the team's files, so it runs once at most, and only when a log line or a login page needs the tab's team.
  */
 function teamLookupOf(runtime: CliRuntime, origin: HookOrigin): TeamLookup {
   let found: Promise<TeamSession> | undefined;
@@ -95,22 +95,20 @@ async function namedFacts(facts: TrackFacts, lookup: TeamLookup): Promise<TrackF
 }
 
 /**
- * Writes the event into its session's restore entry, or removes the entry at an end the person chose. An entry about
- * to be written with no team (no `$TEAMRIG_TEAM`, none kept from an earlier event) takes the one the lookup finds. A
- * turn that failed on a transient API error with every retry spent (src/restore/api-error.ts) is logged as left for
- * the person.
+ * Writes the event into its session's restore entry, or removes the entry at an end the person chose. A turn that
+ * failed on a transient API error with every retry spent (src/restore/api-error.ts) is logged as left for the person,
+ * named by the lookup's team and session when its environment names none.
  */
 async function trackEntry(event: TrackEvent, facts: TrackFacts, lookup: TeamLookup, runtime: CliRuntime, kitHome: string): Promise<void> {
   const registry = new RestoreRegistry(runtime.files, restoreSessionsDir(kitHome));
   const change = applyEvent(await registry.read(facts.hostSession), event, facts);
   switch (change.kind) {
     case 'write': {
-      const found = change.entry.team === undefined ? await lookup() : undefined;
-      const entry = found?.team === undefined ? change.entry : { ...change.entry, ...found };
-      await registry.write(entry);
-      const spentOn = event.kind === 'error' ? apiRetriesSpentOn(entry) : undefined;
+      await registry.write(change.entry);
+      const spentOn = event.kind === 'error' ? apiRetriesSpentOn(change.entry) : undefined;
       if (spentOn !== undefined) {
-        await runtime.files.append(restoreLogPath(kitHome), `${new Date(facts.at).toISOString()} ${apiGaveUpLine(tabLabelOf({ ...facts, ...entry }), spentOn)}\n`);
+        const label = tabLabelOf(await namedFacts(facts, lookup));
+        await runtime.files.append(restoreLogPath(kitHome), `${new Date(facts.at).toISOString()} ${apiGaveUpLine(label, spentOn)}\n`);
       }
       return;
     }
@@ -149,7 +147,7 @@ function loginEventOf(event: TrackEvent, facts: TrackFacts): LoginEvent | undefi
 }
 
 /** How the restore log names a tab: its team and session when they are known, and its Claude session. */
-function tabLabelOf(facts: Pick<TrackFacts, 'hostSession' | 'team' | 'session'>): string {
+function tabLabelOf(facts: TrackFacts): string {
   return facts.team === undefined || facts.session === undefined ? facts.hostSession : `${facts.team}/${facts.session} (${facts.hostSession})`;
 }
 
