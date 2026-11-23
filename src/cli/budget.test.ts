@@ -759,11 +759,14 @@ describe('teamrig budget cut', () => {
     assert.match(ok(await run([...CUT, '--stop', '--until', '18:00', '--session', 'lead']))[0] ?? '', /^CUT app-alpha stopped until 18:00 UTC:/);
   });
 
-  it('says a stop under the default overAction warn only warns, as wakes hold nothing there (#922)', async () => {
+  it('says a stop under the default overAction warn only warns, as wakes hold nothing there, and so does the report (#922)', async () => {
     const { run } = await world();
     const [line = ''] = ok(await run([...CUT, '--stop', '--session', 'lead']));
     assert.match(line, /^CUT app-alpha stopped until .+: it is warned whatever its use, but budget\.overAction warn holds nothing, /);
     assert.doesNotMatch(line, /p0 work only|it is held/);
+    const report = ok(await run(['budget']));
+    assert.ok(report.includes('Stopped by a leader, only warned under budget.overAction warn: app-alpha.'), report.join('\n'));
+    assert.ok(!report.some((text) => text.startsWith('Stopped by a leader, held')), report.join('\n'));
   });
 
   /** The report's past lines before and after a cut, once bravo's lift leaves alpha past its part, under `overAction`. */
