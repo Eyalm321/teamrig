@@ -1331,7 +1331,7 @@ the `gh` login in its place.
   gives a line saying it was left out, to be read on GitHub.
 - A change opened for review since the last automatic read that goes to the watcher (a fork's, an outsider's, or one
   on a branch naming no task with an owner) becomes a task of the watcher (unset: the first holder of a service role
-  holding `issue comment`, else the lead) with its ref, due 24 hours after it opened. Its title carries the change's
+  holding `issue close`, else the lead) with its ref, due 24 hours after it opened. Its title carries the change's
   own title for an inside author, else only its number and author; its description names it, its author and the
   answer time. The dry run prints it under `PULL TASKS <repo>`, and a ref a task holds gets no second one.
 - Only the issues of the repository's people, or ones they accepted, become tasks. An author
