@@ -812,6 +812,24 @@ export class RegisterPolicy {
    * on a wait on the session's leader, and keeps its parts when the wait moves to the owner.
    */
   private securityProblem(task: Task, card: DecisionCard): string | undefined {
+    const gap = this.securityGap(task, card);
+    if (gap === undefined) {
+      return undefined;
+    }
+    const { ownerSource } = this.config.register;
+    const leader = this.leaderOf(task);
+    const first = leader === undefined ? 'set the card on a wait on the security reviewer first' : `set the card on a wait on your leader first (--waits decision:${leader})`;
+    const route = `${first}, have it read (${this.auditorsText(task.owner)}, with teamrig audit ${task.id} --verdict "<what the review found>"), then wait on ${ownerSource} with the card unchanged`;
+    const why = gap.stale ? `${gap.text}: an edit needs a new verdict (core rule 9)` : `${gap.text}: it reaches ${ownerSource} only with one (core rule 9)`;
+    return `${why}; ${route}`;
+  }
+
+  /**
+   * What securityProblem finds missing on a security-related card, without its route: no verdict, or a stale one
+   * (`stale`); undefined when the card needs none or holds a current one. The owner's answer is held to the same rule
+   * (ownerDecide), as the card, or the team's security gates, can change while the card sits on the owner (#1517).
+   */
+  private securityGap(task: Task, card: DecisionCard): { readonly text: string; readonly stale: boolean } | undefined {
     const gate = card.gate?.toLowerCase();
     const gated = gate !== undefined && this.config.securityGates.some((security) => security.toLowerCase() === gate);
     if (card.run !== undefined || (!gated && card.security !== true)) {
@@ -822,14 +840,9 @@ export class RegisterPolicy {
       return undefined;
     }
     const { ownerSource } = this.config.register;
-    const leader = this.leaderOf(task);
-    const first = leader === undefined ? 'set the card on a wait on the security reviewer first' : `set the card on a wait on your leader first (--waits decision:${leader})`;
-    const route = `${first}, have it read (${this.auditorsText(task.owner)}, with teamrig audit ${task.id} --verdict "<what the review found>"), then wait on ${ownerSource} with the card unchanged`;
-    const why =
-      verdict === null
-        ? `${task.id}'s card ${gated ? `asks ${ownerSource} about ${card.gate}, a security gate [securityGates],` : `is marked ${SECURITY_FLAG}`} and has no security verdict: it reaches ${ownerSource} only with one (core rule 9)`
-        : `the security verdict ${verdict.by} gave on ${task.id}'s card read another question, options or recommendation: an edit needs a new verdict (core rule 9)`;
-    return `${why}; ${route}`;
+    return verdict === null
+      ? { text: `${task.id}'s card ${gated ? `asks ${ownerSource} about ${card.gate}, a security gate [securityGates],` : `is marked ${SECURITY_FLAG}`} and has no security verdict`, stale: false }
+      : { text: `the security verdict ${verdict.by} gave on ${task.id}'s card read another question, options or recommendation`, stale: true };
   }
 
   /** Who leads the task's owner: its sub-lead or the lead, and for the lead, the parent team's lead; undefined at the root. */
@@ -1029,16 +1042,38 @@ export class RegisterPolicy {
    * The owner's answer to a card from the pane (T4078), written as the owner (register.ownerSource): a Decided whose
    * note says which option of the card the owner chose, or that the owner approved or declined, judged as
    * {@link decideFrom} judges one. An option answers a wait on the owner's decision whose card has that option; yes
-   * or no answers a wait on the owner's approval.
+   * or no answers a wait on the owner's approval. A security-related card needs its current verdict, as on its move to
+   * the owner (securityGap), since it may have changed while it sat on the owner (#1517).
    */
   ownerDecide(task: Task, answer: OwnerAnswer): Verdict<OwnerChange & DecideChange> {
     const by = this.config.register.ownerSource;
+    const held = this.ownerAnswerHeld(task);
+    if (held !== undefined) {
+      return refuse(held);
+    }
     const note = this.ownerAnswerNote(task, answer);
     if (!note.ok) {
       return note;
     }
     const decided = this.decideFrom(task, note.value);
     return decided.ok ? ok({ ...decided.value, by }) : decided;
+  }
+
+  /**
+   * Why the owner may not answer the card as it stands, checked before the answer itself so a card changed since it
+   * reached the owner is named as such: a security-related card without its current verdict (securityGap).
+   */
+  private ownerAnswerHeld(task: Task): string | undefined {
+    const by = this.config.register.ownerSource;
+    if (!waitsOnOwner(task, by) || task.card === null) {
+      return undefined;
+    }
+    const gap = this.securityGap(task, task.card);
+    if (gap === undefined) {
+      return undefined;
+    }
+    const when = gap.stale ? 'only after a new verdict' : 'only with one';
+    return `${gap.text}: ${by} answers it ${when} (core rule 9); its session has the card read (${this.auditorsText(task.owner)}, with teamrig audit ${task.id} --verdict "<what the review found>")`;
   }
 
   /** What the history keeps of the owner's answer: the option chosen by its number and words, or yes or no. */
