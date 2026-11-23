@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileSha256, pinSha256, processRuntimeProbe, readStoredPin, runningImageOf, RuntimeImageMismatchError, runtimeRefusal, shasumsUrl, type RuntimeImage, type RuntimePin } from './runtime-pin.ts';
@@ -108,6 +108,6 @@ describe('the running runtime (#870)', () => {
   it('names this process: the real path of process.execPath, the hash of its binary and process.version', async () => {
     const found = await processRuntimeProbe(process.platform, process.execPath, process.version).current();
     const path = await realpath(process.execPath);
-    assert.deepEqual(found, { path, sha256: createHash('sha256').update(await readFile(path)).digest('hex'), version: process.version });
+    assert.deepEqual(found, { path, sha256: await fileSha256(path), version: process.version });
   });
 });
