@@ -198,13 +198,15 @@ export async function issueSync(args: ParsedArgs, runtime: CliRuntime): Promise<
     }
     pulls.set(repo, watch.after);
     pullNews.push(...watch.events);
+    // One owner lookup, so the answer clocks and the pull request tasks route to the same people.
+    const taskOwners = new Map(tasks.map((task) => [task.id, task.owner]));
+    const ownerOf = (id: string): string | undefined => taskOwners.get(id);
     if (write) {
       // Only once both reads are in: a repository whose pull requests could not be read keeps every clock it had.
-      const ownerOf = (id: string): string | undefined => tasks.find((held) => held.id === id)?.owner;
       threads.push(...issueThreads, ...pullThreads(watch.open, (pull) => pullRecipient(pull, ours, ownerOf, watcher), ours));
       clocked.add(repo);
     }
-    const pullSteps = pullTasks(watch.events, { ours, ownerOf: (id) => tasks.find((held) => held.id === id)?.owner, watcher, held: new Set(tasks.flatMap((task) => (task.ref === null ? [] : [task.ref]))), rules });
+    const pullSteps = pullTasks(watch.events, { ours, ownerOf, watcher, held: new Set(tasks.flatMap((task) => (task.ref === null ? [] : [task.ref]))), rules });
     if (pullSteps.length > 0 && write) {
       const outcomes = await applySteps(register, GITHUB_SOURCE, pullSteps);
       pullTaskLines(repo, outcomes).forEach(say);
