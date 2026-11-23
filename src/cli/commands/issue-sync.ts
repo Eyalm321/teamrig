@@ -5,7 +5,7 @@ import { addedTasks, type AddedTask, type RepoFailure } from '../../sync/auto.ts
 import { followersOf, parseFollows } from '../../sync/follows.ts';
 import { issueMarkStep, type IssueAudience, type IssueChangeRoute, type IssueMark } from '../../sync/issue-marks.ts';
 import { GITHUB_TRACKER, importRules, issueOwner, issueRef } from '../../sync/map.ts';
-import { importedTasks, linkedRefs, planSync, refHolders } from '../../sync/plan.ts';
+import { importedTasks, linkedRefs, planSync, refHolders, type SyncStep } from '../../sync/plan.ts';
 import { withCiExcerpts } from '../../sync/ci-excerpt.ts';
 import {
   firstMentionWatch,
@@ -22,7 +22,7 @@ import {
 import { securityIssues, type SecurityIssue } from '../../sync/security-alert.ts';
 import { eventsByRecipient, pullEvents, pullListeners, pullNewsText, pullRecipient, pullTasks, type PullEvent, type PullWatch } from '../../sync/pull-news.ts';
 import { ourLogins } from '../../sync/trust.ts';
-import { applySteps, closedSince } from '../../sync/sync.ts';
+import { applySteps, closedSince, type StepOutcome } from '../../sync/sync.ts';
 import { GITHUB_REPOS_HOST, type PullRequests, type ReviewPosts } from '../../issues/host.ts';
 import type { HostPull } from '../../issues/pull.ts';
 import { sessionLogins } from '../../issues/status-push.ts';
@@ -83,6 +83,8 @@ export async function issueSync(args: ParsedArgs, runtime: CliRuntime): Promise<
   const config = requireConfig(kit, runtime, write ? 'write' : 'read');
   const say = (line: string): void => runtime.out.stdout(line);
   const register = teamRegister(runtime, kit.paths, config);
+  // The issues' tasks and the pull requests' tasks are written as one source.
+  const writeSteps = (steps: readonly SyncStep[]): Promise<StepOutcome[]> => applySteps(register, GITHUB_SOURCE, steps);
   const rules = importRules(config);
   const started = runtime.clock.now();
   const since = closedSince(new Date(started), config.github.closedDays);
@@ -172,7 +174,7 @@ export async function issueSync(args: ParsedArgs, runtime: CliRuntime): Promise<
     let end: RepoEnd = 'ok';
     let issueThreads: Thread[] = [];
     if (write) {
-      const outcomes = await applySteps(register, GITHUB_SOURCE, plan.steps);
+      const outcomes = await writeSteps(plan.steps);
       // Against the tasks as written, so an issue the import just took is held by its new task.
       issueThreads = repoThreads(read.issues, [...(await register.snapshot()).state.tasks.values()], rules, ours);
       claimRead.set(repo, read.issues);
@@ -208,7 +210,7 @@ export async function issueSync(args: ParsedArgs, runtime: CliRuntime): Promise<
     }
     const pullSteps = pullTasks(watch.events, { ours, ownerOf, watcher, held: new Set(tasks.flatMap((task) => (task.ref === null ? [] : [task.ref]))), rules });
     if (pullSteps.length > 0 && write) {
-      const outcomes = await applySteps(register, GITHUB_SOURCE, pullSteps);
+      const outcomes = await writeSteps(pullSteps);
       pullTaskLines(repo, outcomes).forEach(say);
       written += outcomes.filter((outcome) => outcome.result.ok).length;
       added.push(...addedTasks(outcomes));

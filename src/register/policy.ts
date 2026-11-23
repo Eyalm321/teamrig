@@ -84,8 +84,8 @@ export interface AddInput {
 }
 
 /**
- * A task for a GitHub issue, or for an outside pull request the watcher answers (sync/pull-news.ts): its source is
- * GITHUB_SOURCE and its ref the issue's or the pull request's (sync/map.ts).
+ * A task of source GITHUB_SOURCE for a GitHub issue, or for an outside pull request the watcher answers
+ * (sync/pull-news.ts): its ref is the issue's or the pull request's (sync/map.ts).
  */
 export interface ImportInput {
   readonly title: string;
@@ -98,7 +98,7 @@ export interface ImportInput {
   readonly due?: string;
 }
 
-/** The fields the import keeps in step with GitHub; the rest of a task is the team's. */
+/** The fields the import keeps in step with the issue; the rest of a task is the team's. */
 export type ImportChanges = Partial<Pick<TaskFields, 'title' | 'description' | 'priority'>>;
 
 export interface StatusInput {
