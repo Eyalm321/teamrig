@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { cardDigest } from '../register/card-digest.ts';
 import { readEvents } from '../register/snapshot.ts';
 import { formatConfig } from '../config/load.ts';
 import { APP, CLAUDE_SESSION, CliHarness, CONFIG_PATH, EVENTS_PATH, TEAM, TEAM_HOME, type CliResult, type RunOptions } from '../testing/cli-harness.ts';
@@ -8,7 +9,7 @@ import { ok } from '../testing/hired-team.ts';
 import { NO_MARK_HOST, NO_SESSION_HOST } from '../testing/host.ts';
 import { teamEventsOf, teamHomeOf, teamInboxOf, treeHarness } from '../testing/team-tree.ts';
 import { WakeAsks } from '../wake/asks.ts';
-import { TEST_CARD, TEST_CARD_FLAGS, TEST_OWNER_CARD_FLAGS } from '../testing/card.ts';
+import { TEST_CARD, TEST_CARD_FLAGS, TEST_OWNER_CARD, TEST_OWNER_CARD_FLAGS } from '../testing/card.ts';
 import { ownerDecideLine, ownerLaterLine, ownerNextLeadLine, ownerNextLine, ownerNoteLine } from './commands/owner.ts';
 import { EXIT } from './runtime.ts';
 
@@ -196,6 +197,23 @@ describe('teamrig owner decide (T4078)', () => {
     for (const answer of [[], ['--approve', '--decline'], ['--option', '1', '--approve'], ['--option', 'two'], ['--option', '-1']]) {
       assert.equal((await kit.run(['owner', 'decide', 'T1', ...answer])).code, EXIT.usage, answer.join(' '));
     }
+  });
+});
+
+describe('teamrig owner decide --read (#1517)', () => {
+  it('binds the answer to the card read, refusing a digest the card no longer has and a bad one, writing nothing', async () => {
+    const kit = await cards();
+    const before = kit.files.get(EVENTS_PATH);
+    const old = cardDigest({ ...TEST_OWNER_CARD, recommend: 'Pro, the bigger launch' });
+    assertRefused(
+      await kit.run(['owner', 'decide', 'T1', '--option', '2', '--read', old]),
+      /^REFUSED --read [0-9a-f]{8} is not T1's card as it stands \(now [0-9a-f]{8}\): its question, options or recommendation changed since it was read/,
+    );
+    assert.equal((await kit.run(['owner', 'decide', 'T1', '--option', '2', '--read', 'abc'])).code, EXIT.usage);
+    assert.equal(kit.files.get(EVENTS_PATH), before);
+    assert.deepEqual(await asksOf(kit, 'alpha'), []);
+    ok(await kit.run(['owner', 'decide', 'T1', '--option', '2', '--read', cardDigest(TEST_OWNER_CARD)]));
+    assert.deepEqual(lastEventOf(kit), ['owner', 'update', `chose option 2 of 2: ${TEST_CARD.options[1]}`]);
   });
 });
 
