@@ -206,11 +206,6 @@ async function titleOutcome(runtime: CliRuntime, kit: Kit, config: KitConfig, ho
   }
 }
 
-/**
- * A prompt typed while the automatic restart waits for the session to be idle, or is held back until a wake brings it
- * work (T1383), cancels it, so the session keeps its context; one line tells the model, with the context growth
- * (`growth` tokens) that asks again. None when no restart waits, or one is already ending the session.
- */
 /** Whether the prompt a UserPromptSubmit hook sees (`seen`) was fired by one of the session's live scheduled jobs. */
 async function scheduledPrompt(runtime: CliRuntime, kit: Kit, id: string, seen: PromptSeen): Promise<boolean> {
   const reader = transcriptsIfKept(runtime);
@@ -221,6 +216,11 @@ async function scheduledPrompt(runtime: CliRuntime, kit: Kit, id: string, seen: 
   return firedBySchedule(reader, runtime.files, seen, inherited, runtime.clock.now());
 }
 
+/**
+ * A prompt typed while the automatic restart waits for the session to be idle, or is held back until a wake brings it
+ * work (T1383), cancels it, so the session keeps its context; one line tells the model, with the context growth
+ * (`growth` tokens) that asks again. None when no restart waits, or one is already ending the session.
+ */
 async function cancelledRestartLine(runtime: CliRuntime, kit: Kit, id: string, refresh: Pick<RefreshSettings, 'contextTokens'>): Promise<string | undefined> {
   const store = new RefreshStore(runtime.files, kit.paths);
   const parked = (await store.parked(id)) !== undefined;
