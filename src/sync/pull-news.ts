@@ -189,8 +189,7 @@ function pullTaskInput(pull: HostPull, ref: string, at: PullTaskRules): ImportIn
   const where = [...(isOurAuthor(pull.authorAssociation, pull.author, at.ours) ? [] : ['outside']), ...(pull.fork ? ['fork'] : [])];
   const description = [
     `Pull request ${pull.url} opened by ${by}${where.length > 0 ? ` (${where.join(', ')})` : ''} at ${formatUtcMinute(new Date(opened))} UTC:`,
-    `answer it on GitHub by ${due} UTC, its ${ANSWER_TARGET_HOURS.pull} h target.`,
-    ...(inside ? [] : ['Its title stays on GitHub: its author is outside the repository.']),
+    `answer it on GitHub by ${due} UTC, its ${ANSWER_TARGET_HOURS.pull} h target.${inside ? '' : ' Its title stays on GitHub: its author is outside the repository.'}`,
   ].join(' ');
   return { title: cutTitle(shown, at.rules.maxTitle), description, owner: at.watcher, ref, priority: issuePriority([], at.rules.priorities), due };
 }
