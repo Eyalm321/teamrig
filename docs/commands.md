@@ -364,14 +364,18 @@ teamrig <command> ...   (the caller: --session <id|name>, else $TEAMRIG_SESSION;
       owner, as teamrig decisions reads it: those not yet asked and those asked and past due, in the order
       the lead asks them, then those held for the Improvements day, left to a dedicated session's meeting
       or put off, each with its card, a run file by its name and pinned sha256 only; --owner keeps one
-      session's; validUntil says when the batch next turns with no file moved), inbox (--session's own
-      lines, marking none read: the unread ones and the read ones of the last --since hours, 24 unless
-      given), sessions (every session of your tree of teams: its place, hire, state and unread count; a
-      hire's and a retirement's words only for your own team and the teams above it), meetings (the team's
-      scheduled and started meetings by time, as meeting list --json prints them), config (the team, its
-      zone, its priorities and every key of the team config as config get --json reads it, a key naming
-      where a secret is kept without its value; with no team here config alone is answered, with the teams
-      of this machine to join).
+      session's; validUntil says when the batch next turns with no file moved), budget (the team's budget
+      as teamrig budget judges it, as of the last stored measure: the week's use, pace and forecast, today
+      against its allowance, each work class's spend and hold, the five-hour window and its warn, and
+      every tree team's week and task counts; its parts are null with the budget off; a read measures and
+      writes nothing; validUntil says when it next goes stale by the clock), inbox (--session's own lines,
+      marking none read: the unread ones and the read ones of the last --since hours, 24 unless given),
+      sessions (every session of your tree of teams: its place, hire, state and unread count; a hire's and
+      a retirement's words only for your own team and the teams above it), meetings (the team's scheduled
+      and started meetings by time, as meeting list --json prints them), config (the team, its zone, its
+      priorities and every key of the team config as config get --json reads it, a key naming where a
+      secret is kept without its value; with no team here config alone is answered, with the teams of this
+      machine to join).
       --conversation: the host's id of the conversation the program runs in; sessions then names the
       session holding it (self), and inbox serves that session's when no --session is given. --team: a
       team above yours, for tasks, plan, goals, history, stats, meetings and config. --task: the one
