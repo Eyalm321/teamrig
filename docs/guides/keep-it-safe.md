@@ -291,6 +291,18 @@ a version manager, a renamed copy)
 field of a request: [exec request](../../plugins/teamrig/skills/teamrig-guide/commands.md#teamrig-exec-request)).
 The `exec` commands also refuse to run on a node told to load code beside teamrig (a `--require` or `--import`
 preload, or one in `NODE_OPTIONS`); the reason names the option, and unsetting it lets the command run.
+The same hook refuses the owner's own actions on a task (`teamrig owner note`, `owner next`) from any session's tool
+call, as they write as the owner: the owner runs them in their own terminal, or types them after `/teamrig` in a tab.
+It also refuses a shell fed its commands from a pipe (`echo ... | bash`), as the pipe can carry a review the line
+never shows, and any of teamrig's hook commands, which take the tab they run for from what the caller hands them.
+A tab keeps the session it was first bound to: a tool call cannot make it another session by reading that session's
+inbox, so the review checks above see the tab's own session; you move a tab by typing `/teamrig inbox read` in it.
+The commands also refuse to write wherever Claude Code set `$CLAUDECODE` (a script a session's tool call runs, a hook
+command), which the pane's buttons and a typed `/teamrig` line lack; on a host whose adapter names no such mark they
+refuse every write of this kind, as an agent's run cannot be told from yours there. Every session runs as your OS user, so these stop
+the routine route and an instruction slipped into what a session reads, not a session set on forging the owner: a
+script can clear that variable, and a session can write the register's files directly. A task line written as the owner is no proof
+that you acted until your own actions run under an account the sessions cannot use.
 
 The runtime is pinned too. The plugin's launchers start the first `node` the PATH finds, so `teamrig exec node-pin`
 files the Node.js runtime the client runs under (its real path, the SHA-256 of its binary and its version) in the exec
@@ -306,18 +318,6 @@ the option list, the runtime pin catches a wrong `node` (a PATH order, a version
 build), and phase 2's read-only install is what holds against a deliberate swap. The pin lives in the hash-chained
 exec log, never in the plugin folder or a repository, and the service-role guard refuses a session's own write of
 that log.
-The same hook refuses the owner's own actions on a task (`teamrig owner note`, `owner next`) from any session's tool
-call, as they write as the owner: the owner runs them in their own terminal, or types them after `/teamrig` in a tab.
-It also refuses a shell fed its commands from a pipe (`echo ... | bash`), as the pipe can carry a review the line
-never shows, and any of teamrig's hook commands, which take the tab they run for from what the caller hands them.
-A tab keeps the session it was first bound to: a tool call cannot make it another session by reading that session's
-inbox, so the review checks above see the tab's own session; you move a tab by typing `/teamrig inbox read` in it.
-The commands also refuse to write wherever Claude Code set `$CLAUDECODE` (a script a session's tool call runs, a hook
-command), which the pane's buttons and a typed `/teamrig` line lack; on a host whose adapter names no such mark they
-refuse every write of this kind, as an agent's run cannot be told from yours there. Every session runs as your OS user, so these stop
-the routine route and an instruction slipped into what a session reads, not a session set on forging the owner: a
-script can clear that variable, and a session can write the register's files directly. A task line written as the owner is no proof
-that you acted until your own actions run under an account the sessions cannot use.
 
 ## Hand steps you run yourself
 
