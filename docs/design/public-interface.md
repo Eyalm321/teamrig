@@ -99,7 +99,9 @@ task fields the pane folded itself, `tasks`' `card`, `descriptionCut`, `sizeBase
 and `waitsAt`; 1.8 added `tasks`' `retired`, the count of finished tasks left to the archive, and each `sessions`
 team's `week`; 1.9: `steps`; 1.10: `decisions`, the owner's batch, a document of its own rather than fields of
 `plan`, since it reads every register of the tree and each team's record of the batches asked, which a plan reader
-need not pay for); [the commands page](../commands.md) has its usage and the plugin's guide describes every field. What
+need not pay for; 1.11: `budget`, the numbers `teamrig budget` prints, a document of its own since it reads the
+account's usage stores and week files, and every tree register for its counts, and ages with the clock as `stats`
+does); [the commands page](../commands.md) has its usage and the plugin's guide describes every field. What
 the design above left open is settled this way:
 
 - **One line a document.** Each document asked is one JSON object on one line of stdout, in the order asked, and

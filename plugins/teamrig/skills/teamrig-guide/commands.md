@@ -2596,20 +2596,20 @@ Nothing else is written to stdout, so every line there parses; a refusal is one 
 and no document, where other commands print it to stdout. It writes no file, marks nothing read and takes no lock.
 
 The five documents of interface 1.0 are served, and `plan`, which 1.1 added, `goals`, which 1.2 added, `history`,
-which 1.3 added, `stats`, which 1.4 added, `steps`, which 1.9 added, and `decisions`, which 1.10 added. `tasks` is
-the register's working set, the active tasks and the finished ones not yet archived. `plan` is the team's active
-tasks in plan order, each as teamrig's own lists place it. `goals` is the goals a task of the team may serve.
-`history` is every event of the one task `--task` names. `stats` is the register's numbers over `--range`, as
-`teamrig stats` counts them. `steps` is the one-time steps teamrig needs its person to take, as `teamrig steps`
-lists them. `decisions` is the owner's batch that holds the team's waits on the owner, as `teamrig decisions`
-reads it. `inbox` is the asking
+which 1.3 added, `stats`, which 1.4 added, `steps`, which 1.9 added, `decisions`, which 1.10 added, and `budget`,
+which 1.11 added. `tasks` is the register's working set, the active tasks and the finished ones not yet archived.
+`plan` is the team's active tasks in plan order, each as teamrig's own lists place it. `goals` is the goals a task
+of the team may serve. `history` is every event of the one task `--task` names. `stats` is the register's numbers
+over `--range`, as `teamrig stats` counts them. `steps` is the one-time steps teamrig needs its person to take, as
+`teamrig steps` lists them. `decisions` is the owner's batch that holds the team's waits on the owner, as `teamrig
+decisions` reads it. `inbox` is the asking
 session's own inbox. `sessions` is every session of your tree of teams. `meetings` is the team's meetings still
 scheduled or started. `config` is the team's config key by key, and the one document a run with no team is
 answered.
 
 Every document carries:
 
-- `interface`: the interface version that wrote it (`1.10`). Ignore fields you do not know: a minor version adds some.
+- `interface`: the interface version that wrote it (`1.11`). Ignore fields you do not know: a minor version adds some.
 - `document`: its name.
 - `revision`: 16 characters that stay the same while the files the document is read from, what you asked and the
   teamrig version stay the same. Compare it with the one you hold to know whether to draw again; it has no other
@@ -2845,6 +2845,33 @@ Each wait holds:
 `decisions` reads what `plan` reads, every register of the tree, and each tree team's record of the batches its lead
 asked and its meetings, which say which waits were asked.
 
+`budget` (since interface 1.11) holds the numbers `teamrig budget` prints, each a percent of the account's week and
+each instant a UTC one. It is as of the last stored measure: `teamrig budget` reads the transcripts first, the
+budget hooks after each turn, and a read measures and writes nothing, so a number can trail the command's by a turn.
+
+- `at`, and `validUntil`: the first moment after `at` a number may move with no file moving: the end of the team's
+  day, the week's reset, the five-hour window's, or a forecast reaching 100%. The clock is no part of `revision`.
+- `enabled`: `budget.enabled`. With it off, `week`, `today` and `fiveHour` are `null` and `classes` is empty.
+- `week`: `usedPct`, `start`, `reset` and `paceEnd` (where the pace line reaches the target; the hours after it are
+  the reserve's), `elapsedPct` (how far `at` is from `start` to `reset`), `paceLinePct`, `gapPts` (the use minus the
+  line: positive is ahead), `state` (`ahead`, `behind` or `on pace`), `rateFrom` (`learned` from the meter log, the
+  configured `limit` or an `estimate`), `covered` (the meter's counts reach back to the week's start), `statusAt`
+  (when the status line was read; `null` when the use is metered) and `forecast` (`{ "endPct", "fullAt" }`, where the
+  last day's rise takes it by the reset, `fullAt` `null` when it ends below 100%). Each is `null` while unknown.
+- `today`: `plannedPct` (what the pace line plans for today), `allowancePct` (the team's allowance; below
+  `plannedPct` it is a short day), `usedPct` (everyone's use today), `pacePct` (the in-day pace) and `pastLimit`
+  (the week is at 100%, which sets the allowance).
+- `classes`: `focus.classes` in their order, then a class a task still holds the config no longer lists, then the
+  spend on no task (`name` `null`), each `{ "name", "todayPct", "weekPct", "sharePct", "held" }`: `sharePct` its
+  share in `focus.allocation`, `held` once its week spend reached that share, so the WIP rule holds its tasks.
+- `fiveHour`: `{ "usedPct", "resetsAt", "at", "ptsPerHour", "fullAt", "warn" }` from the newest status line reading
+  of the window; `ptsPerHour` and `fullAt` are `null` until its readings span 15 minutes, `fullAt` too when it
+  resets first; `warn` is what `check` tells the lead (at `budget.fiveHourWarnPct`, or filling before its reset).
+  `null` with no window read.
+- `teams`: every team of the tree, the root first, each `{ "team", "week", "elapsedPct", "active",
+  "finishedThisWeek" }`: `week` as `sessions` serves a team's, `elapsedPct` how far through that week `at` is, and
+  its register's tasks not done or dropped, and done since that week's start. Numbers only, never a task's text.
+
 `inbox` adds `session` (`{ "id", "name" }`), `unread` (how many lines the session has not read; `null` when it never
 ran `teamrig inbox read`, and then every line counts as unread), `lines` and `cuts`. `lines` holds every unread line
 and the read ones posted in the last 24 hours (`--since`), in file order, each `{ "key", "at", "from", "text",
@@ -2968,7 +2995,7 @@ teamrig read tasks --json --owner api
 Output:
 
 ```text
-{"interface":"1.10","document":"tasks","revision":"5f0c2a9be41d7c36","problems":[],"tasks":[{"id":"T12","title":{"text":"Cache the price list","source":"team"},"owner":"api","status":"in-progress", ...}],"retired":0,"cuts":[]}
+{"interface":"1.11","document":"tasks","revision":"5f0c2a9be41d7c36","problems":[],"tasks":[{"id":"T12","title":{"text":"Cache the price list","source":"team"},"owner":"api","status":"in-progress", ...}],"retired":0,"cuts":[]}
 ```
 
 ### teamrig events
@@ -3021,8 +3048,8 @@ teamrig events --json --documents tasks,inbox --session api
 Output:
 
 ```text
-{"interface":"1.10","event":"hello","documents":[{"document":"tasks","revision":"5f0c2a9be41d7c36"},{"document":"inbox","revision":"9a41c07d2be3f518"}]}
-{"interface":"1.10","event":"changed","documents":[{"document":"inbox","revision":"c2d81374e0aa51b9"}]}
+{"interface":"1.11","event":"hello","documents":[{"document":"tasks","revision":"5f0c2a9be41d7c36"},{"document":"inbox","revision":"9a41c07d2be3f518"}]}
+{"interface":"1.11","event":"changed","documents":[{"document":"inbox","revision":"c2d81374e0aa51b9"}]}
 ```
 
 ### teamrig sessions
