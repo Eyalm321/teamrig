@@ -133,7 +133,12 @@ function timesOf(job: Record<string, unknown>): Pick<Job, 'jobAttempt' | 'create
   const started = text('started_at');
   const completed = text('completed_at');
   const attempt = job['run_attempt'];
-  return { ...(typeof attempt === 'number' ? { jobAttempt: attempt } : {}), ...(created === undefined ? {} : { createdAt: created }), ...(started === undefined ? {} : { startedAt: started }), ...(completed === undefined ? {} : { completedAt: completed }) };
+  const times: { jobAttempt?: number; createdAt?: string; startedAt?: string; completedAt?: string } = {};
+  if (typeof attempt === 'number') times.jobAttempt = attempt;
+  if (created !== undefined) times.createdAt = created;
+  if (started !== undefined) times.startedAt = started;
+  if (completed !== undefined) times.completedAt = completed;
+  return times;
 }
 
 /** A GitHub time in ms since the epoch; undefined for none or text that is no time. */
