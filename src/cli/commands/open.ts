@@ -1,12 +1,12 @@
 import { resolve } from 'node:path';
-import { describeLaunch, launchModelProblem, launchOf } from '../../config/launch.ts';
+import { describeLaunch, launchModelProblem, launchOf, ownLaunchOf } from '../../config/launch.ts';
 import type { Roster } from '../../config/roster.ts';
 import { isEffortLevel, isTerminalChoice, TERMINALS, type EffortLevel, type KitConfig, type TerminalChoice } from '../../config/types.ts';
 import type { SessionLauncher } from '../../ports/host/index.ts';
 import { splitAddress } from '../../core/address.ts';
 import { ENV, KIT_NAME, type Env, type TeamPaths } from '../../core/home.ts';
 import { ID_PATTERN, ID_RULE, sessionDisplay } from '../../core/ids.ts';
-import { samePath } from '../../core/paths.ts';
+import { isAtOrBelow, samePath } from '../../core/paths.ts';
 import { HiringLog } from '../../hiring/log.ts';
 import { rehiredFrom, type RetireRecord } from '../../hiring/record.ts';
 import type { ResumeVerdict } from '../../hiring/rehire.ts';
@@ -450,9 +450,12 @@ async function closeSince(runtime: CliRuntime, log: SessionLog, id: string, resu
 
 /**
  * The plugin folders the team config's `pluginDirs` names, each checked to hold the host's plugin file: the host
- * would start without the hooks the team expects, and say nothing. Refused for a host that loads no plugin folder.
+ * would start without the hooks the team expects, and say nothing. Refused for a host that loads no plugin folder,
+ * and for a folder at or below a project folder a session works in (`projects`): a session there could rewrite the
+ * hooks, and with them the guards, every session loads at its next start, around the owner gate on the key itself.
+ * The check reads the paths as written, by the platform's rules.
  */
-async function pluginDirsOf(runtime: CliRuntime, config: KitConfig, launcher: SessionLauncher): Promise<readonly string[]> {
+async function pluginDirsOf(runtime: CliRuntime, config: KitConfig, launcher: SessionLauncher, projects: readonly string[]): Promise<readonly string[]> {
   if (config.pluginDirs.length === 0) {
     return [];
   }
@@ -461,6 +464,10 @@ async function pluginDirsOf(runtime: CliRuntime, config: KitConfig, launcher: Se
     throw new RefusedError(`pluginDirs names ${config.pluginDirs.join(', ')}, but ${launcher.programName} loads no plugin folder`);
   }
   for (const dir of config.pluginDirs) {
+    const project = projects.find((folder) => isAtOrBelow(dir, folder, runtime.platform));
+    if (project !== undefined) {
+      throw new RefusedError(`pluginDirs names ${dir}, inside the project folder ${project} a session works in; name a folder no session can write`);
+    }
     if ((await runtime.probe.kind(`${dir}/${manifest}`)) !== 'file') {
       throw new RefusedError(`pluginDirs names ${dir}, which holds no ${manifest}`);
     }
@@ -536,7 +543,8 @@ export async function launch(args: ParsedArgs, runtime: CliRuntime): Promise<Exi
   }
   const { command, prefix } = await hostProgramOf(runtime, claudeEnv);
   const launcher = launcherOf(runtime);
-  const pluginDirs = await pluginDirsOf(runtime, config, launcher);
+  const projects = [project, ...(config.team?.project === undefined ? [] : [config.team.project]), ...roster.ids.flatMap((one) => ownLaunchOf(config, one).project ?? [])];
+  const pluginDirs = await pluginDirsOf(runtime, config, launcher, projects);
   const name = roster.nameOf(id) ?? id;
   const host = launchHostOf(runtime);
   const { leadDefault } = host;

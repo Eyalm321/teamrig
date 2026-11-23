@@ -557,6 +557,18 @@ describe('teamrig launch', () => {
     assert.deepEqual([refused.code, refused.stdout, none.ran], [EXIT.refused, ['REFUSED pluginDirs names /opt/app/teamrig, but Agent loads no plugin folder'], []]);
   });
 
+  it('refuses a plugin folder inside a project folder a session works in, since a session could rewrite its hooks', async () => {
+    const team = { ...TEAM, team: { id: 'app', project: '/work/shared' }, launch: { bravo: { project: '/work/bravo' } } };
+    for (const dir of [join(APP, 'plugins', 'teamrig'), '/work/shared/teamrig', '/work/bravo']) {
+      const none = new FakeProcesses();
+      const probe = new FakePathProbe({ folders: [APP, dir], files: [CLAUDE, `${dir}/.claude-plugin/plugin.json`] });
+      const refused = await new CliHarness({ ...team, pluginDirs: [dir] }).run(LAUNCH, { probe, processes: none, env: { PATH: '/usr/local/bin' } });
+      assert.equal(refused.code, EXIT.refused, `${dir}: ${refused.stdout.join('\n')}`);
+      assert.match(refused.stdout.join('\n'), /^REFUSED pluginDirs names .+, inside the project folder .+ a session works in/);
+      assert.deepEqual(none.ran, [], `${dir}: Claude Code never starts on a plugin a session can write`);
+    }
+  });
+
   it('reads no plugin folder from the environment: a variable a caller sets never chooses the hooks a session runs', async () => {
     const processes = new FakeProcesses();
     await launch(processes, [], { env: { PATH: '/usr/local/bin', TEAMRIG_PLUGIN_DIR: '/opt/app/teamrig' } });
