@@ -305,6 +305,20 @@ describe('evaluatePushes: where a push hides', () => {
     ]);
   });
 
+  it('asks about a perl one-liner whose code runs a command that names a push (#1426)', () => {
+    expectRows([
+      ["perl -e 'system(\"git push origin main\")'", 'ask', 'doubt'],
+      ["perl -e 'exec \"git\", \"push\", \"origin\", \"main\"'", 'ask', 'doubt'],
+      ["perl -e 'print qx{git push origin main}'", 'ask', 'doubt'],
+      ["perl -e 'open(my $p, \"|-\", \"git push origin main\")'", 'ask', 'doubt'],
+      ["perl -e \"system('git push origin $B')\"", 'ask', 'doubt'],
+      ["perl <<'EOF'\nsystem('git push origin main');\nEOF", 'ask', 'doubt'],
+      // A command that names no push, and a push in text the code only prints, still pass.
+      ["perl -e 'system(\"make test\")' && git push origin feature", 'allow'],
+      ["perl -e 'print \"git push origin main\\n\"'", 'allow'],
+    ]);
+  });
+
   it('allows quoted text whose backticks never close, as bash runs nothing there (T2764)', () => {
     expectRows([
       ["printf '%s' 'then `\\`' ; git push origin t1-x", 'allow'],

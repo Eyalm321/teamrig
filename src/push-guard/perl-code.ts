@@ -25,6 +25,11 @@ const RUNNERS = new Set([
   'system', 'exec', 'qx', 'readpipe', 'open', 'pipe', 'fork', 'syscall', 'eval', 'do', 'require', 'use', 'no', 'dump',
   'goto',
 ]);
+/**
+ * The same words anywhere in the code, for code the reading cannot follow. Backticks are left out: the push guard
+ * reads those as held text already.
+ */
+export const PERL_RUNNERS = /\b(?:system|exec|qx|readpipe|open|pipe|fork|syscall|eval|do|require|use|no|dump|goto)\b/;
 /** Words that take a quoted body: `q{}`, `m//`, `s///`, `tr///`. */
 const QUOTE_WORDS = new Set(['q', 'qq', 'qw', 'qr', 'm', 's', 'tr', 'y', 'qx']);
 /** Words after which perl reads a term, so a `/` starts a pattern: `print if /x/`, `split /,/`. */

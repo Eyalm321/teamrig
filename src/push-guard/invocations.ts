@@ -2,7 +2,7 @@ import { packagedStartOf, type PackagedStart } from '../package-guard/packaged.t
 import { isAssignmentWord, LineCommands, rereadingCommands } from './held-reread.ts';
 import { isAssignment, launch, programName, staticWord, type Assignment, type Launch, type ProgramLaunch, type ScriptLaunch } from './launchers.ts';
 import { bashNativeWord, Location, resolveDir } from './location.ts';
-import { perlCodeOf } from './perl-code.ts';
+import { PERL_RUNNERS, perlCodeOf } from './perl-code.ts';
 import { splitGitAlias } from './program-split.ts';
 import { redirectsInput, stdinUse } from './stdin.ts';
 import { parseHeldText, parseShell, type ShellCommand, type ShellDialect, type ShellParse, type ShellWord } from './tokenizer.ts';
@@ -406,6 +406,10 @@ class GitInvocationFinder {
     const script = launched?.kind === 'script' ? launched : undefined;
     const perl = launched?.kind === 'program' ? perlCodeOf(launched, stdin) : undefined;
     const plainText = perl?.reading === 'none' ? perl.words : [];
+    // A command perl code starts is not read as a git command, so one that names a push asks.
+    if (perl !== undefined && perl.reading !== 'none' && PERL_RUNNERS.test(perl.code) && saysPush(perl.code)) {
+      this.doubt('its perl code runs a command that names a push, which the guard cannot read', false);
+    }
     for (const word of command.words) {
       // A shell that runs a word as a script reads its substitutions as commands already; the variables set for it
       // (`PS4='...' bash -xc`) are values it may read again.
