@@ -5,6 +5,8 @@ import { type CheckOutcome, type Gh, type GhSpawn, type Job, type Run, evaluate,
 const TOKEN = ['github', '_pat_', 'secret_value'].join('');
 const REPO = 'Owner/repo';
 const SHA = 'abc1234';
+/** The time a check read runs at, for reads whose jobs carry no times, so the limit cuts none of them. */
+const NOW = Date.parse('2026-11-16T10:00:00Z');
 
 test('gh gets the token in its own environment only', () => {
   const spawn = mock.fn<GhSpawn>(() => ({ status: 0, stdout: '{}', stderr: '' }));
@@ -128,7 +130,7 @@ test('reads the newest runs\' latest jobs and the commit statuses of the sha', (
     if (path === `repos/${REPO}/commits/${SHA}/status`) return JSON.stringify({ statuses: [{ context: 'ext/ci', state: 'success' }] });
     throw new Error(`unexpected ${path}`);
   });
-  assert.deepEqual(readChecks(gh, REPO, SHA, 'dev', { names: ['gates', 'ext/ci'], summary: null, flaky: [], conditional: [], checkMinutes: 30 }).map(({ state }) => state), ['passed', 'passed']);
+  assert.deepEqual(readChecks(gh, REPO, SHA, 'dev', { names: ['gates', 'ext/ci'], summary: null, flaky: [], conditional: [], checkMinutes: 30 }, NOW).map(({ state }) => state), ['passed', 'passed']);
   assert.equal(gh.mock.callCount(), 3);
 });
 
@@ -155,11 +157,11 @@ test('reads only the runs of the merged branch, so a cancelled run of the same s
     return jobs;
   };
   const required = { names: ['windows'], summary: null, flaky: [], conditional: [], checkMinutes: 30 };
-  const before = readChecks(ghFor(false), REPO, SHA, 't2657-b', required);
+  const before = readChecks(ghFor(false), REPO, SHA, 't2657-b', required, NOW);
   assert.deepEqual(before.map(({ state }) => state), ['missing']);
   assert.equal(verdictOf(before), 'waiting');
-  assert.deepEqual(readChecks(ghFor(true), REPO, SHA, 't2657-b', required).map(({ state, detail }) => `${state}: ${detail}`), ['pending: in_progress']);
-  assert.deepEqual(readChecks(ghFor(true), REPO, SHA, 't2657', required).map(({ state }) => state), ['failed'], 'the earlier branch keeps its own verdict');
+  assert.deepEqual(readChecks(ghFor(true), REPO, SHA, 't2657-b', required, NOW).map(({ state, detail }) => `${state}: ${detail}`), ['pending: in_progress']);
+  assert.deepEqual(readChecks(ghFor(true), REPO, SHA, 't2657', required, NOW).map(({ state }) => state), ['failed'], 'the earlier branch keeps its own verdict');
 });
 
 test('a flaky check that failed in its run\'s first attempt waits on a re-run; failing again on attempt 2 fails (T2988)', () => {
