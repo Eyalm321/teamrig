@@ -5,6 +5,7 @@ import { GUARD_LIMIT_MS } from './guard-runner.ts';
 import { HOOK_OUTPUT_MARGIN_MS, HOOK_TIMEOUT_MS, hookLockDeadline } from './hook-timeouts.ts';
 import { COMMAND_FLAGS } from './run.ts';
 import { CLEAR_TIMEOUT_MS } from '../mod/clear-hand.ts';
+import { HAND_TRACE_TIMEOUT_MS } from '../mod/hand-watch.ts';
 import { MEETING_PANEL_TIMEOUT_MS } from '../mod/meeting-panel-hand.ts';
 import { MEETING_TIMEOUT_MS } from '../mod/meeting-hand.ts';
 import { NEEDS_YOU_TIMEOUT_MS } from '../mod/needs-you-hand.ts';
@@ -61,6 +62,7 @@ describe('HOOK_TIMEOUT_MS (#737)', () => {
       'slash-command': SLASH_TIMEOUT_MS,
       'clear-dir': CLEAR_TIMEOUT_MS,
       'clear-claim': CLEAR_TIMEOUT_MS,
+      'hand-trace': HAND_TRACE_TIMEOUT_MS,
     };
     for (const [name, limit] of Object.entries(hands)) {
       assert.equal(HOOK_TIMEOUT_MS[name], limit, `hook ${name}`);

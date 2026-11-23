@@ -3,7 +3,7 @@ import type { Register, StateRef } from 'claude-code';
 import type { TeamrigBand, TeamrigMeetingPanel, TeamrigNeedsYou, TeamrigUpdate } from '../types';
 import { hostPlugin } from '../dist/adapters/hosts/claude-code/plugin.js';
 import { bandLine, CLEAR_TIMEOUT_MS, ClearHand, liveAgentsOf, sameBand, TICK_MS } from '../dist/mod/clear-hand.js';
-import { HandWatch, STALL_MS, type HandTrace } from '../dist/mod/hand-watch.js';
+import { HAND_TRACE_TIMEOUT_MS, HandWatch, STALL_MS, type HandTrace } from '../dist/mod/hand-watch.js';
 import { REFRESH_TIMEOUT_MS, RefreshHand, refreshCliArgv } from '../dist/mod/refresh-hand.js';
 import { CHECK_MS, RELOAD_COMMAND, ReloadHand } from '../dist/mod/reload-hand.js';
 import {
@@ -163,8 +163,6 @@ const DISMISS_KEY = 'dismiss-update';
 const FOCUS_ASK_KEY = 'focus-asking-tab';
 const DISMISS_ASK_KEY = 'dismiss-ask';
 
-/** How long the CLI may take to log one hand trace. */
-const HAND_TRACE_TIMEOUT_MS = 10_000;
 /** An update tick may run an install for as long as its timeout, so it counts as stalled only past that. */
 const UPDATE_STALL_MS = UPDATE_APPLY_TIMEOUT_MS + STALL_MS;
 
