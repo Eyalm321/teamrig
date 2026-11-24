@@ -8897,7 +8897,7 @@ Example:
 teamrig hook hand-trace < trace.json
 ```
 
-Output: nothing, exit 0.
+Output: nothing, exit 0. An append that fails prints one line naming the file and why to stderr, and still exits 0.
 
 ### teamrig hook meeting-due
 
