@@ -315,7 +315,7 @@ const COMMANDS: Readonly<Record<string, CommandSpec>> = {
   'setup restore': { effect: 'write', flags: [], switches: ['yes', 'remove-new'], load: async () => (await setupBackupCommands()).restore },
   'setup scan': { effect: 'read', flags: ['project', 'days', 'max-mb'], switches: [], load: async () => (await setupScanCommand()).scan },
   'setup hooks': { effect: 'write', flags: ['host'], switches: ['yes'], load: async () => (await setupHooksCommand()).hooks },
-  'config get': { effect: 'read', flags: [], switches: ['json'], load: async () => (await configCommands()).get },
+  'config get': { effect: 'read', flags: ['team'], switches: ['json'], load: async () => (await configCommands()).get },
   'config set': { effect: 'write', flags: ['session'], switches: ['unset', 'yes'], load: async () => (await configCommands()).set },
   'config validate': { effect: 'read', flags: [], load: async () => (await configCommands()).validate },
   'config migrate': { effect: 'write', flags: [], switches: ['yes'], load: async () => (await configCommands()).migrate },
@@ -1051,10 +1051,10 @@ export const USAGE = `${KIT_NAME} <command> ...   (the caller: --session <id|nam
       1024) MB (one changed within them is not judged), and by Claude Code's /skill-doctor, which also
       counts plugins' skills, and the user's ones used only in other projects; it names the newest setup
       backup, or NO BACKUP; works before a team exists; it only reads
-  config get [<key>] [--json]   every key of the team config, or those at and under <key>: its value
+  config get [<key>] [--json] [--team <id>]   every key of the team config, or those at and under <key>: its value
       against its default, and read-only with why (the roster, an owner gate, a folder, a map, a key off
       the lead's list); <key> may name a key under a map entry the file holds
-      (delivery.repos.<name>.shipTool), read-only; --json for a screen
+      (delivery.repos.<name>.shipTool), read-only; --json for a screen; --team for another team of your tree
   config set <key> <value> | config set <key> --unset [--yes] [--session <id|name>]   the lead only:
       changes one key config get marks editable, the value read by the key's type (a list as JSON or
       a,b); --unset removes it to read its default; without --yes it shows the change; the whole new
