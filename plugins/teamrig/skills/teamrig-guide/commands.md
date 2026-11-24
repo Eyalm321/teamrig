@@ -5158,6 +5158,8 @@ Flags:
 - `--json`: prints one JSON document, `{ "file", "rows" }`, each row with `path`, `group`, `type`, `items`, `enum`,
   `min`, `max`, `value`, `default`, `isDefault`, `meaning`, `editable`, `gatedBy`, `readOnly` and `problem` (the
   ones that apply), for a settings screen such as the pane's.
+- `--team <id>`: reads another team of your tree, above, below or beside yours; a team outside it, or one with no
+  config in the kit home, is refused.
 
 Example:
 
