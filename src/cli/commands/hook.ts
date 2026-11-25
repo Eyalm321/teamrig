@@ -798,7 +798,7 @@ async function refreshDecisionOf(runtime: CliRuntime, scope: SessionScope, event
   const decided =
     facts !== undefined && measured.kind === 'measure' ? decideStop(state, context, { ...facts, due: await dueFactsAt(runtime, store, id, event.transcript) }) : measured;
   // Looked up once for the restart and the state: each look at a process starts a PowerShell on Windows, and a Stop
-  // hook past Claude Code's timeout is killed with every process it started.
+  // hook past the host's timeout is killed with every process it started.
   const claude = decided.kind === 'notice' ? await hostSessionAbove(runtime) : undefined;
   // A forked worker outside the tab (`forkedOutsideTab`) arms nothing and records no notice: the tab's own Stop hook
   // gives the notice and arms the restart with the tab's process, session and transcript.

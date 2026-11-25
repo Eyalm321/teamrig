@@ -83,7 +83,7 @@ export async function isLiveRunOwn(runtime: HandOffRuntime, live: LiveRun, pid: 
 }
 
 /**
- * Whether the Claude Code process `pid` is a forked worker of the live run's conversation (`--fork-session --resume
+ * Whether the host process `pid` is a forked worker of the live run's conversation (`--fork-session --resume
  * <the record's session or transcript>`), read from its command line alone: no transcript, no process lineage.
  */
 export async function isForkedWorker(runtime: HandOffRuntime, live: LiveRun, pid: number): Promise<boolean> {
