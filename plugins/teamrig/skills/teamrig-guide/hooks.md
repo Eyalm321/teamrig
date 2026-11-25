@@ -1904,7 +1904,8 @@ in a team or not, and keeps one file per Claude Code session on the machine: `<h
 id>.json`. It holds the folder the session started in (`$CLAUDE_PROJECT_DIR`, which a `cd` or a worktree does
 not move), its transcript, its Claude Code's process id, how it was started (`$CLAUDE_CODE_ENTRYPOINT`,
 `$CLAUDE_CODE_SESSION_KIND`), its team and session when `teamrig launch` started it (a tab started by hand keeps
-none, so a restore resumes it as it ran), and what it was doing at its last event: `working` from a prompt to the end of that turn, `ready` after it, `error` after an API error.
+none, so a restore resumes it as it ran), and what it was doing at its last event: `working` from a prompt to
+the end of that turn, `ready` after it, `error` after an API error.
 A compaction's start changes nothing, since it comes mid-turn. `hook tool-end` writes the file too at a tool call's
 end, at most every 5 minutes: a main-thread call marks the session `working`, and a helper's (which can run on past
 its turn's end) keeps the state, so the file's `updatedAt` stays within minutes of a long turn's transcript while
