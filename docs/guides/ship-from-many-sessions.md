@@ -49,7 +49,8 @@ host memory is passed by later steps that fit: always while no queued step runs,
 That is the default `delivery.queue.admission: pipeline`; `serial` keeps the line in arrival order with no cap and one
 heavy step at a time. A step is refused once its line has not
 moved for `delivery.queue.waitMinutes` (60), and one that runs is killed, with every process it started, after
-`delivery.queue.maxRunMinutes` (45; `--max-minutes` for one step); when the host's process list cannot be read, only
+`delivery.queue.maxRunMinutes` (45; `--max-minutes` for one step). A step that exits by itself also has what it
+left running ended, so a lasting service (a dev server, a watcher) belongs outside the queue. When the host's process list cannot be read, only
 the step's own process ends, so no process that merely reuses an old id is hit. A test run wrapped in `teamrig test`, as
 above, gets both the lock and the short summary. The lock is `host.lock` in the kit home, one for every team on the
 host, unless `delivery.queue.lockPath` names another; a lock past `lockTtlMinutes` (150), or whose process is
