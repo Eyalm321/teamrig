@@ -113,15 +113,18 @@ export async function sweepTree(root: number, host: SweepHost, rounds: number = 
  * Ends on Windows what `root` started and left running once it exited by itself (#1492): each listed process whose
  * parent id is root's and that started while root ran (from `startedMs`, at or before root's start, to `exitedMs`), with
  * its tree, then the stragglers list after list as sweepTree does. A process an earlier or a later holder of root's id
- * started falls outside that time and is left alone. Windows keeps no link past an ended process, so a process whose
- * own parent ended before the list is not found.
+ * started falls outside that time and is left alone. `exitedMs` is read after the real exit, and Windows hands a freed
+ * id on within ms, so a listed process with root's id is a later holder: only what started before it is root's. Windows
+ * keeps no link past an ended process, so a process whose own parent ended before the list is not found.
  */
 export async function sweepOrphans(root: number, startedMs: number, exitedMs: number, host: SweepHost, rounds: number = SWEEP_ROUNDS): Promise<SweepOutcome> {
   const first = await firstList(host);
   if (first === undefined) {
     return 'unlisted';
   }
-  const orphans = first.filter((row) => row.parent === root && row.pid !== root && row.startedMs >= startedMs && row.startedMs <= exitedMs);
+  const laterHolder = first.find((row) => row.pid === root);
+  const endMs = laterHolder === undefined ? exitedMs : Math.min(exitedMs, laterHolder.startedMs - 1);
+  const orphans = first.filter((row) => row.parent === root && row.pid !== root && row.startedMs >= startedMs && row.startedMs <= endMs);
   const trees = new Map(orphans.flatMap((orphan) => treeOf(orphan.pid, first)).map((row) => [row.pid, row]));
   return sweepFrom([...trees.values()], host, rounds);
 }
