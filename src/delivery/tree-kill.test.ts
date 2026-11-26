@@ -172,6 +172,18 @@ describe('sweepOrphans (#1492)', () => {
     assert.deepEqual(host.kills, [[11]]);
   });
 
+  it("leaves alone what a later holder of the root's id started inside the window", async () => {
+    const host = new FakeSweepHost([[...BESIDE, proc(10, 1, 400), proc(32, 10, 450)]]);
+    assert.equal(await sweepOrphans(10, 100, 500, host), 'gone');
+    assert.deepEqual(host.kills, []);
+  });
+
+  it("still ends what the root started before a later holder took its id", async () => {
+    const host = new FakeSweepHost([[...BESIDE, proc(11, 10, 200), proc(10, 1, 400), proc(32, 10, 450)], [...BESIDE, proc(10, 1, 400), proc(32, 10, 450)]]);
+    assert.equal(await sweepOrphans(10, 100, 500, host), 'swept');
+    assert.deepEqual(host.kills, [[11]]);
+  });
+
   it('kills nothing and reports gone when the root left nothing running', async () => {
     const host = new FakeSweepHost([BESIDE]);
     assert.equal(await sweepOrphans(10, 100, 500, host), 'gone');
