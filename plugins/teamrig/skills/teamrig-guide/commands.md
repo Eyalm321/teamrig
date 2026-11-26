@@ -6549,7 +6549,8 @@ Then it runs the command in the shell at below-normal CPU priority (nice 10 on P
 inherits, so the owner's terminal and apps win the CPU and the step takes what they leave; a step started at a lower
 priority keeps it. A merge's or deploy's commands and checks run at that priority too. Its output streams as it
 comes, and it kills the command with every process it started
-after `delivery.queue.maxRunMinutes` (45), a `--small` step after `delivery.queue.smallMaxRunMinutes` (10). The
+after `delivery.queue.maxRunMinutes` (45), a `--small` step after `delivery.queue.smallMaxRunMinutes` (10). A
+command that exits by itself also has what it left running ended, so a lasting service belongs outside the queue. The
 time its share is set aside (`teamrig step-away` until `teamrig step-back` takes it back, a merge waiting on its
 pull request's checks) does not count, as the step holds nothing on the host meanwhile. A
 step that shares the host holds back every step waiting for the lock, so a hung one is cut short. The step ends, and frees the lock, only once that kill is done; on
