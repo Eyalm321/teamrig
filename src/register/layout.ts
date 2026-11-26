@@ -116,7 +116,7 @@ function countsOf(record: JsonRecord): HeaderCounts | string {
   return counts;
 }
 
-/** A layout 5 header's task count and window start; before it, none and null. */
+/** The task count and window start of a header from layout 5 on; before it, none and null. */
 function windowOf(line: JsonlRecord): { tasks: number; windowFrom: string | null } | string {
   if (line.version < TASK_LINES_LAYOUT_VERSION) {
     return { tasks: 0, windowFrom: null };
@@ -154,7 +154,7 @@ function headerOf(line: JsonlRecord): SnapshotHeader | string {
   return { ...counts, ...window, nextId, retiredLastWeek, at };
 }
 
-/** The body of a layout 5 snapshot: its task lines by id, and its events. A damaged or repeated task line makes it unusable. */
+/** The body of a snapshot from layout 5 on: its task lines by id, and its events. A damaged or repeated task line makes it unusable. */
 function readTaskLines(text: string): { tasks: Map<string, Task>; read: EventLogRead } | string {
   const parse = parseJsonl(text);
   const tasks = new Map<string, Task>();
